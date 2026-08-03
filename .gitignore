@@ -1,0 +1,16 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 原始轨道数据（可重新下载，不入库）
+data/raw/
+
+# 系统文件
+Thumbs.db
+.DS_Store

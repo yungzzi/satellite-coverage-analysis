@@ -1,0 +1,7 @@
+﻿skyfield>=1.48
+sgp4>=2.21
+numpy>=1.26
+pandas>=2.0
+matplotlib>=3.8
+shapely>=2.0
+requests>=2.31

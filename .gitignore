@@ -11,6 +11,10 @@ venv/
 # 原始轨道数据（可重新下载，不入库）
 data/raw/
 
+# 验证用的网页/TLE 快照（可重新下载，不入库；结果 CSV 入库）
+output/validation/*.html
+output/validation/*.tle
+
 # 系统文件
 Thumbs.db
 .DS_Store

@@ -40,11 +40,19 @@ HANGZHOU = (30.25, 120.15)  # 观测点：杭州（纬度, 经度）
 # ==================== 公共工具 ====================
 
 def read_tle_lines(path, norad):
-    """从 TLE 文件中按 NORAD 编号读出一组三行（名字/第1行/第2行）"""
+    """
+    从 TLE 文件中按 NORAD 编号读出一组三行（名字/第1行/第2行）。
+    注意：必须取 TLE 第1行的第3~7列（标准 NORAD 编号字段）精确匹配，
+    不能只做"编号出现在这一行里"的子串判断——否则可能撞上别的星
+    （例如编号 65563 会误匹配到另一颗星纪元小数 26214.75965563 里）。
+    """
     with open(path, "r", encoding="ascii", errors="replace") as f:
         lines = [ln.strip() for ln in f if ln.strip()]
     for i in range(len(lines) - 2):
-        if lines[i + 1].startswith("1 ") and norad in lines[i + 1]:
+        if (lines[i + 1].startswith("1 ")
+                and lines[i + 1][2:7].strip() == norad
+                and lines[i + 2].startswith("2 ")
+                and lines[i + 2][2:7].strip() == norad):
             return lines[i], lines[i + 1], lines[i + 2]
     return None, None, None
 

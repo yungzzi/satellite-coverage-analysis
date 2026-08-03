@@ -5,12 +5,28 @@
 功能：给定 地区边界(GeoJSON) + 卫星TLE + 时间段，
      计算每颗卫星对该地区的覆盖时间窗口，输出 CSV 和甘特图。
 
-白话流程（对应下面的每个函数）：
-1. 读地区边界 -> 在地区内撒"网格代表点"（像在地图上画格子，交点就是代表点）
-2. 读 TLE -> 筛选出关心的卫星（按名字里的关键字，如 YAOGAN=遥感）
-3. 用 skyfield（内部就是 SGP4 算法）外推每颗卫星在时间段内每分钟的位置 -> 得到星下点
-4. 判断每个时刻：星下点到任一代表点的距离是否在"覆盖圆"内，且仰角是否达标
-5. 把连续覆盖的分钟合并成窗口 -> 输出表格和甘特图
+【覆盖的物理定义】（工作口径，参数在 CONFIG 里可改）
+  把地区离散成"网格代表点"。某个时刻，一颗卫星"覆盖"该地区，当且仅当
+  地区内【至少一个】网格代表点同时满足两个条件：
+    ① 该点在卫星的"覆盖圆"内：点与星下点的地心角 <= 覆盖圆半径角。
+       覆盖圆由传感器视场半角（默认 30°）和轨道高度决定，高度越高圆越大。
+    ② 该点看卫星的仰角 >= 最小仰角（默认 10°）。
+       仰角太低 = 视线斜穿大气、图像质量差，不算有效覆盖。
+  把连续满足的时刻合并成"覆盖窗口"，就是输出表格里的一行。
+
+【程序流程】（对应下面的每个函数）
+1. load_region_polygon   : 读地区边界 GeoJSON -> shapely 多边形
+2. make_grid_points      : 在多边形内撒网格代表点（间距约 22 km）
+3. load_satellites       : 读 TLE 文件 -> 按名字关键字筛选卫星
+4. make_time_array       : 生成"每分钟一个"的时间轴
+5. analyze_one_satellite :
+   a. skyfield（内部就是 SGP4 轨道外推算法）算出每颗星每个时刻的星下点（经纬度+高度）
+   b. central_angle_deg       : 星下点到每个网格点的地心角（haversine 大圆公式）
+   c. elevation_at_deg        : 由地心角+轨道高度反推该点看卫星的仰角
+   d. footprint_max_angle_deg : 由高度+视场半角算覆盖圆半径角
+   e. covered_grid = (地心角<=覆盖圆) & (仰角>=最低仰角)  <- 覆盖判定核心
+   f. covered = 任一网格点被覆盖，合并连续时刻为窗口
+6. build_outputs : 输出窗口明细表、卫星汇总表、甘特图
 
 依赖：skyfield, sgp4, numpy, pandas, matplotlib, shapely
 用法：python src/coverage_analysis.py
@@ -126,12 +142,23 @@ def make_time_array(ts, start_str, end_str, step_minutes):
 def footprint_max_angle_deg(altitude_km, fov_half_deg):
     """
     由轨道高度和视场半角计算"覆盖圆"的最大地心角（度）。
-    地心角 = 星下点与目标点在地心处张开的夹角，0°=正下方。
+    地心角 = 星下点与目标点在地心处张开的夹角，0°=正下方，
+    约 1° ≈ 111 km（赤道）。覆盖圆 = 以星下点为圆心、这个角为半径的圆。
+
+    物理图景：卫星不是只能拍正下方，传感器可以"歪着头"看，最多歪 fov_half_deg
+    （默认 30°，即视场宽 60°）。以星下点为圆心、看得见的边界为圆，就是覆盖圆。
+
     公式推导（球面近似）：
-      视场半角 η、轨道半径 r=R+h、地球半径 R，
-      覆盖圆边缘处目标点看卫星的仰角 ε 满足 sin(η) = (R/r)·cos(ε)
-      地心角 λ = 90° - ε - η
-      另外 λ 不可能超过"地平线角" acos(R/r)
+      在"地心 O - 卫星 S - 目标点 P"三点组成的平面三角形里：
+        卫星处内角 = 视场半角 η；目标点处内角 = 90°+仰角 ε（钝角）；地心处 = λ
+        内角和：η + (90°+ε) + λ = 180°  ->  λ = 90° - ε - η
+        正弦定理：sin(η)/R = sin(90°+ε)/r = cos(ε)/r  ->  sin(η) = (R/r)·cos(ε)
+      联立两式，先由 η 解出边缘处的仰角 ε，再得到边缘地心角 λ。
+      另外覆盖圆不可能超过地平线，所以 λ 上限 = acos(R/r)（地平线角）。
+
+    注意（已知简化）：当地面完全被视场包住时（典型如高轨 GEO，30° 锥体根本
+    够不到地表），公式退化为"90°-η"的保守估计。对中小地区（如浙江）无影响，
+    但做全球/大区域或 GEO 通信覆盖时需改用"可见圆盘"口径。
     """
     r = R_EARTH_KM + altitude_km
     eta = np.radians(fov_half_deg)
@@ -152,7 +179,15 @@ def central_angle_deg(lat1, lon1, lat2, lon2):
 
 
 def elevation_at_deg(lam_deg, altitude_km):
-    """由地心角 λ 和卫星高度 h，计算目标点看卫星的仰角（度）"""
+    """
+    由地心角 λ 和卫星高度 h，计算目标点看卫星的仰角（度）。
+    几何（球面近似，轨道半径 r=R+h）：
+      tan(ε) = (cos λ - R/r) / sin λ
+    直观理解：λ=0（卫星在正上方）时 ε=90°（头顶）；
+    λ 越大卫星越贴近地平线、仰角越低；λ=acos(R/r) 时 ε=0（刚好在地平线上）。
+    这个公式就是"仰角约束"的数学来源：为什么覆盖不只看视场圆，
+    还要加一道仰角门槛（默认 10°）——太斜的视线质量差，不算有效覆盖。
+    """
     lam = np.radians(lam_deg)
     r = R_EARTH_KM + altitude_km
     return np.degrees(np.arctan2(np.cos(lam) - R_EARTH_KM / r, np.sin(lam)))
@@ -182,6 +217,9 @@ def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
 
     # 覆盖判定：点在覆盖圆内 且 仰角达标 -> 形状 (T, N)
     covered_grid = (lam <= lam_max[:, None]) & (elev >= cfg["min_elevation_deg"])
+    # 上面这行就是整个程序的核心判定：一个网格点必须【同时】满足
+    #   (a) 在视场覆盖圆内（星下点为圆心，半径随高度变化）
+    #   (b) 该点看卫星的仰角 >= 最小仰角（默认 10°）
     covered = covered_grid.any(axis=1)          # 该时刻是否有任一代表点被覆盖
     ratio = covered_grid.mean(axis=1)           # 该时刻被覆盖的代表点比例
 
@@ -203,7 +241,16 @@ def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
 # ==================== 5. 输出：CSV + 甘特图 ====================
 
 def build_outputs(all_windows, cfg):
-    """把所有卫星的窗口整理成两张表 + 甘特图"""
+    """
+    把所有卫星的窗口整理成两张互补的表 + 一张甘特图：
+      coverage_windows.csv : 窗口明细——每次"连续覆盖"占一行（卫星、起止、时长、最大覆盖比例）
+                             用途：查"某颗星某天几点到几点能看"
+      coverage_summary.csv : 卫星汇总——每颗星一行（窗口次数、总时长、最长窗口、最大空隙、
+                             首次/末次覆盖时间）
+                             用途：排"哪些卫星最有用、覆盖质量如何"
+    两者关系：summary 是 windows 按卫星聚合出来的（次数=明细行数，总时长=各行时长相加，
+    最大空隙=相邻窗口间隔的最大值）。
+    """
     if not all_windows:
         print("没有任何覆盖窗口。")
         return

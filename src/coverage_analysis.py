@@ -323,6 +323,7 @@ def build_state_table(all_windows, t0, t1, cfg):
     整体时段状态表（时间视角，1 分钟分辨率）：
     只在"覆盖情况变化"时记一行：开始 / 结束 / 覆盖星数 / 卫星名单。
     结束列是"下一状态的开始时刻"（左闭右开）。
+    卫星名单按"整个分析时段内的覆盖总时长"降序排（最勤快的排前面）。
     """
     step_s = cfg["step_minutes"] * 60
     n = int(round((t1 - t0).total_seconds() / step_s)) + 1
@@ -334,6 +335,14 @@ def build_state_table(all_windows, t0, t1, cfg):
         i1 = max(0, min(i1, n - 1))
         for i in range(i0, i1 + 1):
             sats_at_min[i].add(name)
+    # 每颗星在整个分析时段内的覆盖总时长（名单排序依据）
+    sat_total = {}
+    for name, start, end, ratio in all_windows:
+        sat_total[name] = sat_total.get(name, 0) + window_duration_s(start, end, cfg)
+
+    def sat_key(name):
+        return (-sat_total.get(name, 0), name)
+
     rows = []
     prev = None
     seg_start = 0
@@ -343,13 +352,13 @@ def build_state_table(all_windows, t0, t1, cfg):
             if prev is not None:
                 rows.append((t0 + timedelta(seconds=seg_start * step_s),
                              t0 + timedelta(seconds=i * step_s),
-                             len(prev), ", ".join(sorted(prev)),
+                             len(prev), ", ".join(sorted(prev, key=sat_key)),
                              (i - seg_start) * step_s))
             prev = key
             seg_start = i
     rows.append((t0 + timedelta(seconds=seg_start * step_s),
                  t1,                                # 最后一段结束 = 分析时段结束
-                 len(prev), ", ".join(sorted(prev)),
+                 len(prev), ", ".join(sorted(prev, key=sat_key)),
                  int((t1 - (t0 + timedelta(seconds=seg_start * step_s))).total_seconds())))
     return pd.DataFrame(rows, columns=["start_utc", "end_utc", "n_satellites",
                                        "satellites", "duration_s"])

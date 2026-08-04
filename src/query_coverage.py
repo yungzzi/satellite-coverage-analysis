@@ -100,6 +100,22 @@ def analysis_bounds(meta):
 
 # ==================== 查询 ====================
 
+def _sort_state_satellites(state, windows):
+    """把状态表每段名单按"该范围（查询段）内每星覆盖总时长"降序重排"""
+    if state.empty or windows.empty:
+        return state
+    totals = windows.groupby("satellite")["duration_s"].sum().to_dict()
+
+    def key(n):
+        return (-totals.get(n, 0), n)
+
+    out = state.copy()
+    out["satellites"] = out["satellites"].apply(
+        lambda s: ", ".join(sorted([x.strip() for x in str(s).split(",") if x.strip()],
+                                   key=key)))
+    return out
+
+
 def query_time_range(start, end, windows, state, gaps):
     """把各张表裁剪到 [start, end]，返回 {"windows","state","gaps"} 三个 DataFrame"""
     def clip(df, s_col, e_col):
@@ -111,11 +127,14 @@ def query_time_range(start, end, windows, state, gaps):
         out[s_col] = out[s_col].clip(lower=start)
         out[e_col] = out[e_col].clip(upper=end)
         out["duration_s"] = (out[e_col] - out[s_col]).dt.total_seconds().astype(int)
+        out = out[out["duration_s"] > 0]   # 去掉只擦到查询边界的零长片段
         return out
 
+    w = clip(windows, "window_start_utc", "window_end_utc")
+    s = _sort_state_satellites(clip(state, "start_utc", "end_utc"), w)
     return {
-        "windows": clip(windows, "window_start_utc", "window_end_utc"),
-        "state": clip(state, "start_utc", "end_utc"),
+        "windows": w,
+        "state": s,
         "gaps": clip(gaps, "start_utc", "end_utc") if not gaps.empty else gaps.copy(),
     }
 
@@ -177,6 +196,10 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
         summary.to_excel(writer, sheet_name="卫星汇总", index=False)
         if gaps is not None and not gaps.empty:
             _strip_tz(gaps).to_excel(writer, sheet_name="空窗表", index=False)
+        else:
+            # 空窗表始终生成：没有空窗也明确写出来，避免用户误以为漏了
+            pd.DataFrame({"提示": ["该时段无空窗：全程至少一颗星可覆盖"]}).to_excel(
+                writer, sheet_name="空窗表", index=False)
     return out_path
 
 

@@ -299,17 +299,23 @@ def window_duration_s(start, end, cfg):
     return int((end - start).total_seconds()) + cfg["step_minutes"] * 60
 
 
-def summarize_windows(all_windows, cfg):
-    """按卫星聚合窗口 -> 汇总 DataFrame（每颗星一行），主程序与查询工具共用"""
+def summarize_windows(all_windows, cfg, period_seconds):
+    """
+    按卫星聚合窗口 -> 汇总 DataFrame（每颗星一行），主程序与查询工具共用。
+    额外加一列 coverage_pct：该星总覆盖时长占"本表时间范围"的百分比
+    （整体导出按整个分析时段，子时段导出按子时段）。
+    """
     summaries = []
     for name in sorted({w[0] for w in all_windows}):
         sub = sorted([w for w in all_windows if w[0] == name], key=lambda w: w[1])
         durations = [window_duration_s(w[1], w[2], cfg) for w in sub]
         gaps = [(sub[i + 1][1] - sub[i][2]).total_seconds() for i in range(len(sub) - 1)]
+        total = int(sum(durations))
         summaries.append({
             "satellite": name,
             "n_windows": len(sub),
-            "total_duration_s": int(sum(durations)),
+            "total_duration_s": total,
+            "coverage_pct": round(total / period_seconds * 100, 1) if period_seconds else 0.0,
             "longest_window_s": int(max(durations)),
             "max_gap_s": int(max(gaps)) if gaps else None,
             "first_cover_utc": sub[0][1].strftime("%Y-%m-%d %H:%M:%S"),
@@ -496,7 +502,7 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
             "max_covered_ratio": round(ratio, 4),
         })
     df_windows = pd.DataFrame(rows)
-    df_summary = summarize_windows(all_windows, cfg)
+    df_summary = summarize_windows(all_windows, cfg, (t1 - t0).total_seconds())
     df_state = build_state_table(all_windows, t0, t1, cfg)
     df_gaps = build_gaps_table(df_state)
 

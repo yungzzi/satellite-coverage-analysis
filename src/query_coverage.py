@@ -139,13 +139,13 @@ def query_time_range(start, end, windows, state, gaps):
     }
 
 
-def summary_from_windows(w, meta):
-    """由窗口 DataFrame 重新聚合卫星汇总（供导出查询段时使用）"""
+def summary_from_windows(w, meta, period_seconds):
+    """由窗口 DataFrame 重新聚合卫星汇总（供导出查询段时使用，按查询段口径算覆盖率）"""
     cfg = {"step_minutes": meta["step_minutes"],
            "refine_step_seconds": meta["refine_step_seconds"]}
     tuples = [(r.satellite, r.window_start_utc, r.window_end_utc, r.max_covered_ratio)
               for r in w.itertuples()]
-    return ca.summarize_windows(tuples, cfg)
+    return ca.summarize_windows(tuples, cfg, period_seconds)
 
 
 def show_query_result(res, meta):
@@ -188,7 +188,8 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
                      meta["grid_spacing_deg"], meta["n_satellites_total"],
                      meta["n_satellites_covered"], meta["generated_utc"],
                      scope_label,
-                     "覆盖 = 至少 1 个网格代表点在视场圆内且仰角≥10°；时间为 UTC（北京时间 = UTC+8）"],
+                     "覆盖 = 至少 1 个网格代表点在视场圆内且仰角≥10°；时间为 UTC（北京时间 = UTC+8）；"
+                     "卫星汇总 coverage_pct = 该星总覆盖时长 ÷ 本表时间范围"],
         })
         info.to_excel(writer, sheet_name="说明", index=False)
         _strip_tz(state).to_excel(writer, sheet_name="状态表", index=False)
@@ -258,7 +259,8 @@ def interactive_menu(meta, windows, state, summary, gaps):
             if scope == "1" and last_query is not None:
                 st, et, res = last_query
                 frames = res
-                frames["summary"] = summary_from_windows(res["windows"], meta)
+                frames["summary"] = summary_from_windows(
+                    res["windows"], meta, (et - st).total_seconds())
                 label = f"查询段 {st:%Y-%m-%d %H:%M} ~ {et:%Y-%m-%d %H:%M}"
                 out = default_xlsx_path("query")
             elif scope == "2":
@@ -300,7 +302,8 @@ def run_params(meta, windows, state, summary, gaps, args):
         show_query_result(res, meta)
         scope_label = f"查询段 {st:%Y-%m-%d %H:%M} ~ {et:%Y-%m-%d %H:%M}"
         out_frames = {"state": res["state"], "windows": res["windows"],
-                      "summary": summary_from_windows(res["windows"], meta),
+                      "summary": summary_from_windows(res["windows"], meta,
+                                                      (et - st).total_seconds()),
                       "gaps": res["gaps"]}
         default_scope = "query"
     else:

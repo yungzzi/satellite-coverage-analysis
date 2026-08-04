@@ -44,7 +44,7 @@
 | 文件 | 内容 | 给谁看 |
 | --- | --- | --- |
 | coverage_windows.csv | 窗口明细（卫星视角：每颗星的每次覆盖） | 程序/脚本 |
-| coverage_summary.csv | 卫星汇总（每颗星一行） | 程序/脚本 |
+| coverage_summary.csv | 卫星汇总（每颗星一行，含覆盖率=总覆盖时长÷时段长度） | 程序/脚本 |
 | coverage_state.csv | 整体时段状态表（时间视角：某段时间覆盖如何；卫星名单按覆盖总时长排序） | 程序/脚本 |
 | coverage_gaps.csv | 空窗表（一颗星都没有的时段） | 程序/脚本 |
 | analysis_meta.json | 本次分析的元信息（时段/参数/星数） | 程序/脚本 |

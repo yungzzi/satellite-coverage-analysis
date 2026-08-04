@@ -1,6 +1,12 @@
 {
   "region_name": "浙江省",
+  "region_mode": "polygon",
   "region_geojson": "data/geo/330000.json",
+  "target": {
+    "lat": 30.25,
+    "lon": 120.15,
+    "radius_km": 5.0
+  },
   "tle_file": "data/raw/active_tle.txt",
   "start_utc": "2026-08-03 00:00:00",
   "end_utc": "2026-08-04 00:00:00",

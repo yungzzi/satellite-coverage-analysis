@@ -3,7 +3,8 @@
 用纯 Python 完成“哪些卫星在什么时间能覆盖某个地区”的分析，替代 ATK 仿真软件，无商业软件依赖。
 
 ## 这是什么（白话）
-- **输入**：地区（省/市多边形，比如浙江省）、卫星星座轨道数据（TLE）、时间段
+- **输入**：目标区域（两种：① 点+半径，如杭州某点 5 km 圆；② 省/市多边形 GeoJSON）、
+  卫星星座轨道数据（TLE）、时间段
 - **输出**：每颗卫星的覆盖时间窗口 + 卫星汇总 + 整体时段状态表 + 空窗表 +
   文字摘要 + 可用卫星数曲线 + 甘特图；另有查询工具可按时间段查、导出 Excel
 
@@ -39,6 +40,17 @@
 4. 结果在 `output/` 目录
 5. 查询工具：`.venv\Scripts\python src\query_coverage.py`（交互菜单）
    或参数模式：`.venv\Scripts\python src\query_coverage.py --start "2026-08-03 12:00" --end "14:00" --export xlsx`
+
+### 目标区域两种模式
+```powershell
+# polygon 模式（默认）：GeoJSON 多边形 + 网格点
+.venv\Scripts\python src\coverage_analysis.py
+# circle 模式（点+半径，默认半径 5 km，导师拍板口径）
+.venv\Scripts\python src\coverage_analysis.py --mode circle --lat 30.25 --lon 120.15 --radius 5
+# 可选：--geojson 换多边形、--start/--end 换分析时段（UTC）
+```
+circle 模式覆盖判据：卫星足印圆与目标圆**有交集**且圆心处仰角 ≥ 最小仰角；
+`max_covered_ratio` 列输出"目标圆被覆盖面积占比"。
 
 ## 输出文件说明（output/）
 | 文件 | 内容 | 给谁看 |

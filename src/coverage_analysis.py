@@ -32,6 +32,7 @@
 用法：python src/coverage_analysis.py
 """
 
+import argparse
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -56,6 +57,8 @@ from skyfield.api import EarthSatellite, load
 CONFIG = {
     "region_name": "浙江省",            # 仅用于图表标题和提示
     "region_geojson": "data/geo/330000.json",   # 地区边界（330000=浙江，DataV GeoAtlas）
+    "region_mode": "polygon",           # 目标区域模式：polygon=多边形+网格 / circle=点+半径
+    "target": {"lat": 30.25, "lon": 120.15, "radius_km": 5.0},  # circle 模式：圆心+半径
     "tle_file": "data/raw/active_tle.txt",       # TLE 数据文件（CelesTrak 下载）
     # 第一版只分析遥感卫星（YAOGAN）对地面的覆盖。
     # 天链（TIANLIAN）是地球同步中继卫星，不直接成像，通信链路分析放到后续版本。
@@ -206,12 +209,36 @@ def elevation_at_deg(lam_deg, altitude_km):
     return np.degrees(np.arctan2(np.cos(lam) - R_EARTH_KM / r, np.sin(lam)))
 
 
-def compute_covered_series(sat, t, dt_list, grid_lats, grid_lons, cfg):
+def circle_overlap_ratio(d_km, r_foot_km, r_target_km):
+    """
+    两个圆（平面近似）重叠面积占目标圆面积的比例。
+    d_km=圆心距，r_foot_km=足印半径，r_target_km=目标圆半径。
+    用于 circle 模式：足印圆与 5km 目标圆的重叠程度。
+    """
+    if d_km >= r_foot_km + r_target_km:
+        return 0.0
+    if d_km <= abs(r_foot_km - r_target_km):
+        # 小圆完全在大圆内
+        return 1.0 if r_target_km <= r_foot_km else (r_foot_km / r_target_km) ** 2
+    r1, r2, d = r_foot_km, r_target_km, d_km
+    a = (r1 * r1 * np.arccos((d * d + r1 * r1 - r2 * r2) / (2 * d * r1))
+         + r2 * r2 * np.arccos((d * d + r2 * r2 - r1 * r1) / (2 * d * r2))
+         - 0.5 * np.sqrt(((-d + r1 + r2) * (d + r1 - r2)
+                          * (d - r1 + r2) * (d + r1 + r2)).clip(0)))
+    return min(1.0, a / (np.pi * r2 * r2))
+
+
+def compute_covered_series(sat, t, dt_list, region, cfg):
     """
     计算该卫星在给定时间点列表上对区域的覆盖判定。
     返回 (covered, ratio)：
       covered : 每个时刻是否覆盖（任一网格点满足条件），形状 (T,)
-      ratio   : 每个时刻被覆盖的网格点比例，形状 (T,)
+      ratio   : 每个时刻的覆盖比例（多边形=被覆盖网格点占比；圆=目标圆被覆盖面积占比）
+
+    region 支持两种模式：
+      {"mode": "polygon", "lats": [...], "lons": [...]}   多边形 + 网格点（原有）
+      {"mode": "circle",  "lat": float, "lon": float,
+       "radius_km": float}                                点 + 半径（5km 圆目标，导师拍板）
     """
     # 用 SGP4 外推整段时间，得到每个时刻的星下点（纬度、经度、高度）
     geocentric = sat.at(t)
@@ -220,15 +247,35 @@ def compute_covered_series(sat, t, dt_list, grid_lats, grid_lons, cfg):
     lon = sub.longitude.degrees
     alt = sub.elevation.km
 
+    # 每个时刻的覆盖圆最大地心角（随高度变化）：形状 (T,)
+    lam_max = footprint_max_angle_deg(alt, cfg["fov_half_angle_deg"])
+
+    # ---- circle 模式：目标是一个点+半径的圆 ----
+    if region["mode"] == "circle":
+        tlat, tlon = region["lat"], region["lon"]
+        r_km = region["radius_km"]
+        lam = central_angle_deg(lat, lon,
+                                np.full(len(lat), tlat), np.full(len(lon), tlon))
+        elev = elevation_at_deg(lam, alt)
+        # 判据（导师拍板）：足印圆与目标圆【有交集】且圆心处仰角达标
+        lam_t = np.degrees(r_km / R_EARTH_KM)          # 目标圆半径对应的地心角
+        covered = (lam <= lam_max + lam_t) & (elev >= cfg["min_elevation_deg"])
+        # 覆盖比例：目标圆被足印覆盖的面积占比（平面近似，km 尺度）
+        r_foot_km = np.radians(lam_max) * R_EARTH_KM
+        d_km = np.radians(lam) * R_EARTH_KM
+        ratio = np.array([circle_overlap_ratio(dd, rf, r_km)
+                          for dd, rf in zip(d_km, r_foot_km)])
+        return covered, ratio
+
+    # ---- polygon 模式：地区内撒网格代表点（原有逻辑） ----
+    grid_lats, grid_lons = region["lats"], region["lons"]
+
     # 每个时刻，星下点到所有网格点的地心角：形状 (T, N)
     lam = central_angle_deg(lat[:, None], lon[:, None],
                             grid_lats[None, :], grid_lons[None, :])
 
     # 每个网格点处的仰角：形状 (T, N)
     elev = elevation_at_deg(lam, alt[:, None])
-
-    # 每个时刻的覆盖圆最大地心角（随高度变化）：形状 (T,)
-    lam_max = footprint_max_angle_deg(alt, cfg["fov_half_angle_deg"])
 
     # 覆盖判定：点在覆盖圆内 且 仰角达标 -> 形状 (T, N)
     covered_grid = (lam <= lam_max[:, None]) & (elev >= cfg["min_elevation_deg"])
@@ -238,7 +285,7 @@ def compute_covered_series(sat, t, dt_list, grid_lats, grid_lons, cfg):
     return covered_grid.any(axis=1), covered_grid.mean(axis=1)
 
 
-def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
+def analyze_one_satellite(sat, t, dt_list, region, cfg):
     """
     分析单颗卫星的覆盖情况，返回窗口列表：
     [(开始datetime, 结束datetime, 窗口内最大覆盖比例), ...]
@@ -246,7 +293,7 @@ def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
     （默认 10 秒），让窗口起止精确到秒级，而不用全程细算。
     """
     # ---- 第一步：1 分钟粗筛 ----
-    covered, ratio = compute_covered_series(sat, t, dt_list, grid_lats, grid_lons, cfg)
+    covered, ratio = compute_covered_series(sat, t, dt_list, region, cfg)
     windows = []
     in_window = False
     for i, c in enumerate(covered):
@@ -268,7 +315,7 @@ def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
             dt_f = make_dt_series(start - timedelta(minutes=margin),
                                   end + timedelta(minutes=margin), refine)
             t_f = t.ts.from_datetimes(dt_f)
-            cov_f, _ = compute_covered_series(sat, t_f, dt_f, grid_lats, grid_lons, cfg)
+            cov_f, _ = compute_covered_series(sat, t_f, dt_f, region, cfg)
             idx = np.where(cov_f)[0]
             if len(idx):
                 refined.append([dt_f[idx[0]], dt_f[idx[-1]], r])
@@ -519,7 +566,9 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
     # 元信息 + 文字摘要
     meta = {
         "region_name": cfg["region_name"],
-        "region_geojson": cfg["region_geojson"],
+        "region_mode": cfg["region_mode"],
+        "region_geojson": cfg.get("region_geojson", ""),
+        "target": cfg.get("target", {}),
         "tle_file": cfg["tle_file"],
         "start_utc": t0.strftime("%Y-%m-%d %H:%M:%S"),
         "end_utc": t1.strftime("%Y-%m-%d %H:%M:%S"),
@@ -557,19 +606,54 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
 # ==================== 6. 主流程 ====================
 
 def main():
-    cfg = CONFIG
+    # 命令行参数优先，缺省用 CONFIG 里的默认值
+    parser = argparse.ArgumentParser(description="卫星覆盖性分析")
+    parser.add_argument("--mode", choices=["polygon", "circle"], help="目标区域模式")
+    parser.add_argument("--lat", type=float, help="circle 模式：圆心纬度")
+    parser.add_argument("--lon", type=float, help="circle 模式：圆心经度")
+    parser.add_argument("--radius", type=float, help="circle 模式：半径（km）")
+    parser.add_argument("--geojson", help="polygon 模式：地区 GeoJSON 路径")
+    parser.add_argument("--start", help="分析开始时间 UTC（YYYY-MM-DD HH:MM:SS）")
+    parser.add_argument("--end", help="分析结束时间 UTC")
+    args = parser.parse_args()
+
+    cfg = dict(CONFIG)
+    if args.mode:
+        cfg["region_mode"] = args.mode
+    if args.lat is not None:
+        cfg["target"] = dict(cfg["target"], lat=args.lat)
+    if args.lon is not None:
+        cfg["target"] = dict(cfg["target"], lon=args.lon)
+    if args.radius is not None:
+        cfg["target"] = dict(cfg["target"], radius_km=args.radius)
+    if args.geojson:
+        cfg["region_geojson"] = args.geojson
+    if args.start:
+        cfg["start_utc"] = args.start
+    if args.end:
+        cfg["end_utc"] = args.end
+
     # builtin=True：不联网下载时间数据，保证离线可运行
     ts = load.timescale(builtin=True)
 
     print("=" * 64)
-    print("卫星覆盖性分析 MVP")
+    print("卫星覆盖性分析")
     print("=" * 64)
 
-    # 1) 地区 -> 网格代表点
-    polygon = load_region_polygon(cfg["region_geojson"])
-    grid_lats, grid_lons = make_grid_points(polygon, cfg["grid_spacing_deg"])
-    print(f"地区：{cfg['region_name']}（{cfg['region_geojson']}）")
-    print(f"网格代表点：{len(grid_lats)} 个（间距 {cfg['grid_spacing_deg']}°）")
+    # 1) 目标区域 -> 判定对象（多边形=网格点 / 圆=点+半径）
+    if cfg["region_mode"] == "circle":
+        tgt = cfg["target"]
+        region = {"mode": "circle", "lat": tgt["lat"], "lon": tgt["lon"],
+                  "radius_km": tgt["radius_km"]}
+        cfg["region_name"] = f"圆心({tgt['lat']:.4f}, {tgt['lon']:.4f}) " \
+                             f"半径{tgt['radius_km']}km"
+        print(f"目标区域：{cfg['region_name']}（circle 模式：点+半径）")
+    else:
+        polygon = load_region_polygon(cfg["region_geojson"])
+        grid_lats, grid_lons = make_grid_points(polygon, cfg["grid_spacing_deg"])
+        region = {"mode": "polygon", "lats": grid_lats, "lons": grid_lons}
+        print(f"地区：{cfg['region_name']}（{cfg['region_geojson']}）")
+        print(f"网格代表点：{len(grid_lats)} 个（间距 {cfg['grid_spacing_deg']}°）")
 
     # 2) TLE -> 卫星
     sats = load_satellites(cfg["tle_file"], cfg["satellite_keywords"], ts)
@@ -586,7 +670,7 @@ def main():
     # 4) 逐颗卫星分析
     all_windows = []
     for sat in sats:
-        windows = analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg)
+        windows = analyze_one_satellite(sat, t, dt_list, region, cfg)
         all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
         if windows:
             print(f"  {sat.name}: {len(windows)} 个覆盖窗口")

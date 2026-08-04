@@ -34,7 +34,13 @@
 
 import argparse
 import json
+import sys
 from datetime import datetime, timedelta, timezone
+
+try:
+    import tomllib          # Python 3.11+ 自带，读取 TOML 配置文件
+except ImportError:
+    tomllib = None
 
 import numpy as np
 import pandas as pd
@@ -76,6 +82,49 @@ CONFIG = {
 }
 
 R_EARTH_KM = 6378.137  # 地球平均半径（km），球面近似
+
+
+def apply_config_file(cfg, path):
+    """读取 TOML 配置文件并覆盖默认配置（命令行参数优先级更高）"""
+    if tomllib is None:
+        print("当前 Python 版本不支持 TOML 配置文件（需要 3.11+），请改用命令行参数。")
+        sys.exit(1)
+    with open(path, "rb") as f:
+        raw = f.read()
+    if raw.startswith(b"\xef\xbb\xbf"):      # 兼容 Windows 编辑器加的 UTF-8 BOM
+        raw = raw[3:]
+    data = tomllib.loads(raw.decode("utf-8"))
+    # 目标区域
+    if "region_mode" in data:
+        cfg["region_mode"] = str(data["region_mode"])
+    if "region_geojson" in data:
+        cfg["region_geojson"] = str(data["region_geojson"])
+    if "target_lat" in data:
+        cfg["target"]["lat"] = float(data["target_lat"])
+    if "target_lon" in data:
+        cfg["target"]["lon"] = float(data["target_lon"])
+    if "target_radius_km" in data:
+        cfg["target"]["radius_km"] = float(data["target_radius_km"])
+    # 分析时段
+    if "start_utc" in data:
+        cfg["start_utc"] = str(data["start_utc"])
+    if "end_utc" in data:
+        cfg["end_utc"] = str(data["end_utc"])
+    if "step_minutes" in data:
+        cfg["step_minutes"] = int(data["step_minutes"])
+    # 传感器参数（全局默认；"按星分配不同参数"是后续功能，设计中）
+    if "fov_half_angle_deg" in data:
+        cfg["fov_half_angle_deg"] = float(data["fov_half_angle_deg"])
+    if "min_elevation_deg" in data:
+        cfg["min_elevation_deg"] = float(data["min_elevation_deg"])
+    # 网格与输出
+    if "grid_spacing_deg" in data:
+        cfg["grid_spacing_deg"] = float(data["grid_spacing_deg"])
+    if "save_gantt" in data:
+        cfg["save_gantt"] = bool(data["save_gantt"])
+    if "max_gantt_rows" in data:
+        cfg["max_gantt_rows"] = int(data["max_gantt_rows"])
+    print(f"已读取配置文件：{path}")
 
 
 # ==================== 1. 地区边界 -> 网格代表点 ====================
@@ -608,6 +657,7 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
 def main():
     # 命令行参数优先，缺省用 CONFIG 里的默认值
     parser = argparse.ArgumentParser(description="卫星覆盖性分析")
+    parser.add_argument("--config", help="配置文件路径（TOML，模板见 config.example.toml）")
     parser.add_argument("--mode", choices=["polygon", "circle"], help="目标区域模式")
     parser.add_argument("--lat", type=float, help="circle 模式：圆心纬度")
     parser.add_argument("--lon", type=float, help="circle 模式：圆心经度")
@@ -615,9 +665,14 @@ def main():
     parser.add_argument("--geojson", help="polygon 模式：地区 GeoJSON 路径")
     parser.add_argument("--start", help="分析开始时间 UTC（YYYY-MM-DD HH:MM:SS）")
     parser.add_argument("--end", help="分析结束时间 UTC")
+    parser.add_argument("--fov", type=float, help="视场半角（度）")
+    parser.add_argument("--min-elevation", type=float, help="最小仰角（度）")
     args = parser.parse_args()
 
     cfg = dict(CONFIG)
+    if args.config:
+        apply_config_file(cfg, args.config)
+    # 优先级：命令行参数 > 配置文件 > CONFIG 默认
     if args.mode:
         cfg["region_mode"] = args.mode
     if args.lat is not None:
@@ -632,6 +687,10 @@ def main():
         cfg["start_utc"] = args.start
     if args.end:
         cfg["end_utc"] = args.end
+    if args.fov is not None:
+        cfg["fov_half_angle_deg"] = args.fov
+    if args.min_elevation is not None:
+        cfg["min_elevation_deg"] = args.min_elevation
 
     # builtin=True：不联网下载时间数据，保证离线可运行
     ts = load.timescale(builtin=True)

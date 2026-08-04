@@ -21,6 +21,9 @@ output/*.xlsx
 # 结果输出目录（生成物，不入库；随时可重新生成）
 output/
 
+# 用户自己的配置文件（模板 config.example.toml 入库）
+config.toml
+
 # 系统文件
 Thumbs.db
 .DS_Store

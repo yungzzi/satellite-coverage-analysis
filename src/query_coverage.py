@@ -175,6 +175,7 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
                 out[col] = out[col].dt.tz_localize(None)
         return out
 
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         info = pd.DataFrame({
             "项目": ["分析地区", "分析时段(UTC)", "时间步长(分钟)", "边界精化(秒)",
@@ -186,7 +187,7 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
                      meta["step_minutes"], meta["refine_step_seconds"],
                      meta["fov_half_angle_deg"], meta["min_elevation_deg"],
                      meta["grid_spacing_deg"], meta["n_satellites_total"],
-                     meta["n_satellites_covered"], meta["generated_utc"],
+                     meta["n_satellites_covered"], generated,
                      scope_label,
                      "覆盖 = 至少 1 个网格代表点在视场圆内且仰角≥10°；时间为 UTC（北京时间 = UTC+8）；"
                      "卫星汇总 coverage_pct = 该星总覆盖时长 ÷ 本表时间范围"],

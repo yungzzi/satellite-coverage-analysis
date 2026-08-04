@@ -41,6 +41,9 @@
 5. 查询工具：`.venv\Scripts\python src\query_coverage.py`（交互菜单）
    或参数模式：`.venv\Scripts\python src\query_coverage.py --start "2026-08-03 12:00" --end "14:00" --export xlsx`
 
+**偷懒方式**：项目根目录有 `run.bat`——输入 `run` 或双击即可（自动用 `config.toml`），
+想临时加参数就 `run --radius 10`。
+
 ### 目标区域两种模式
 ```powershell
 # polygon 模式（默认）：GeoJSON 多边形 + 网格点

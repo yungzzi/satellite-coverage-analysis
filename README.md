@@ -52,6 +52,14 @@
 circle 模式覆盖判据：卫星足印圆与目标圆**有交集**且圆心处仰角 ≥ 最小仰角；
 `max_covered_ratio` 列输出"目标圆被覆盖面积占比"。
 
+### 配置文件（可选，TOML）
+不想每次敲命令行参数，或想保存常用参数组合时，用配置文件：
+1. 复制模板：`copy config.example.toml config.toml`（`config.toml` 不入库）；
+2. 按需修改（带中文注释）；
+3. 运行：`.venv\Scripts\python src\coverage_analysis.py --config config.toml`
+
+优先级：**命令行参数 > 配置文件 > 代码默认值**。
+
 ## 输出文件说明（output/）
 | 文件 | 内容 | 给谁看 |
 | --- | --- | --- |

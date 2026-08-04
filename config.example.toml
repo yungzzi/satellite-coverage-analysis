@@ -1,0 +1,32 @@
+# ============================================================
+# 卫星覆盖性分析 —— 配置文件模板（TOML）
+# 用法：复制本文件为 config.toml（config.toml 不入库），然后：
+#   .venv\Scripts\python src\coverage_analysis.py --config config.toml
+# 优先级：命令行参数 > 配置文件 > 代码里的默认值。
+# 不填的项保持默认；# 开头是注释，随便写。
+# ============================================================
+
+# ---------- 目标区域 ----------
+# polygon = 多边形地区（用下面的 GeoJSON）；circle = 点+半径（用下面的圆心/半径）
+region_mode = "polygon"
+region_geojson = "data/geo/330000.json"   # polygon 模式：地区边界文件
+# circle 模式：圆心经纬度 + 半径（公里）
+target_lat = 30.25
+target_lon = 120.15
+target_radius_km = 5.0
+
+# ---------- 分析时段（UTC，北京时间 = UTC+8） ----------
+start_utc = "2026-08-03 00:00:00"
+end_utc = "2026-08-04 00:00:00"
+step_minutes = 1
+
+# ---------- 传感器参数（全局默认；"按星分配不同参数"是后续功能，设计中） ----------
+fov_half_angle_deg = 30.0    # 视场半角（度）
+min_elevation_deg = 10.0      # 最小仰角（度）
+
+# ---------- 网格（仅 polygon 模式用） ----------
+grid_spacing_deg = 0.2
+
+# ---------- 输出 ----------
+save_gantt = true             # 甘特图默认生成，false 可关
+max_gantt_rows = 15           # 甘特图最多画几颗星

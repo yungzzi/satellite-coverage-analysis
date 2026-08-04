@@ -31,7 +31,7 @@ plt.rcParams["axes.unicode_minus"] = False
 fig = plt.figure(figsize=(11.5, 8))
 ax = fig.add_axes([0.04, 0.14, 0.92, 0.82])
 ax.set_xlim(-8.5, 8.5)
-ax.set_ylim(-1.3, 7.6)
+ax.set_ylim(-1.8, 7.6)
 ax.set_aspect("equal")
 ax.axis("off")
 
@@ -69,22 +69,27 @@ ax.plot([E_L[0], E_R[0]], [0.02, 0.02], color="#f39c12", lw=10, alpha=0.9,
         solid_capstyle="round")
 ax.plot(E_R[0], 0.0, "o", color="#f39c12", ms=8)
 ax.plot(E_L[0], 0.0, "o", color="#f39c12", ms=8)
-ax.text(0.0, 1.35, "覆盖圆（足印）", fontsize=13, color="#f39c12", ha="center")
+ax.text(0.0, 0.80, "覆盖圆（足印）", fontsize=13, color="#f39c12", ha="center")
 
 # 目标点 P、视线、仰角
 ax.plot(*P, "o", ms=12, color="#f39c12", zorder=6)
-ax.annotate("目标点 P", xy=P, xytext=(0.2, -0.62), fontsize=13, color="#f39c12",
+ax.annotate("目标点 P", xy=P, xytext=(3.1, -0.55), fontsize=13, color="#f39c12",
             arrowprops=dict(arrowstyle="-", color="#f39c12", lw=1.2))
 ax.plot([P[0], S[0]], [P[1], S[1]], color="#8e44ad", lw=2.4)   # 视线
 
-elev = np.degrees(np.arctan2(S[1] - P[1], S[0] - P[0]))
-ax.add_patch(Arc(P, 2.8, 2.8, theta1=0.0, theta2=elev, color="#27ae60", lw=2.5))
-mid = np.radians(elev / 2)
-lab = P + 2.0 * np.array([np.cos(mid), np.sin(mid)])
+# 仰角 = 视线与水平面的夹角（水平距离取 |Δx|，所以一定 < 90°）
+elev = np.degrees(np.arctan2(S[1] - P[1], abs(S[0] - P[0])))
+a_ps = np.degrees(np.arctan2(S[1] - P[1], S[0] - P[0]))     # 视线方向（从 +x 轴起算）
+a_h = 180.0 if S[0] < P[0] else 0.0                         # 朝向卫星一侧的水平方向
+ax.add_patch(Arc(P, 2.8, 2.8, theta1=min(a_ps, a_h), theta2=max(a_ps, a_h),
+                 color="#27ae60", lw=2.5))
+mid = np.radians((a_ps + a_h) / 2)
+lab = P + 2.4 * np.array([np.cos(mid), np.sin(mid)])
 ax.text(lab[0], lab[1], f"仰角 ε≈{elev:.0f}°", fontsize=13, color="#27ae60")
 
-# 最小仰角 10°（门槛线）
-ray = P + 4.6 * np.array([np.cos(np.radians(10)), np.sin(np.radians(10))])
+# 最小仰角 10°（门槛线：从水平面向视线方向转 10°）
+a_min = a_h + 10.0 * np.sign(a_ps - a_h)
+ray = P + 4.6 * np.array([np.cos(np.radians(a_min)), np.sin(np.radians(a_min))])
 ax.plot([P[0], ray[0]], [P[1], ray[1]], color="#27ae60", lw=2, ls="--")
 ax.text(ray[0] + 0.25, ray[1] + 0.25, "最小仰角 10°（门槛）", fontsize=12,
         color="#27ae60")
@@ -97,7 +102,7 @@ ax.annotate("视场半角 η=30°", xy=lab, xytext=(2.6, 3.7), fontsize=13,
             color="#e74c3c", arrowprops=dict(arrowstyle="-", color="#e74c3c", lw=1.2))
 
 # 判定公式
-ax.text(0.0, -1.05,
+ax.text(0.0, -1.45,
         "判定：目标点 P 在覆盖圆内（λ ≤ λ_max）且 仰角 ε ≥ 最小仰角（10°）→ 有效覆盖",
         ha="center", fontsize=13,
         bbox=dict(boxstyle="round,pad=0.45", facecolor="#fdf6e3", edgecolor="#95a5a6"))

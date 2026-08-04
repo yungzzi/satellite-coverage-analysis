@@ -18,6 +18,9 @@ output/validation/*.tle
 # 查询工具导出的 Excel（用户生成，不入库）
 output/*.xlsx
 
+# 结果输出目录（生成物，不入库；随时可重新生成）
+output/
+
 # 系统文件
 Thumbs.db
 .DS_Store

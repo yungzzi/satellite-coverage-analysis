@@ -177,20 +177,28 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+        # 说明页数字分两套口径：本表范围（跟随导出/查询范围）+ 整个分析时段
+        n_scope = int(len(summary))     # 本表范围有覆盖卫星数 = 卫星汇总表行数
         info = pd.DataFrame({
             "项目": ["分析地区", "分析时段(UTC)", "时间步长(分钟)", "边界精化(秒)",
                      "视场半角(°)", "最小仰角(°)", "网格间距(°)",
-                     "参与卫星数", "有覆盖卫星数", "生成时间(UTC)",
-                     "导出范围", "口径说明"],
+                     "导出范围",
+                     "本表范围有覆盖卫星数（=卫星汇总行数）",
+                     "整个分析时段有覆盖卫星数",
+                     "星座总卫星数（整个分析时段）",
+                     "生成时间(UTC)", "口径说明"],
             "内容": [meta["region_name"],
                      f"{meta['start_utc']} ~ {meta['end_utc']}",
                      meta["step_minutes"], meta["refine_step_seconds"],
                      meta["fov_half_angle_deg"], meta["min_elevation_deg"],
-                     meta["grid_spacing_deg"], meta["n_satellites_total"],
-                     meta["n_satellites_covered"], generated,
-                     scope_label,
+                     meta["grid_spacing_deg"], scope_label,
+                     n_scope,
+                     meta["n_satellites_covered"],
+                     meta["n_satellites_total"],
+                     generated,
                      "覆盖 = 至少 1 个网格代表点在视场圆内且仰角≥10°；时间为 UTC（北京时间 = UTC+8）；"
-                     "卫星汇总 coverage_pct = 该星总覆盖时长 ÷ 本表时间范围"],
+                     "卫星汇总 coverage_pct = 该星总覆盖时长 ÷ 本表时间范围；"
+                     "说明页'本表范围'数字跟随导出/查询范围"],
         })
         info.to_excel(writer, sheet_name="说明", index=False)
         _strip_tz(state).to_excel(writer, sheet_name="状态表", index=False)

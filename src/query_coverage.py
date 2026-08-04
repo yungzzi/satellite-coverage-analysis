@@ -180,7 +180,7 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
         # 说明页数字分两套口径：本表范围（跟随导出/查询范围）+ 整个分析时段
         n_scope = int(len(summary))     # 本表范围有覆盖卫星数 = 卫星汇总表行数
         info = pd.DataFrame({
-            "项目": ["分析地区", "分析时段(UTC)", "时间步长(分钟)", "边界精化(秒)",
+            "项目": ["分析地区", "区域模式", "分析时段(UTC)", "时间步长(分钟)", "边界精化(秒)",
                      "视场半角(°)", "最小仰角(°)", "网格间距(°)",
                      "导出范围",
                      "本表范围有覆盖卫星数（=卫星汇总行数）",
@@ -188,6 +188,7 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
                      "星座总卫星数（整个分析时段）",
                      "生成时间(UTC)", "口径说明"],
             "内容": [meta["region_name"],
+                     meta.get("region_mode", "polygon"),
                      f"{meta['start_utc']} ~ {meta['end_utc']}",
                      meta["step_minutes"], meta["refine_step_seconds"],
                      meta["fov_half_angle_deg"], meta["min_elevation_deg"],

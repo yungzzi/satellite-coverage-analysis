@@ -67,6 +67,9 @@ CONFIG = {
     "min_elevation_deg": 10.0,                    # 最小仰角（度）：太低受大气影响，不算有效覆盖
     "grid_spacing_deg": 0.2,                      # 网格间距（度，约 22 km）
     "max_gantt_rows": 15,                         # 甘特图最多画几颗星（按覆盖时长排名）
+    "save_gantt": True,                           # 甘特图默认生成；改 False 可关闭
+    "refine_step_seconds": 10,                    # 两段式：窗口边界精化步长（秒），0=不精化
+    "refine_margin_minutes": 3,                   # 精化时向窗口两侧多扫的分钟数
 }
 
 R_EARTH_KM = 6378.137  # 地球平均半径（km），球面近似
@@ -137,6 +140,16 @@ def make_time_array(ts, start_str, end_str, step_minutes):
     return ts.from_datetimes(dt_list), dt_list
 
 
+def make_dt_series(start_dt, end_dt, step_seconds):
+    """生成 [start, end] 等间隔的 UTC 时间点列表（步长：秒）"""
+    out = []
+    t = start_dt
+    while t <= end_dt:
+        out.append(t)
+        t += timedelta(seconds=step_seconds)
+    return out
+
+
 # ==================== 4. 覆盖判定（核心几何） ====================
 
 def footprint_max_angle_deg(altitude_km, fov_half_deg):
@@ -193,10 +206,12 @@ def elevation_at_deg(lam_deg, altitude_km):
     return np.degrees(np.arctan2(np.cos(lam) - R_EARTH_KM / r, np.sin(lam)))
 
 
-def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
+def compute_covered_series(sat, t, dt_list, grid_lats, grid_lons, cfg):
     """
-    分析单颗卫星的覆盖情况，返回窗口列表：
-    [(开始datetime, 结束datetime, 窗口内最大覆盖比例), ...]
+    计算该卫星在给定时间点列表上对区域的覆盖判定。
+    返回 (covered, ratio)：
+      covered : 每个时刻是否覆盖（任一网格点满足条件），形状 (T,)
+      ratio   : 每个时刻被覆盖的网格点比例，形状 (T,)
     """
     # 用 SGP4 外推整段时间，得到每个时刻的星下点（纬度、经度、高度）
     geocentric = sat.at(t)
@@ -220,10 +235,18 @@ def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
     # 上面这行就是整个程序的核心判定：一个网格点必须【同时】满足
     #   (a) 在视场覆盖圆内（星下点为圆心，半径随高度变化）
     #   (b) 该点看卫星的仰角 >= 最小仰角（默认 10°）
-    covered = covered_grid.any(axis=1)          # 该时刻是否有任一代表点被覆盖
-    ratio = covered_grid.mean(axis=1)           # 该时刻被覆盖的代表点比例
+    return covered_grid.any(axis=1), covered_grid.mean(axis=1)
 
-    # 把连续覆盖的分钟合并成窗口
+
+def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
+    """
+    分析单颗卫星的覆盖情况，返回窗口列表：
+    [(开始datetime, 结束datetime, 窗口内最大覆盖比例), ...]
+    两段式：先用 1 分钟粗筛出窗口，再对每个窗口边界附近做细网格精化
+    （默认 10 秒），让窗口起止精确到秒级，而不用全程细算。
+    """
+    # ---- 第一步：1 分钟粗筛 ----
+    covered, ratio = compute_covered_series(sat, t, dt_list, grid_lats, grid_lons, cfg)
     windows = []
     in_window = False
     for i, c in enumerate(covered):
@@ -231,48 +254,57 @@ def analyze_one_satellite(sat, t, dt_list, grid_lats, grid_lons, cfg):
             start = dt_list[i]
             in_window = True
         elif not c and in_window:
-            windows.append((start, dt_list[i - 1], float(ratio[i - 1])))
+            windows.append([start, dt_list[i - 1], float(ratio[i - 1])])
             in_window = False
     if in_window:
-        windows.append((start, dt_list[-1], float(ratio[-1])))
+        windows.append([start, dt_list[-1], float(ratio[-1])])
+
+    # ---- 第二步：窗口边界精化（两段式） ----
+    refine = cfg.get("refine_step_seconds", 0)
+    margin = cfg.get("refine_margin_minutes", 3)
+    if refine and windows:
+        refined = []
+        for start, end, r in windows:
+            dt_f = make_dt_series(start - timedelta(minutes=margin),
+                                  end + timedelta(minutes=margin), refine)
+            t_f = t.ts.from_datetimes(dt_f)
+            cov_f, _ = compute_covered_series(sat, t_f, dt_f, grid_lats, grid_lons, cfg)
+            idx = np.where(cov_f)[0]
+            if len(idx):
+                refined.append([dt_f[idx[0]], dt_f[idx[-1]], r])
+            else:
+                refined.append([start, end, r])
+        # 两个粗窗口相距很近时精化区间会重叠，合并一下
+        refined.sort(key=lambda w: w[0])
+        merged = []
+        for w in refined:
+            if merged and w[0] <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], w[1])
+                merged[-1][2] = max(merged[-1][2], w[2])
+            else:
+                merged.append(w)
+        windows = [tuple(w) for w in merged]
+        # 精化会向窗口两侧多扫 margin 分钟，可能越过分析时段边界，裁回分析时段内
+        t_lo, t_hi = dt_list[0], dt_list[-1]
+        windows = [(max(s, t_lo), min(e, t_hi), r) for s, e, r in windows]
     return windows
 
 
 # ==================== 5. 输出：CSV + 甘特图 ====================
 
-def build_outputs(all_windows, cfg):
-    """
-    把所有卫星的窗口整理成两张互补的表 + 一张甘特图：
-      coverage_windows.csv : 窗口明细——每次"连续覆盖"占一行（卫星、起止、时长、最大覆盖比例）
-                             用途：查"某颗星某天几点到几点能看"
-      coverage_summary.csv : 卫星汇总——每颗星一行（窗口次数、总时长、最长窗口、最大空隙、
-                             首次/末次覆盖时间）
-                             用途：排"哪些卫星最有用、覆盖质量如何"
-    两者关系：summary 是 windows 按卫星聚合出来的（次数=明细行数，总时长=各行时长相加，
-    最大空隙=相邻窗口间隔的最大值）。
-    """
-    if not all_windows:
-        print("没有任何覆盖窗口。")
-        return
+def window_duration_s(start, end, cfg):
+    """窗口时长（秒）：边界精化后用起止差；纯 1 分钟粗筛时补一个步长"""
+    if cfg.get("refine_step_seconds", 0):
+        return int(round((end - start).total_seconds()))
+    return int((end - start).total_seconds()) + cfg["step_minutes"] * 60
 
-    # 窗口明细表
-    rows = []
-    for name, start, end, ratio in all_windows:
-        rows.append({
-            "satellite": name,
-            "window_start_utc": start.strftime("%Y-%m-%d %H:%M:%S"),
-            "window_end_utc": end.strftime("%Y-%m-%d %H:%M:%S"),
-            "duration_s": int((end - start).total_seconds()) + cfg["step_minutes"] * 60,
-            "max_covered_ratio": round(ratio, 4),
-        })
-    df_windows = pd.DataFrame(rows)
 
-    # 汇总表（每颗卫星）
+def summarize_windows(all_windows, cfg):
+    """按卫星聚合窗口 -> 汇总 DataFrame（每颗星一行），主程序与查询工具共用"""
     summaries = []
     for name in sorted({w[0] for w in all_windows}):
-        sub = [w for w in all_windows if w[0] == name]
-        sub = sorted(sub, key=lambda w: w[1])
-        durations = [(w[2] - w[1]).total_seconds() + cfg["step_minutes"] * 60 for w in sub]
+        sub = sorted([w for w in all_windows if w[0] == name], key=lambda w: w[1])
+        durations = [window_duration_s(w[1], w[2], cfg) for w in sub]
         gaps = [(sub[i + 1][1] - sub[i][2]).total_seconds() for i in range(len(sub) - 1)]
         summaries.append({
             "satellite": name,
@@ -283,14 +315,127 @@ def build_outputs(all_windows, cfg):
             "first_cover_utc": sub[0][1].strftime("%Y-%m-%d %H:%M:%S"),
             "last_cover_utc": sub[-1][2].strftime("%Y-%m-%d %H:%M:%S"),
         })
-    df_summary = pd.DataFrame(summaries).sort_values("total_duration_s", ascending=False)
+    return pd.DataFrame(summaries).sort_values("total_duration_s", ascending=False)
 
-    df_windows.to_csv("output/coverage_windows.csv", index=False, encoding="utf-8-sig")
-    df_summary.to_csv("output/coverage_summary.csv", index=False, encoding="utf-8-sig")
-    print(f"窗口明细已保存：output/coverage_windows.csv（{len(df_windows)} 条）")
-    print(f"汇总表已保存：output/coverage_summary.csv（{len(df_summary)} 颗卫星有覆盖）")
 
-    # 甘特图：只画覆盖时长最长的前 N 颗，避免行数过多看不清
+def build_state_table(all_windows, t0, t1, cfg):
+    """
+    整体时段状态表（时间视角，1 分钟分辨率）：
+    只在"覆盖情况变化"时记一行：开始 / 结束 / 覆盖星数 / 卫星名单。
+    结束列是"下一状态的开始时刻"（左闭右开）。
+    """
+    step_s = cfg["step_minutes"] * 60
+    n = int(round((t1 - t0).total_seconds() / step_s)) + 1
+    sats_at_min = [set() for _ in range(n)]
+    for name, start, end, ratio in all_windows:
+        i0 = int(np.ceil((start - t0).total_seconds() / step_s - 1e-9))
+        i1 = int(np.floor((end - t0).total_seconds() / step_s + 1e-9))
+        i0 = max(0, min(i0, n - 1))
+        i1 = max(0, min(i1, n - 1))
+        for i in range(i0, i1 + 1):
+            sats_at_min[i].add(name)
+    rows = []
+    prev = None
+    seg_start = 0
+    for i in range(n):
+        key = frozenset(sats_at_min[i])
+        if key != prev:
+            if prev is not None:
+                rows.append((t0 + timedelta(seconds=seg_start * step_s),
+                             t0 + timedelta(seconds=i * step_s),
+                             len(prev), ", ".join(sorted(prev)),
+                             (i - seg_start) * step_s))
+            prev = key
+            seg_start = i
+    rows.append((t0 + timedelta(seconds=seg_start * step_s),
+                 t1,                                # 最后一段结束 = 分析时段结束
+                 len(prev), ", ".join(sorted(prev)),
+                 int((t1 - (t0 + timedelta(seconds=seg_start * step_s))).total_seconds())))
+    return pd.DataFrame(rows, columns=["start_utc", "end_utc", "n_satellites",
+                                       "satellites", "duration_s"])
+
+
+def build_gaps_table(state_df):
+    """空窗表：所有"一颗星都没有"的时段，按时长降序"""
+    gaps = state_df[state_df["n_satellites"] == 0].copy()
+    if gaps.empty:
+        return gaps
+    return gaps.sort_values("duration_s", ascending=False).reset_index(drop=True)
+
+
+def fmt_duration(seconds):
+    """把秒数变成人话（如 1小时23分 / 45分 / 12秒）"""
+    seconds = int(round(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}小时{m}分"
+    if m:
+        return f"{m}分{s}秒"
+    return f"{s}秒"
+
+
+def build_summary_text(state_df, df_summary, cfg, meta):
+    """自动生成一段文字摘要（人话总结），写入 report_summary.txt"""
+    t0 = state_df["start_utc"].iloc[0]
+    t1 = state_df["end_utc"].iloc[-1]
+    total_s = (t1 - t0).total_seconds()
+    covered_s = int(state_df.loc[state_df["n_satellites"] > 0, "duration_s"].sum())
+    maxc = int(state_df["n_satellites"].max())
+    busiest = state_df[state_df["n_satellites"] == maxc]
+    gaps = build_gaps_table(state_df)
+
+    lines = []
+    lines.append(f"卫星覆盖分析摘要（{cfg['region_name']}）")
+    lines.append("=" * 52)
+    lines.append(f"分析时段：{t0} ~ {t1}（UTC，北京时间 = UTC+8）")
+    lines.append(f"参与卫星：共 {meta['n_satellites_total']} 颗，"
+                 f"其中 {len(df_summary)} 颗在此时段内有覆盖")
+    lines.append(f"至少一颗星覆盖的总时长：{fmt_duration(covered_s)}"
+                 f"（占分析时段的 {covered_s / total_s * 100:.1f}%）")
+    lines.append(f"同时覆盖卫星数峰值：{maxc} 颗"
+                 f"（发生在 {len(busiest)} 个时段，最长一段 {fmt_duration(busiest['duration_s'].max())}）")
+    if not gaps.empty:
+        lines.append(f"覆盖空窗（一颗星都没有）：共 {len(gaps)} 段，"
+                     f"最长 {fmt_duration(gaps['duration_s'].iloc[0])}"
+                     f"（{gaps['start_utc'].iloc[0]} ~ {gaps['end_utc'].iloc[0]}）")
+        lines.append("最需要关注的前 5 段空窗：")
+        for _, g in gaps.head(5).iterrows():
+            lines.append(f"  {g['start_utc']} ~ {g['end_utc']}（{fmt_duration(g['duration_s'])}）")
+    else:
+        lines.append("覆盖空窗：无（全程至少一颗星可覆盖）")
+    lines.append("")
+    lines.append("口径说明：覆盖 = 至少一个网格代表点在视场圆内且仰角≥10°；"
+                 "1 分钟粗筛 + 窗口边界秒级精化。")
+    return "\n".join(lines)
+
+
+def plot_availability(state_df, cfg, out_png):
+    """可用卫星数曲线（主图）：横轴时间，纵轴同时覆盖的卫星数"""
+    t0 = state_df["start_utc"].iloc[0]
+    step_s = cfg["step_minutes"] * 60
+    total = int(round((state_df["end_utc"].iloc[-1] - t0).total_seconds() / step_s))
+    counts = np.zeros(total, dtype=int)
+    for _, r in state_df.iterrows():
+        i0 = int(np.ceil((r["start_utc"] - t0).total_seconds() / step_s - 1e-9))
+        i1 = int(np.floor((r["end_utc"] - t0).total_seconds() / step_s + 1e-9))
+        counts[i0:i1] = r["n_satellites"]
+    times = [t0 + timedelta(seconds=i * step_s) for i in range(total)]
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.step(times, counts, where="post", color="steelblue")
+    ax.fill_between(times, 0, counts, step="post", color="steelblue", alpha=0.25)
+    ax.set_xlabel("时间（UTC）")
+    ax.set_ylabel("同时覆盖的卫星数")
+    ax.set_title(f"{cfg['region_name']}可用卫星数曲线（1 分钟步长）")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+    fig.autofmt_xdate()
+    plt.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+
+
+def plot_gantt(all_windows, df_summary, cfg):
+    """甘特图：只画覆盖时长最长的前 N 颗，避免行数过多看不清"""
     top = df_summary.head(cfg["max_gantt_rows"])
     sats = list(top["satellite"])
     y_index = {name: i for i, name in enumerate(sats)}
@@ -312,12 +457,87 @@ def build_outputs(all_windows, cfg):
     fig.autofmt_xdate()
     plt.tight_layout()
     fig.savefig("output/gantt.png", dpi=150)
-    print("甘特图已保存：output/gantt.png")
+    plt.close(fig)
+
+
+def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
+    """
+    把所有窗口整理成一套完整输出：
+      CSV（数据底座，给程序/脚本用）：
+        coverage_windows.csv  窗口明细（卫星视角）
+        coverage_summary.csv  卫星汇总（卫星视角）
+        coverage_state.csv    整体时段状态表（时间视角，可查"某段时间怎么样"）
+        coverage_gaps.csv     空窗表（风险时段）
+        analysis_meta.json    本次分析元信息（时段/参数/星数）
+      TXT（人话摘要）：report_summary.txt
+      图（给人看）：availability_curve.png（主图）+ gantt.png（默认生成，可关）
+    """
+    if not all_windows:
+        print("没有任何覆盖窗口。")
+        return
+
+    # 窗口明细表
+    rows = []
+    for name, start, end, ratio in all_windows:
+        rows.append({
+            "satellite": name,
+            "window_start_utc": start.strftime("%Y-%m-%d %H:%M:%S"),
+            "window_end_utc": end.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration_s": window_duration_s(start, end, cfg),
+            "max_covered_ratio": round(ratio, 4),
+        })
+    df_windows = pd.DataFrame(rows)
+    df_summary = summarize_windows(all_windows, cfg)
+    df_state = build_state_table(all_windows, t0, t1, cfg)
+    df_gaps = build_gaps_table(df_state)
+
+    os.makedirs("output", exist_ok=True)
+    df_windows.to_csv("output/coverage_windows.csv", index=False, encoding="utf-8-sig")
+    df_summary.to_csv("output/coverage_summary.csv", index=False, encoding="utf-8-sig")
+    df_state.to_csv("output/coverage_state.csv", index=False, encoding="utf-8-sig")
+    df_gaps.to_csv("output/coverage_gaps.csv", index=False, encoding="utf-8-sig")
+    print(f"窗口明细已保存：output/coverage_windows.csv（{len(df_windows)} 条）")
+    print(f"汇总表已保存：output/coverage_summary.csv（{len(df_summary)} 颗卫星有覆盖）")
+    print(f"状态表已保存：output/coverage_state.csv（{len(df_state)} 行）")
+    print(f"空窗表已保存：output/coverage_gaps.csv（{len(df_gaps)} 段）")
+
+    # 元信息 + 文字摘要
+    meta = {
+        "region_name": cfg["region_name"],
+        "region_geojson": cfg["region_geojson"],
+        "tle_file": cfg["tle_file"],
+        "start_utc": t0.strftime("%Y-%m-%d %H:%M:%S"),
+        "end_utc": t1.strftime("%Y-%m-%d %H:%M:%S"),
+        "step_minutes": cfg["step_minutes"],
+        "refine_step_seconds": cfg.get("refine_step_seconds", 0),
+        "fov_half_angle_deg": cfg["fov_half_angle_deg"],
+        "min_elevation_deg": cfg["min_elevation_deg"],
+        "grid_spacing_deg": cfg["grid_spacing_deg"],
+        "n_satellites_total": n_sats_total,
+        "n_satellites_covered": int(len(df_summary)),
+        "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    with open("output/analysis_meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    with open("output/report_summary.txt", "w", encoding="utf-8") as f:
+        f.write(build_summary_text(df_state, df_summary, cfg, meta))
+    print("文字摘要已保存：output/report_summary.txt")
+
+    # 可用卫星数曲线（主图）
+    plot_availability(df_state, cfg, "output/availability_curve.png")
+    print("可用卫星数曲线已保存：output/availability_curve.png")
+
+    # 甘特图（默认生成，可关）
+    if cfg.get("save_gantt", True):
+        plot_gantt(all_windows, df_summary, cfg)
+        print("甘特图已保存：output/gantt.png")
 
     # 控制台输出：按总覆盖时长排序，方便看"哪些卫星可用"
     print("\n覆盖时长排名（前 10）：")
     print(df_summary.head(10).to_string(index=False))
-    return df_windows, df_summary
+    print("\n整体状态表预览（前 8 行，完整见 coverage_state.csv）：")
+    print(df_state.head(8).to_string(index=False))
+    return df_windows, df_summary, df_state, df_gaps
 
 
 # ==================== 6. 主流程 ====================
@@ -357,8 +577,8 @@ def main():
         if windows:
             print(f"  {sat.name}: {len(windows)} 个覆盖窗口")
 
-    # 5) 输出
-    build_outputs(all_windows, cfg)
+    # 5) 输出（CSV 四件套 + 文字摘要 + 图 + 元信息）
+    build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats))
 
 
 if __name__ == "__main__":

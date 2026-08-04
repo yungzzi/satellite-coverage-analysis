@@ -5,3 +5,4 @@ pandas>=2.0
 matplotlib>=3.8
 shapely>=2.0
 requests>=2.31
+openpyxl>=3.1

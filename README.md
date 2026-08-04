@@ -4,7 +4,8 @@
 
 ## 这是什么（白话）
 - **输入**：地区（省/市多边形，比如浙江省）、卫星星座轨道数据（TLE）、时间段
-- **输出**：每颗卫星的覆盖时间窗口（开始/结束/时长）+ “可用卫星”汇总 + 甘特图
+- **输出**：每颗卫星的覆盖时间窗口 + 卫星汇总 + 整体时段状态表 + 空窗表 +
+  文字摘要 + 可用卫星数曲线 + 甘特图；另有查询工具可按时间段查、导出 Excel
 
 ## 核心概念（白话术语表）
 | 名词 | 白话解释 |
@@ -36,11 +37,31 @@
 2. 下载数据（TLE 和地区边界）：见 `AGENTS.md` 数据来源；首次由 Codex 代跑
 3. 运行：`.venv\Scripts\python src\coverage_analysis.py`
 4. 结果在 `output/` 目录
+5. 查询工具：`.venv\Scripts\python src\query_coverage.py`（交互菜单）
+   或参数模式：`.venv\Scripts\python src\query_coverage.py --start "2026-08-03 12:00" --end "14:00" --export xlsx`
+
+## 输出文件说明（output/）
+| 文件 | 内容 | 给谁看 |
+| --- | --- | --- |
+| coverage_windows.csv | 窗口明细（卫星视角：每颗星的每次覆盖） | 程序/脚本 |
+| coverage_summary.csv | 卫星汇总（每颗星一行） | 程序/脚本 |
+| coverage_state.csv | 整体时段状态表（时间视角：某段时间覆盖如何） | 程序/脚本 |
+| coverage_gaps.csv | 空窗表（一颗星都没有的时段） | 程序/脚本 |
+| analysis_meta.json | 本次分析的元信息（时段/参数/星数） | 程序/脚本 |
+| report_summary.txt | 文字摘要（人话总结） | 人 |
+| availability_curve.png | 可用卫星数曲线（主图） | 人 |
+| gantt.png | 甘特图（默认生成，CONFIG save_gantt=False 可关） | 人 |
+| coverage_*.xlsx | 查询工具导出的 Excel（多 sheet，含说明页） | 人 |
+
+CSV 是"数据底座"，Excel 是"展示层"：程序读 CSV，人看 Excel。
 
 ## 当前进度
 - [x] 工程初始化（git、目录、README、AGENTS.md）
-- [x] MVP：少量遥感/天链卫星 + 浙江 + 1 天 → 覆盖窗口 CSV + 甘特图
+- [x] MVP：遥感星座 164 颗 + 浙江 + 1 天 → 覆盖窗口 CSV + 汇总 + 图
+- [x] 与公开过境预报交叉验证（5 颗星 4 种轨道，133 次过境全部对上）
+- [x] 输出升级：状态表 / 空窗表 / 文字摘要 / 可用卫星数曲线 / 查询工具 / Excel 导出
+- [x] 两段式边界精化（1 分钟粗筛 + 窗口边界 10 秒精化）
 - [ ] 扩展：任意地区、几千颗星批量分析
-- [ ] 与公开过境预报交叉验证
-- [ ] 数据源切换（spacemapper.cn）
+- [ ] 事后回算验证（新 TLE 发布后回算对比）
+- [ ] 神经网络方向（后续阶段）
 - [ ] 神经网络方向（后续阶段）

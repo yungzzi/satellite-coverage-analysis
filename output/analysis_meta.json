@@ -1,0 +1,15 @@
+{
+  "region_name": "浙江省",
+  "region_geojson": "data/geo/330000.json",
+  "tle_file": "data/raw/active_tle.txt",
+  "start_utc": "2026-08-03 00:00:00",
+  "end_utc": "2026-08-04 00:00:00",
+  "step_minutes": 1,
+  "refine_step_seconds": 10,
+  "fov_half_angle_deg": 30.0,
+  "min_elevation_deg": 10.0,
+  "grid_spacing_deg": 0.2,
+  "n_satellites_total": 164,
+  "n_satellites_covered": 155,
+  "generated_utc": "2026-08-04 02:41:28"
+}

@@ -670,9 +670,15 @@ def main():
     args = parser.parse_args()
 
     cfg = dict(CONFIG)
-    if args.config:
-        apply_config_file(cfg, args.config)
-    # 优先级：命令行参数 > 配置文件 > CONFIG 默认
+    # 配置文件：显式 --config 优先；没指定但存在 config.toml 时自动使用
+    # （这样 VSCode 点"运行 Python 文件"按钮也会用 config.toml）
+    config_path = args.config
+    if config_path is None and os.path.exists("config.toml"):
+        config_path = "config.toml"
+        print("未指定 --config，检测到 config.toml，自动使用。")
+    if config_path:
+        apply_config_file(cfg, config_path)
+    # 优先级：命令行参数 > 配置文件（config.toml 自动加载）> CONFIG 默认
     if args.mode:
         cfg["region_mode"] = args.mode
     if args.lat is not None:

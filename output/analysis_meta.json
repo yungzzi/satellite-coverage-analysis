@@ -10,6 +10,5 @@
   "min_elevation_deg": 10.0,
   "grid_spacing_deg": 0.2,
   "n_satellites_total": 164,
-  "n_satellites_covered": 155,
-  "generated_utc": "2026-08-04 03:37:23"
+  "n_satellites_covered": 155
 }

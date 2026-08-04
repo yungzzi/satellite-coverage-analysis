@@ -530,7 +530,6 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
         "grid_spacing_deg": cfg["grid_spacing_deg"],
         "n_satellites_total": n_sats_total,
         "n_satellites_covered": int(len(df_summary)),
-        "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     }
     with open("output/analysis_meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)

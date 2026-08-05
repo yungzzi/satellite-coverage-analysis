@@ -146,6 +146,7 @@ def test_resolve():
         saved = sl.save_resolved_tle("解析测试", recs)
         check("合并 TLE 文件已生成", saved.exists() and saved.suffix == ".tle",
               str(saved))
+        saved.unlink(missing_ok=True)   # 自检产物不留缓存目录，避免污染用户数据
 
         # 编号清单：ISS（25544）
         sl.create_collection("编号测试")

@@ -246,6 +246,35 @@ with tab_collections:
         else:
             st.caption("（空收藏夹）")
 
+        st.markdown("**本夹全部卫星（解析显示完整信息）**")
+        if st.button("解析并显示本夹全部卫星", key="btn_show_col_sats"):
+            if not c["entries"]:
+                st.warning("这个收藏夹是空的，先添加条目。")
+            else:
+                bar = st.progress(0.0, text="开始解析……")
+                def cb(done, total, msg):
+                    if total:
+                        bar.progress(min(done / total, 1.0), text=msg)
+                    else:
+                        bar.progress(0.0, text=msg)
+                try:
+                    rows_meta = sl.resolve_collection_with_meta(c, progress=cb)
+                    path = sl.save_resolved_tle(c["name"], rows_meta)
+                except Exception as ex:
+                    st.error(f"解析失败：{ex}")
+                else:
+                    st.success(f"本夹共 {len(rows_meta)} 颗卫星")
+                    st.caption(f"合并 TLE 已保存：`{path}`")
+                    if rows_meta:
+                        df_all = pd.DataFrame(rows_meta)
+                        df_all["类型"] = df_all["object_type"].map(sl._object_type_label)
+                        st.dataframe(df_all.rename(columns={
+                            "name": "卫星名", "norad_id": "编号", "country": "所属",
+                            "launch_date": "发射日期", "altitude_km": "高度km",
+                            "inclination": "倾角°"})[
+                            ["卫星名", "编号", "所属", "发射日期", "高度km", "倾角°", "类型"]],
+                            hide_index=True)
+
         st.markdown("**管理收藏夹**")
         m1, m2 = st.columns(2)
         with m1:
@@ -332,9 +361,14 @@ with tab_download:
         if not sel_names:
             st.warning("请至少选择一个收藏夹。")
         else:
-            with st.spinner("正在下载/读取 TLE……"):
-                recs = sl.resolve_collections_to_records(sel_names)
-                path = sl.save_resolved_tle(" + ".join(sel_names), recs)
+            bar = st.progress(0.0, text="开始解析……")
+            def cb(done, total, msg):
+                if total:
+                    bar.progress(min(done / total, 1.0), text=msg)
+                else:
+                    bar.progress(0.0, text=msg)
+            recs = sl.resolve_collections_to_records(sel_names, progress=cb)
+            path = sl.save_resolved_tle(" + ".join(sel_names), recs)
             st.success(f"解析完成：{len(recs)} 颗卫星（按 NORAD 编号去重）")
             st.caption(f"已合并为一个文件：`{path}`（下次解析直接复用缓存，不重复下载）")
             if recs:
@@ -353,13 +387,17 @@ with tab_download:
                 "大小 KB": round(p.stat().st_size / 1024, 1),
                 "更新于(小时前)": round((time.time() - p.stat().st_mtime) / 3600, 1),
             })
-    if cache_rows:
-        st.dataframe(pd.DataFrame(cache_rows), hide_index=True)
-        st.caption("文件说明：active.tle=全集TLE缓存；meta/…=搜索结果元数据；"
-                   "name/…=按名字搜索的TLE；norad/…=单星TLE；"
-                   "resolved/…=每个收藏夹合并的TLE（重点看这个）")
-    else:
-        st.info("暂无缓存文件。")
+    total_files = len(cache_rows)
+    total_kb = round(sum(r["大小 KB"] for r in cache_rows), 1)
+    st.caption(f"共 {total_files} 个缓存文件，合计约 {total_kb} KB。")
+    with st.expander("查看详细缓存列表（默认折叠）"):
+        if cache_rows:
+            st.dataframe(pd.DataFrame(cache_rows), hide_index=True)
+            st.caption("文件说明：active.tle=全集TLE缓存；meta/…=搜索结果元数据；"
+                       "name/…=按名字搜索的TLE；norad/…=单星TLE；"
+                       "resolved/…=每个收藏夹合并的TLE（重点看这个）")
+        else:
+            st.info("暂无缓存文件。")
     confirm_clear = st.checkbox("确认清空全部缓存（下次会自动重新下载）", key="clear_confirm")
     if st.button("清空缓存", key="btn_clear_cache"):
         if not confirm_clear:

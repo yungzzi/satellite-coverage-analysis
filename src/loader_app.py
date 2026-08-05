@@ -48,10 +48,24 @@ with st.sidebar:
     if st.button("停止并退出程序", key="btn_exit", icon=":material/stop:"):
         # 先尝试让浏览器关闭标签页（受浏览器安全限制，可能不成功），再停服务
         st.html("<script>window.close();</script>", unsafe_allow_javascript=True)
-        st.info("程序已停止；若页面没有自动关闭，请手动关闭这个标签页。")
+        # 再铺一层纯白全屏遮罩：盖住所有按钮，只显示退出提示
+        st.html(
+            """
+            <style>
+              #exit-overlay {
+                position: fixed; inset: 0; z-index: 999999;
+                background: #ffffff; display: flex; align-items: center;
+                justify-content: center; text-align: center;
+                font-family: "Microsoft YaHei", sans-serif; font-size: 22px;
+                color: #333333;
+              }
+            </style>
+            <div id="exit-overlay">程序已退出，请关闭此标签页</div>
+            """,
+        )
         threading.Timer(1.5, os._exit, args=(0,)).start()
         st.stop()
-    st.caption("提示：浏览器一般不允许网页自己关闭标签页；若没自动关，手动关即可。")
+    st.caption("提示：浏览器不允许网页自己关闭标签页；退出后页面会变成白屏提示，手动关即可。")
 
 tab_search, tab_collections, tab_download = st.tabs(
     ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检"])

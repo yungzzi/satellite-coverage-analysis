@@ -597,6 +597,59 @@ def add_entry(collection_name: str, entry_type: str, value: str) -> bool:
     return True
 
 
+def add_norad_to_collection(collection_name: str, norad_ids: List[int]) -> bool:
+    """向收藏夹追加 NORAD 编号：已有编号清单则合并去重，否则新建一条清单。"""
+    user = load_user_collections()
+    c = find_collection(user, collection_name)
+    if c is None:
+        print(f"  [失败] 未找到用户收藏夹：{collection_name}")
+        return False
+    new_ids = {str(i) for i in norad_ids if str(i).isdigit()}
+    if not new_ids:
+        return False
+    target = None
+    for e in c["entries"]:
+        if e["type"] == "norad_list":
+            existing = {x for x in e["value"].replace(",", " ").split() if x.strip().isdigit()}
+            merged = sorted(existing | new_ids, key=lambda x: int(x))
+            e["value"] = " ".join(merged)
+            target = e
+            break
+    if target is None:
+        c["entries"].append({"type": "norad_list",
+                             "value": " ".join(sorted(new_ids, key=lambda x: int(x)))})
+    save_user_collections(user)
+    print(f"  [完成] 已向「{collection_name}」添加编号：{' '.join(sorted(new_ids, key=lambda x: int(x)))}")
+    return True
+
+
+def remove_norad_from_collection(collection_name: str, norad_id: int) -> bool:
+    """从收藏夹的编号清单中删除单个编号（清单删空则整条移除）。"""
+    user = load_user_collections()
+    c = find_collection(user, collection_name)
+    if c is None:
+        print(f"  [失败] 未找到用户收藏夹：{collection_name}")
+        return False
+    rid = str(norad_id)
+    removed = False
+    for e in list(c["entries"]):
+        if e["type"] == "norad_list":
+            ids = [x for x in e["value"].replace(",", " ").split() if x.strip().isdigit()]
+            if rid in ids:
+                ids.remove(rid)
+                removed = True
+            if ids:
+                e["value"] = " ".join(sorted(ids, key=lambda x: int(x)))
+            else:
+                c["entries"].remove(e)
+    if removed:
+        save_user_collections(user)
+        print(f"  [完成] 已从「{collection_name}」移除编号 {rid}")
+    else:
+        print(f"  [跳过] 编号 {rid} 不在「{collection_name}」中")
+    return removed
+
+
 def remove_entry(collection_name: str, index: int) -> bool:
     """按序号删除用户收藏夹里的条目（0 起）。"""
     user = load_user_collections()
@@ -893,6 +946,26 @@ def _entry_label(entry: dict) -> str:
     return f"{labels.get(entry['type'], entry['type'])} = {entry['value']}"
 
 
+def longest_common_prefix(names: List[str]) -> str:
+    """找一批卫星名的公共前缀（用于"手动清单 -> 自动规则"的归纳建议）。
+
+    例如 ["YAOGAN-2", "YAOGAN-35 01C", "YAOGAN-41"] -> "YAOGAN"。
+    大小写不敏感比较，返回时去掉末尾的 - _ . 等分隔符。
+    """
+    if not names:
+        return ""
+    prefix = names[0].strip()
+    for n in names[1:]:
+        n = n.strip()
+        i = 0
+        while i < len(prefix) and i < len(n) and prefix[i].upper() == n[i].upper():
+            i += 1
+        prefix = prefix[:i]
+        if not prefix:
+            return ""
+    return prefix.rstrip(" -_.")
+
+
 def _object_type_label(code: str) -> str:
     """CelesTrak 编目的短代码 -> 中文（便于阅读）。"""
     return {"PAY": "载荷", "R/B": "火箭体", "DEB": "碎片", "UNK": "未知"}.get(code, code)
@@ -1029,10 +1102,9 @@ def _menu_manage():
         print_collections(all_c)
         print("  1. 新建收藏夹")
         print("  2. 打开收藏夹（查看/加/删/移动条目）")
-        print("  3. 复制内置夹到我的收藏")
-        print("  4. 改名 / 删除（用户收藏夹）")
+        print("  3. 改名 / 删除（用户收藏夹）")
         print("  0. 返回")
-        choice = _ask_number("> ", 0, 4)
+        choice = _ask_number("> ", 0, 3)
         if choice is None or choice == 0:
             return
         if choice == 1:
@@ -1045,11 +1117,6 @@ def _menu_manage():
                 continue
             _menu_open_collection(c)
         elif choice == 3:
-            builtin = load_builtin_collections()
-            c = _pick_collection(builtin, "选择要复制到我的收藏的内置夹")
-            if c:
-                copy_builtin_to_user(c["name"])
-        elif choice == 4:
             user = load_user_collections()
             c = _pick_collection(user, "选择用户收藏夹（改名/删除）")
             if c is None:
@@ -1196,7 +1263,6 @@ def main():
     parser.add_argument("--create", metavar="名称", help="新建用户收藏夹")
     parser.add_argument("--rename", nargs=2, metavar=("旧名", "新名"), help="改用户收藏夹名")
     parser.add_argument("--delete", metavar="名称", help="删除用户收藏夹")
-    parser.add_argument("--copy-builtin", metavar="名称", help="复制内置夹到用户收藏")
     parser.add_argument("--import-file", metavar="路径", help="导入 TLE/编号文件（配合 --collection）")
     parser.add_argument("--collection", metavar="名称", help="配合 --import-file 指定目标收藏夹")
     parser.add_argument("--add-entry", metavar="类型", choices=["name_filter", "norad_list"],
@@ -1230,8 +1296,6 @@ def main():
         rename_collection(args.rename[0], args.rename[1])
     if args.delete:
         delete_collection(args.delete)
-    if args.copy_builtin:
-        copy_builtin_to_user(args.copy_builtin)
     if args.import_file:
         col = args.collection or "导入文件"
         import_file_to_collection(args.import_file, col, new_collection=not args.collection)
@@ -1255,7 +1319,7 @@ def main():
 
     # 没有任何参数时进入交互模式
     if not any([args.search, args.norad, args.catalog, args.create, args.rename,
-                args.delete, args.copy_builtin, args.import_file, args.add_entry,
+                args.delete, args.import_file, args.add_entry,
                 args.resolve]):
         interactive_main()
 

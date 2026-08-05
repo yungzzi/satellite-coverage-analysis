@@ -61,14 +61,13 @@ def _slider_bounds(values: list):
 
 
 def _reset_filters():
-    """重置结果内筛选（on_click 回调，在组件重建前执行），并重新拉取最新结果。
+    """重置结果内筛选（on_click 回调）：递增"筛选版本号"让所有筛选控件换新 key
+    重建（自动回到默认值），并重新拉取最新结果。
 
-    注意：必须"显式设回默认值"（而不是 pop 删键），否则新版 Streamlit 里
-    多选框/滑块的显示不会回到原始状态（严格匹配曾用 pop 就出现此问题）。
+    用版本号而不是 pop/设值，可以同时避免：①新版 Streamlit 显示不回位；
+    ②"widget 同时有默认值和 session_state 值"的警告。
     """
-    st.session_state["f_strict"] = False
-    st.session_state["f_country"] = []
-    st.session_state["f_year"] = []
+    st.session_state["filter_ver"] = st.session_state.get("filter_ver", 0) + 1
     st.session_state.pop("search_multi", None)
     kw = str(st.session_state.get("kw", "")).strip()
     if kw:
@@ -80,19 +79,6 @@ def _reset_filters():
             max_alt_km=st.session_state.get("maxalt", 0.0) or None,
             offline=False)
         st.session_state["search_full"] = rows
-    else:
-        rows = st.session_state.get("search_full") or []
-    # 滑块设回全范围（与组件创建时的默认值完全一致）
-    b = _slider_bounds([r.get("altitude_km") for r in rows])
-    if b:
-        st.session_state["f_alt"] = b
-    else:
-        st.session_state.pop("f_alt", None)
-    b = _slider_bounds([r.get("inclination") for r in rows])
-    if b:
-        st.session_state["f_inc"] = b
-    else:
-        st.session_state.pop("f_inc", None)
 
 
 st.set_page_config(page_title="卫星数据加载器", page_icon="🛰️", layout="wide")
@@ -211,15 +197,16 @@ with tab_search:
             "inclination": "倾角°", "object_type": "类型"})
 
         st.markdown("**结果内筛选**（只影响显示与勾选，不重新搜索）")
+        ver = st.session_state.get("filter_ver", 0)   # 重置时递增，控件换新 key 回到默认
         f1, f2 = st.columns(2)
         countries = sorted({x for x in df["所属"].tolist() if x})
-        f_country = f1.multiselect("按所属国筛选", countries, key="f_country")
+        f_country = f1.multiselect("按所属国筛选", countries, key=f"f_country_{ver}")
         years = sorted({str(x)[:4] for x in df["发射日期"].tolist()
                         if str(x)[:4].isdigit()})
-        f_year = f2.multiselect("按发射年份筛选", years, key="f_year")
+        f_year = f2.multiselect("按发射年份筛选", years, key=f"f_year_{ver}")
         strict = st.checkbox(
             "严格匹配：只显示名字以关键字开头的星（减少混入的无关星）",
-            key="f_strict",
+            key=f"f_strict_{ver}",
             help="CelesTrak 按名字搜索是'包含匹配'。例如搜 GF 会匹配到 CYGFM（长光一号）等；"
                  "勾选后只保留名字以 GF 开头的星。")
         # 注意：不设 help，避免悬停提示框长时间停留（Streamlit 无法配置提示时长）
@@ -227,12 +214,14 @@ with tab_search:
         f3, f4 = st.columns(2)
         bounds = _slider_bounds(df["高度km"].tolist())
         if bounds:
-            f_alt = f3.slider("高度范围（km）", bounds[0], bounds[1], bounds, key="f_alt")
+            f_alt = f3.slider("高度范围（km）", bounds[0], bounds[1], bounds,
+                              key=f"f_alt_{ver}")
         else:
             f_alt = None
         bounds = _slider_bounds(df["倾角°"].tolist())
         if bounds:
-            f_inc = f4.slider("倾角范围（°）", bounds[0], bounds[1], bounds, key="f_inc")
+            f_inc = f4.slider("倾角范围（°）", bounds[0], bounds[1], bounds,
+                              key=f"f_inc_{ver}")
         else:
             f_inc = None
 

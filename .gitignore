@@ -23,6 +23,7 @@ output/
 
 # 用户自己的配置文件（模板 config.example.toml 入库）
 config.toml
+!.streamlit/config.toml
 
 # 卫星数据加载器（阶段1）产生的用户数据（不入库）
 data/user_catalog.toml

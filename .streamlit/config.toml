@@ -1,0 +1,8 @@
+# Streamlit 配置（本项目）
+
+[client]
+# 隐藏开发者工具栏并禁用"清空缓存"快捷键。
+# 原因：Streamlit 1.61 里按 Ctrl+C 会触发"清空缓存"确认框（GitHub issue #2566 已知问题）；
+# 本地运行时处于开发者模式，快捷键必触发。toolbarMode=minimal 后官方判定逻辑
+# 会直接禁用该快捷键（bundle 里 sT() 对 MINIMAL 返回 false）。
+toolbarMode = "minimal"

@@ -206,6 +206,7 @@ with tab_search:
             view = view[view["高度km"].between(f_alt[0], f_alt[1])]
         if f_inc is not None:
             view = view[view["倾角°"].between(f_inc[0], f_inc[1])]
+        view["序号"] = range(1, len(view) + 1)   # 筛选后重新连续编号
 
         st.dataframe(view[["序号", "卫星名", "编号", "所属", "发射日期",
                            "高度km", "倾角°", "类型"]], hide_index=True)

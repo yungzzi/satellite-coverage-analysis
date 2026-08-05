@@ -214,19 +214,41 @@ with tab_search:
         else:
             f_inc = None
 
-        view = df.copy()
+        # 逐个筛选，并记录每个筛掉多少条（便于排查是哪个筛选框在起作用）
+        steps = []
+        mask = pd.Series(True, index=df.index)
         if strict and keyword.strip():
             kw = keyword.strip().lower()
-            view = view[view["卫星名"].str.lower().str.startswith(kw)]
+            m = df["卫星名"].str.lower().str.startswith(kw)
+            if int((~m).sum()):
+                steps.append(f"严格匹配(去{int((~m).sum())})")
+            mask &= m
         if f_country:
-            view = view[view["所属"].isin(f_country)]
+            m = df["所属"].isin(f_country)
+            if int((~m).sum()):
+                steps.append(f"所属国{list(f_country)}(去{int((~m).sum())})")
+            mask &= m
         if f_year:
-            view = view[view["发射日期"].str[:4].isin(f_year)]
+            m = df["发射日期"].str[:4].isin(f_year)
+            if int((~m).sum()):
+                steps.append(f"发射年份{list(f_year)}(去{int((~m).sum())})")
+            mask &= m
         if f_alt is not None:
-            view = view[view["高度km"].between(f_alt[0], f_alt[1])]
+            m = df["高度km"].between(f_alt[0], f_alt[1])
+            if int((~m).sum()):
+                steps.append(f"高度[{f_alt[0]}~{f_alt[1]}](去{int((~m).sum())})")
+            mask &= m
         if f_inc is not None:
-            view = view[view["倾角°"].between(f_inc[0], f_inc[1])]
+            m = df["倾角°"].between(f_inc[0], f_inc[1])
+            if int((~m).sum()):
+                steps.append(f"倾角[{f_inc[0]}~{f_inc[1]}](去{int((~m).sum())})")
+            mask &= m
+        view = df[mask].copy()
         view["序号"] = range(1, len(view) + 1)   # 筛选后重新连续编号
+        if steps:
+            st.caption("当前生效的筛选：" + " ｜ ".join(steps))
+        else:
+            st.caption("当前无筛选，显示全部搜索结果。")
 
         st.dataframe(view[["序号", "卫星名", "编号", "所属", "发射日期",
                            "高度km", "倾角°", "类型"]], hide_index=True)

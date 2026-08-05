@@ -61,6 +61,20 @@ DEFAULT_MAX_AGE_HOURS = 24
 
 _ACTIVE_FAILED = False   # 本次运行中全集缓存下载失败过则不再重复尝试
 
+CACHE_README = """\
+data/tle_cache/ —— 卫星数据缓存目录（程序自动维护；整个目录可随时删除，会自动重新下载）
+
+文件说明：
+- active.tle        全集现役 TLE：下载时刻"所有现役卫星"的快照（不是只存查过的星）；
+                    网络差时可能下载失败而缺失，程序会自动退回逐个单星下载
+- meta/*.csv        搜索结果"卫星档案表"（CelesTrak records.php，CSV 表格）
+- name/*.tle        按名字搜索的 TLE（gp.php?NAME=）
+- norad/*.tle       单颗星 TLE（gp.php?CATNR=）
+- resolved/*.tle    成品：每个收藏夹解析后的合并 TLE（人看这个文件夹即可）
+
+缓存默认 24 小时过期后自动更新；GUI ③页有"缓存管理"可查看/清空。
+"""
+
 
 # ==================== 1. 包装类 Satellite ====================
 
@@ -145,6 +159,15 @@ def _ensure_dirs():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
     _clean_legacy_cache()
+    _write_cache_readme()
+
+
+def _write_cache_readme():
+    """在缓存目录放一个说明文件，方便在资源管理器里直接看懂。"""
+    try:
+        (CACHE_DIR / "README.txt").write_text(CACHE_README, encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _clean_legacy_cache():
@@ -152,7 +175,7 @@ def _clean_legacy_cache():
     if not CACHE_DIR.exists():
         return
     for p in CACHE_DIR.iterdir():
-        if p.is_file() and p.name != "active.tle":
+        if p.is_file() and p.name not in ("active.tle", "README.txt"):
             try:
                 p.unlink()
             except OSError:

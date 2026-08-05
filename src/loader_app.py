@@ -51,8 +51,9 @@ def show_flash():
 
 def _reset_filters():
     """重置结果内筛选（on_click 回调，在组件重建前执行），并重新拉取最新结果。"""
-    for k in ("f_country", "f_year", "f_alt", "f_inc", "f_strict"):
+    for k in ("f_country", "f_year", "f_alt", "f_inc"):
         st.session_state.pop(k, None)
+    st.session_state["f_strict"] = False   # 显式取消勾选（比 pop 更可靠）
     st.session_state.pop("search_multi", None)
     kw = str(st.session_state.get("kw", "")).strip()
     if kw:
@@ -199,7 +200,8 @@ with tab_search:
         f3, f4 = st.columns(2)
         alts = [a for a in df["高度km"].tolist() if a is not None]
         if alts:
-            lo, hi = int(min(alts)), int(max(alts))
+            # 上限用 int(max)+1（向上取整），避免截断把边界值（如 98.46°）排除
+            lo, hi = int(min(alts)), int(max(alts)) + 1
             if hi <= lo:
                 hi = lo + 1
             f_alt = f3.slider("高度范围（km）", lo, hi, (lo, hi), key="f_alt")
@@ -207,7 +209,7 @@ with tab_search:
             f_alt = None
         incs = [i for i in df["倾角°"].tolist() if i is not None]
         if incs:
-            ilo, ihi = int(min(incs)), int(max(incs))
+            ilo, ihi = int(min(incs)), int(max(incs)) + 1
             if ihi <= ilo:
                 ihi = ilo + 1
             f_inc = f4.slider("倾角范围（°）", ilo, ihi, (ilo, ihi), key="f_inc")
@@ -234,12 +236,13 @@ with tab_search:
                 steps.append(f"发射年份{list(f_year)}(去{int((~m).sum())})")
             mask &= m
         if f_alt is not None:
-            m = df["高度km"].between(f_alt[0], f_alt[1])
+            # 空值（元数据缺失）不参与过滤：未知不算"不符合"
+            m = df["高度km"].isna() | df["高度km"].between(f_alt[0], f_alt[1])
             if int((~m).sum()):
                 steps.append(f"高度[{f_alt[0]}~{f_alt[1]}](去{int((~m).sum())})")
             mask &= m
         if f_inc is not None:
-            m = df["倾角°"].between(f_inc[0], f_inc[1])
+            m = df["倾角°"].isna() | df["倾角°"].between(f_inc[0], f_inc[1])
             if int((~m).sum()):
                 steps.append(f"倾角[{f_inc[0]}~{f_inc[1]}](去{int((~m).sum())})")
             mask &= m

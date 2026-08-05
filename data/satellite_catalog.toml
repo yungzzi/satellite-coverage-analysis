@@ -1,0 +1,25 @@
+# ============================================================
+# 内置星座目录（随软件发布，只读）
+# 用户可在软件里把这里的内置夹"复制到我的收藏"再自由修改；
+# 新星座主要通过"搜索 -> 加入收藏"解决，不需要改本文件。
+#
+# 条目类型：
+#   name_filter = 名字规则（活的：更新 TLE 时自动纳入新发射的同名卫星）
+#   norad_list  = 编号清单（固定：只包含列出的编号）
+#   file        = 导入文件（不用于内置目录）
+# ============================================================
+
+[[collections]]
+name = "中国遥感系列"
+description = "遥感卫星家族（名字规则，自动纳入新星；数据来自 CelesTrak 编目）"
+entries = [
+  { type = "name_filter", value = "YAOGAN" },
+]
+
+[[collections]]
+name = "国际知名星座（示例）"
+description = "演示 CelesTrak 星座分组：一键导入整星座"
+entries = [
+  { type = "name_filter", value = "STARLINK" },
+  { type = "name_filter", value = "ONEWEB" },
+]

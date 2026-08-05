@@ -280,19 +280,9 @@ def search_metadata(keyword: str,
                          max_age_hours, offline=offline)
     if path is None:
         return []
-    rows = []
-    try:
-        with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
-            reader = csv.DictReader(f)
-            for raw in reader:
-                row = {k.lower().strip(): (v or "").strip() for k, v in raw.items()}
-                rows.append(row)
-    except Exception as e:
-        print(f"  [失败] 读取搜索缓存失败：{e}")
-        return []
 
     out = []
-    for row in rows:
+    for row in _parse_meta_csv(path):
         if country and country.upper() != row.get("owner", "").upper():
             continue
         if launch_year and not row.get("launch_date", "").startswith(launch_year):
@@ -302,21 +292,7 @@ def search_metadata(keyword: str,
             continue
         if max_alt_km is not None and (alt is None or alt > max_alt_km):
             continue
-        try:
-            rid = int(row.get("norad_cat_id", ""))
-        except ValueError:
-            rid = None
-        out.append({
-            "name": row.get("object_name", ""),
-            "norad_id": rid,
-            "country": row.get("owner", ""),
-            "launch_date": row.get("launch_date", ""),
-            "object_type": row.get("object_type", ""),
-            "decayed": False,   # 已按 ONORBIT=1 过滤
-            "inclination": _safe_float(row.get("inclination", "")),
-            "altitude_km": alt,
-            "has_tle": False,   # 编目只有元数据；TLE 通过 gp.php 获取
-        })
+        out.append(_row_to_meta(row))
     return out
 
 
@@ -335,6 +311,52 @@ def _safe_float(v: str) -> Optional[float]:
         return float(v)
     except (ValueError, TypeError):
         return None
+
+
+def _parse_meta_csv(path: Path) -> List[dict]:
+    """解析 CelesTrak satcat 返回的 CSV（键名统一小写）。"""
+    rows = []
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
+            reader = csv.DictReader(f)
+            for raw in reader:
+                row = {k.lower().strip(): (v or "").strip() for k, v in raw.items()}
+                rows.append(row)
+    except Exception as e:
+        print(f"  [失败] 读取缓存失败：{e}")
+        return []
+    return rows
+
+
+def _row_to_meta(row: dict) -> dict:
+    """把 satcat 的一行转成统一的元数据字典（搜索/补全共用）。"""
+    try:
+        rid = int(row.get("norad_cat_id", ""))
+    except ValueError:
+        rid = None
+    return {
+        "name": row.get("object_name", ""),
+        "norad_id": rid,
+        "country": row.get("owner", ""),
+        "launch_date": row.get("launch_date", ""),
+        "object_type": row.get("object_type", ""),
+        "decayed": False,   # 已按 ONORBIT=1 过滤
+        "inclination": _safe_float(row.get("inclination", "")),
+        "altitude_km": _row_altitude(row),
+        "has_tle": False,   # 编目只有元数据；TLE 通过 gp.php 获取
+    }
+
+
+def search_metadata_by_norad(norad_id: int,
+                             max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+                             offline: bool = False) -> List[dict]:
+    """按 NORAD 编号查单星元数据（records.php?CATNR=，缓存到 meta/catnr_*.csv）。"""
+    url = f"{CELESTRAK_SATCAT}?CATNR={norad_id}&FORMAT=CSV"
+    path = download_text(url, f"meta/catnr_{norad_id}.csv",
+                         max_age_hours, offline=offline)
+    if path is None:
+        return []
+    return [_row_to_meta(row) for row in _parse_meta_csv(path)]
 
 
 def search_by_name_online(keyword: str, max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
@@ -636,7 +658,8 @@ def import_file_to_collection(file_path: str, collection_name: str,
 
 # ==================== 5. 把收藏夹解析成卫星列表 ====================
 
-def _records_from_file(file_path: str, max_age_hours: float, offline: bool) -> List[dict]:
+def _records_from_file(file_path: str, max_age_hours: float, offline: bool,
+                       progress=None) -> List[dict]:
     """读本地文件：TLE 文本 或 NORAD 编号清单。"""
     path = Path(file_path)
     if not path.exists():
@@ -652,29 +675,29 @@ def _records_from_file(file_path: str, max_age_hours: float, offline: bool) -> L
     for tok in text.replace(",", " ").split():
         if tok.strip().isdigit():
             ids.append(int(tok))
-    return _records_by_norad_ids(ids, max_age_hours, offline)
+    return _records_by_norad_ids(ids, max_age_hours, offline, progress=progress)
 
 
 def _records_by_norad_ids(norad_ids: List[int], max_age_hours: float,
-                          offline: bool) -> List[dict]:
+                          offline: bool, progress=None) -> List[dict]:
     """按编号清单找 TLE：优先查"全集现役 TLE"缓存（一次下载覆盖大多数），
     查不到的个别编号才逐个走 gp.php?CATNR=（带缓存与小延时）。"""
     by_id, _ = load_active_tle(max_age_hours, offline=offline)
     out = []
-    missing = []
-    for rid in norad_ids:
+    total = len(norad_ids)
+    for i, rid in enumerate(norad_ids, 1):
         r = by_id.get(rid)
         if r is not None:
             out.append(r)
         else:
-            missing.append(rid)
-    for rid in missing:
-        recs = search_by_norad_online(rid, max_age_hours, offline=offline)
-        if recs:
-            out.append(recs[0])
-        else:
-            print(f"  [警告] 查不到编号 {rid}")
-        time.sleep(0.2)  # 礼貌性小延时，避免高频请求
+            recs = search_by_norad_online(rid, max_age_hours, offline=offline)
+            if recs:
+                out.append(recs[0])
+            else:
+                print(f"  [警告] 查不到编号 {rid}")
+            time.sleep(0.2)  # 礼貌性小延时，避免高频请求
+        if progress:
+            progress(i, total, f"获取编号 {rid}（{i}/{total}）")
     return out
 
 
@@ -700,19 +723,50 @@ def _records_by_name_filter(keyword: str, max_age_hours: float,
     return online
 
 
+def _entry_units(entry: dict) -> int:
+    """一个条目要处理的"单元"数（编号清单按编号数算，其他按 1 算）。"""
+    if entry.get("type") == "norad_list":
+        ids = [x for x in entry.get("value", "").replace(",", " ").split()
+               if x.strip().isdigit()]
+        return max(1, len(ids))
+    return 1
+
+
+def collection_units(collection: dict) -> int:
+    """一个收藏夹的解析单元总数（用于进度条）。"""
+    return sum(_entry_units(e) for e in collection.get("entries", []))
+
+
 def resolve_collection(collection: dict, max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
-                       offline: bool = False) -> List[dict]:
-    """把一个收藏夹解析成 TLE 记录列表（按 NORAD 编号去重，保留顺序）。"""
+                       offline: bool = False, progress=None) -> List[dict]:
+    """把一个收藏夹解析成 TLE 记录列表（按 NORAD 编号去重，保留顺序）。
+
+    progress 是可选的进度回调：progress(done, total, 说明文字)。
+    """
     records: Dict[int, dict] = {}
+    total = collection_units(collection)
+    done = 0
     for entry in collection["entries"]:
         etype, value = entry["type"], entry["value"]
+        units = _entry_units(entry)
         if etype == "name_filter":
             recs = _records_by_name_filter(value, max_age_hours, offline)
+            done += units
+            if progress:
+                progress(done, total, f"处理条目：{_entry_label(entry)}")
         elif etype == "norad_list":
             ids = [int(x) for x in value.replace(",", " ").split() if x.strip().isdigit()]
-            recs = _records_by_norad_ids(ids, max_age_hours, offline)
+            def sub(d, t, m):
+                if progress:
+                    progress(done + d, total, m)
+            recs = _records_by_norad_ids(ids, max_age_hours, offline, progress=sub)
+            done += units
         elif etype == "file":
-            recs = _records_from_file(value, max_age_hours, offline)
+            def sub2(d, t, m):
+                if progress:
+                    progress(done + d, total, m)
+            recs = _records_from_file(value, max_age_hours, offline, progress=sub2)
+            done += units
         else:
             print(f"  [警告] 未知条目类型：{etype}，跳过")
             continue
@@ -724,19 +778,68 @@ def resolve_collection(collection: dict, max_age_hours: float = DEFAULT_MAX_AGE_
 
 def resolve_collections_to_records(collection_names: List[str],
                                    max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
-                                   offline: bool = False) -> List[dict]:
+                                   offline: bool = False, progress=None) -> List[dict]:
     """选中多个收藏夹 -> 合并去重 -> 下载 TLE -> TLE 记录列表。"""
     all_collections = load_all_collections()
-    records: Dict[int, dict] = {}
+    cols = []
     for name in collection_names:
         c = find_collection(all_collections, name)
         if c is None:
             print(f"  [警告] 找不到收藏夹：{name}，跳过")
             continue
-        for r in resolve_collection(c, max_age_hours, offline):
+        cols.append(c)
+    total = sum(collection_units(c) for c in cols)
+    records: Dict[int, dict] = {}
+    done = 0
+    for c in cols:
+        def sub(d, t, m):
+            if progress:
+                progress(done + d, total, m)
+        for r in resolve_collection(c, max_age_hours, offline, progress=sub):
             if r.get("norad_id") is not None:
                 records[r["norad_id"]] = r
+        done += collection_units(c)
     return list(records.values())
+
+
+def resolve_collection_with_meta(collection: dict,
+                                 max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+                                 offline: bool = False,
+                                 progress=None) -> List[dict]:
+    """解析收藏夹并补全元数据（所属/发射日期/高度/倾角），供 GUI 完整展示。
+
+    元数据来源：名字规则直接用已缓存的搜索档案表；
+    编号清单里的星逐个用 records.php?CATNR= 补（缓存到 meta/catnr_*.csv）。
+    """
+    recs = resolve_collection(collection, max_age_hours, offline, progress=progress)
+    meta_map = {}
+    for e in collection.get("entries", []):
+        if e.get("type") == "name_filter":
+            for m in search_metadata(e["value"], max_results=10000,
+                                     max_age_hours=max_age_hours, offline=offline):
+                if m.get("norad_id") is not None:
+                    meta_map[m["norad_id"]] = m
+    missing = [r["norad_id"] for r in recs if r["norad_id"] not in meta_map]
+    for rid in missing:
+        for m in search_metadata_by_norad(rid, max_age_hours, offline=offline):
+            if m.get("norad_id") is not None:
+                meta_map[m["norad_id"]] = m
+        time.sleep(0.1)
+    out = []
+    for r in recs:
+        m = meta_map.get(r["norad_id"], {})
+        out.append({
+            "name": r.get("name") or m.get("name", ""),
+            "norad_id": r["norad_id"],
+            "country": m.get("country", ""),
+            "launch_date": m.get("launch_date", ""),
+            "object_type": m.get("object_type", ""),
+            "altitude_km": m.get("altitude_km"),
+            "inclination": m.get("inclination"),
+            "line1": r.get("line1"),
+            "line2": r.get("line2"),
+        })
+    return out
 
 
 def records_to_satellites(records: List[dict]) -> List[Satellite]:

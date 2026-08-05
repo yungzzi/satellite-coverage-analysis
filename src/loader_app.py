@@ -208,41 +208,65 @@ tab_search, tab_collections, tab_download = st.tabs(
 
 if tab_search.open:
     st.subheader("搜索卫星（CelesTrak，免费、无 token）")
-    c1, c2, c3 = st.columns([2, 1, 1])
+    c1, c2 = st.columns([2, 1])
     keyword = c1.text_input("名字关键字", key="kw",
                             placeholder="如 YAOGAN / GF-1 / STARLINK")
-    country = c2.text_input("所属国（可选）", key="ctry", placeholder="如 PRC / USA")
-    launch_year = c3.text_input("发射年份（可选）", key="ly", placeholder="如 2023")
-    c4, c5 = st.columns(2)
-    min_alt = c4.number_input("最低高度 km（可选）", min_value=0.0, value=0.0, key="minalt")
-    max_alt = c5.number_input("最高高度 km（可选，0=不限）", min_value=0.0, value=0.0,
+    norad_input = c2.text_input("NORAD 编号（精确，可选）", key="norad",
+                                placeholder="如 25544")
+    c3, c4, c5 = st.columns(3)
+    intdes_input = c3.text_input("国际编号（可选）", key="intdes",
+                                 placeholder="如 1998-067A（一次发射的全部星）")
+    country = c4.text_input("所属国（可选）", key="ctry", placeholder="如 PRC / USA")
+    launch_year = c5.text_input("发射年份（可选）", key="ly", placeholder="如 2023")
+    c6, c7 = st.columns(2)
+    min_alt = c6.number_input("最低高度 km（可选）", min_value=0.0, value=0.0, key="minalt")
+    max_alt = c7.number_input("最高高度 km（可选，0=不限）", min_value=0.0, value=0.0,
                               key="maxalt")
 
     if st.button("搜索", key="btn_search"):
-        if not keyword.strip():
-            st.warning("请先输入名字关键字。")
-        else:
+        norad_str = norad_input.strip()
+        intdes_str = intdes_input.strip()
+        kw = keyword.strip()
+        if norad_str and not norad_str.isdigit():
+            st.warning("NORAD 编号需为纯数字（如 25544）。")
+        elif norad_str:
+            with st.spinner("正在按编号搜索……"):
+                rows = sl.search_metadata_by_norad(int(norad_str))
+            st.session_state["search_kind"] = "norad"
+            st.session_state["search_full"] = rows
+            st.session_state.pop("search_multi", None)   # 新搜索清空选择
+        elif intdes_str:
+            with st.spinner("正在按国际编号搜索……"):
+                rows = sl.search_metadata_by_intdes(intdes_str)
+            st.session_state["search_kind"] = "intdes"
+            st.session_state["search_full"] = rows
+            st.session_state.pop("search_multi", None)
+        elif kw:
             with st.spinner("正在搜索并下载缓存……"):
                 rows = sl.search_metadata(
-                    keyword.strip(), max_results=500,
+                    kw, max_results=500,
                     country=country.strip() or None,
                     launch_year=launch_year.strip() or None,
                     min_alt_km=min_alt or None,
                     max_alt_km=max_alt or None,
                     offline=False)
+            st.session_state["search_kind"] = "name"
             st.session_state["search_full"] = rows
-            st.session_state.pop("search_multi", None)   # 新搜索清空选择
+            st.session_state.pop("search_multi", None)
+        else:
+            st.warning("请至少填写一个搜索条件：名字关键字 / NORAD 编号 / 国际编号。")
 
     rows = st.session_state.get("search_full")
     if rows is None:
-        st.info("先在上方输入关键字点“搜索”，结果会出现在这里。")
+        st.info("先在上方填写搜索条件（名字 / NORAD 编号 / 国际编号）点“搜索”，结果会出现在这里。")
     elif not rows:
         st.info("没有找到匹配的卫星，换个关键字试试。")
     else:
         df = pd.DataFrame(rows)
         df["序号"] = range(1, len(df) + 1)
         df = df.rename(columns={
-            "name": "卫星名", "norad_id": "编号", "country": "所属",
+            "name": "卫星名", "norad_id": "编号", "object_id": "国际编号",
+            "country": "所属",
             "launch_date": "发射日期", "altitude_km": "高度km",
             "inclination": "倾角°", "object_type": "类型"})
 
@@ -312,7 +336,7 @@ if tab_search.open:
         else:
             st.caption("当前无筛选，显示全部搜索结果。")
 
-        st.dataframe(view[["序号", "卫星名", "编号", "所属", "发射日期",
+        st.dataframe(view[["序号", "卫星名", "编号", "国际编号", "所属", "发射日期",
                            "高度km", "倾角°", "类型"]], hide_index=True)
 
         options = [f"{i}. {name} (NORAD {rid})" for i, name, rid in
@@ -347,6 +371,10 @@ if tab_search.open:
                         ["名字规则（活，自动纳入新星；包含关键字匹配的全部卫星，与勾选无关）",
                          "编号清单（固定，只保存勾选的星）"],
                         key="save_mode")
+        search_kind = st.session_state.get("search_kind", "name")
+        if search_kind != "name":
+            st.caption("本次是「按编号 / 国际编号」搜索结果，只能保存为“编号清单”；"
+                       "想要“名字规则”请用名字关键字重新搜索。")
         if mode.startswith("名字规则") and selected:
             st.caption("注意：名字规则会包含关键字匹配的全部卫星，当前勾选不会单独生效；"
                        "想只要勾选的星，请选“编号清单”。")
@@ -363,12 +391,15 @@ if tab_search.open:
             if not target:
                 st.error("请先选择或新建一个收藏夹。")
             elif mode.startswith("名字规则"):
-                _snapshot()
-                if sl.add_entry(target, "name_filter", keyword.strip()):
-                    flash(f"已把名字规则「{keyword}」加入「{target}」")
+                if st.session_state.get("search_kind", "name") != "name":
+                    st.error("按编号 / 国际编号搜索的结果不能保存为名字规则，请改用“编号清单”保存。")
                 else:
-                    flash("该收藏夹里已经有相同的名字规则，未重复添加。", kind="warning")
-                st.rerun()
+                    _snapshot()
+                    if sl.add_entry(target, "name_filter", keyword.strip()):
+                        flash(f"已把名字规则「{keyword}」加入「{target}」")
+                    else:
+                        flash("该收藏夹里已经有相同的名字规则，未重复添加。", kind="warning")
+                    st.rerun()
             else:
                 if not sel_ids:
                     st.error("请先用多选框选择至少一颗星（或点“全选当前筛选结果”）。")

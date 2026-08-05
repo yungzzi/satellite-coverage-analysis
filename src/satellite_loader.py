@@ -337,6 +337,7 @@ def _row_to_meta(row: dict) -> dict:
     return {
         "name": row.get("object_name", ""),
         "norad_id": rid,
+        "object_id": row.get("object_id", ""),   # 国际编号，如 1998-067A
         "country": row.get("owner", ""),
         "launch_date": row.get("launch_date", ""),
         "object_type": row.get("object_type", ""),
@@ -351,8 +352,27 @@ def search_metadata_by_norad(norad_id: int,
                              max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
                              offline: bool = False) -> List[dict]:
     """按 NORAD 编号查单星元数据（records.php?CATNR=，缓存到 meta/catnr_*.csv）。"""
-    url = f"{CELESTRAK_SATCAT}?CATNR={norad_id}&FORMAT=CSV"
+    url = f"{CELESTRAK_SATCAT}?CATNR={norad_id}&FORMAT=CSV&PAYLOADS=1&ONORBIT=1"
     path = download_text(url, f"meta/catnr_{norad_id}.csv",
+                         max_age_hours, offline=offline)
+    if path is None:
+        return []
+    return [_row_to_meta(row) for row in _parse_meta_csv(path)]
+
+
+def search_metadata_by_intdes(intdes: str,
+                              max_results: int = 500,
+                              max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+                              offline: bool = False) -> List[dict]:
+    """按国际编号（发射编号，如 1998-067A）查该次发射的在轨载荷元数据。
+
+    records.php?INTDES=... 支持一次发射的多个物体；PAYLOADS=1&ONORBIT=1
+    过滤掉碎片/火箭体/已再入物体，和名字搜索口径一致。
+    """
+    import urllib.parse
+    url = (f"{CELESTRAK_SATCAT}?INTDES={urllib.parse.quote(intdes)}&FORMAT=CSV"
+           f"&MAX={int(max_results)}&PAYLOADS=1&ONORBIT=1")
+    path = download_text(url, f"meta/{_safe_cache_name(intdes, '_intdes.csv')}",
                          max_age_hours, offline=offline)
     if path is None:
         return []

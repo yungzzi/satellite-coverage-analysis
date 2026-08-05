@@ -59,10 +59,20 @@ matplotlib（甘特图）、requests（下载数据）。
 ## 9. 目录结构
 ```
 卫星覆盖性分析/
-├── data/raw/       # 原始 TLE（不入库，可重新下载）
-├── data/geo/       # 地区边界 GeoJSON
-├── src/            # 核心代码（中文注释）
-├── output/         # 结果 CSV 与图表
+├── data/
+│   ├── raw/               # 原始 TLE 快照（不入库，可重新下载）
+│   ├── geo/               # 地区边界 GeoJSON
+│   ├── satellite_catalog.toml  # 内置星座目录（入库，只读）
+│   ├── user_catalog.toml  # 用户收藏夹（不入库，程序自动维护）
+│   ├── tle_cache/         # 下载缓存（不入库，自动更新）
+│   └── user_files/        # 用户导入文件副本（不入库，程序管理）
+├── src/
+│   ├── coverage_analysis.py   # 覆盖分析主程序（已验证，勿随意改动）
+│   ├── query_coverage.py      # 查询/导出工具
+│   ├── satellite_loader.py    # 阶段1：卫星数据加载器（搜索/收藏夹/缓存）
+│   ├── validate_loader.py     # 加载器自检脚本
+│   └── validate_*.py          # 覆盖验证脚本
+├── output/         # 结果 CSV 与图表（不入库）
 ├── README.md       # 白话项目说明 + 术语表
 └── AGENTS.md       # 本文件
 ```
@@ -78,6 +88,18 @@ matplotlib（甘特图）、requests（下载数据）。
 - [x] 与公开过境预报交叉验证（5 颗星 4 种轨道，133 次过境全部对上，偏差 3~19 秒）
 - [x] 输出升级：状态表 / 空窗表 / 文字摘要 / 可用卫星数曲线 / 查询工具 / Excel（含覆盖率）
 - [x] 两段式边界精化（1 分钟粗筛 + 边界 10 秒精化）
+- [x] 阶段1：卫星数据加载器（2026-08-05，独立模块，coverage_analysis.py 未改动）
+      —— CelesTrak 搜索/下载缓存 + 收藏夹（内置+用户，三类条目）+ 包装类 Satellite
+      —— 自检 validate_loader.py 36 项全部通过；内置夹"中国遥感系列"解析 165 颗在轨载荷
+
+## 12. 输入层设计（阶段1已定，待阶段2集成）
+- 交互：命令行菜单（搜索→勾选→入收藏→解析下载）；以后 GUI 只替换交互层。
+- 数据源：CelesTrak 免费接口（records.php 元数据 + gp.php TLE），无需 token；缓存于 tle_cache/。
+- 收藏夹：内置目录（只读）+ 用户收藏（单文件，可建/删/改名/移动）；条目三类：
+  name_filter（活规则）/ norad_list（固定快照）/ file（导入文件，程序复制管理）。
+- 新星座：用户搜索→入收藏即生效，无需开发者更新软件。
+- 阶段2（未开始）：把 coverage_analysis.py 的 load_satellites 换成 satellite_loader，
+  并做回归验证（基准：164/165 颗、317 窗口、155 覆盖星）。
 - [x] 输入层：点+半径（5 km 圆）目标 + 任意地区 GeoJSON + CLI 参数（--mode/--lat/--lon/--radius/--geojson/--start/--end）
 - [x] 配置文件：TOML 模板 + --config + config.toml 自动加载（命令行参数 > config.toml > 默认值）
 - [ ] 传感器参数按星分配（类型表+规则）与星座数据导入 / TLE 自动下载（设计讨论中，未实现）

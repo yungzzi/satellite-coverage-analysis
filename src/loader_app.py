@@ -34,10 +34,55 @@ import satellite_loader as sl
 import validate_loader
 
 
+def flash(msg: str, kind: str = "success"):
+    """把反馈消息存进会话状态，跨 rerun 显示（st.rerun 不会把它清掉）。"""
+    st.session_state["flash"] = {"kind": kind, "msg": msg}
+
+
+def show_flash():
+    """在页面顶部显示上一次操作的反馈（显示一次后自动清除）。"""
+    f = st.session_state.pop("flash", None)
+    if f:
+        if f["kind"] == "success":
+            st.success(f["msg"])
+        else:
+            st.warning(f["msg"])
+
+
 st.set_page_config(page_title="卫星数据加载器", page_icon="🛰️", layout="wide")
 
 st.title("🛰️ 卫星数据加载器")
 st.caption("搜索 / 收藏夹 / 下载 —— 只负责卫星数据导入，覆盖分析（coverage_analysis.py）不动。")
+show_flash()
+
+# 拦截 Streamlit 的页面级快捷键（c=清空缓存、r=重新运行），
+# 否则在页面空白处按 Ctrl+C 会弹"清空缓存"确认框而不是复制文字。
+# 输入框/文本域内不拦截，Ctrl+C 复制照常可用。
+st.html(
+    """
+    <script>
+    (function () {
+      if (window.__stCovShortcutsBlocked) return;
+      window.__stCovShortcutsBlocked = true;
+      function block(e) {
+        var k = (e.key || '').toLowerCase();
+        if (k !== 'c' && k !== 'r') return;
+        var t = e.target;
+        var tag = t && (t.tagName || '').toLowerCase();
+        var editable = tag === 'input' || tag === 'textarea' ||
+                       (t && t.isContentEditable);
+        if (!editable) {
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+        }
+      }
+      window.addEventListener('keydown', block, true);
+      document.addEventListener('keydown', block, true);
+    })();
+    </script>
+    """,
+    unsafe_allow_javascript=True,
+)
 
 with st.sidebar:
     st.header("说明")
@@ -189,26 +234,24 @@ with tab_search:
         if st.button("加入收藏夹", key="btn_add"):
             target = col_target
             if new_name.strip():
-                if sl.create_collection(new_name.strip()):
-                    target = new_name.strip()
-                else:
-                    target = new_name.strip()  # 已存在同名夹则直接使用
+                sl.create_collection(new_name.strip())
+                target = new_name.strip()
             if not target:
                 st.error("请先选择或新建一个收藏夹。")
             elif mode.startswith("名字规则"):
                 if sl.add_entry(target, "name_filter", keyword.strip()):
-                    st.success(f"已把名字规则「{keyword}」加入「{target}」")
-                    st.rerun()
+                    flash(f"已把名字规则「{keyword}」加入「{target}」")
                 else:
-                    st.warning("该收藏夹里已经有相同的名字规则，未重复添加。")
+                    flash("该收藏夹里已经有相同的名字规则，未重复添加。", kind="warning")
+                st.rerun()
             else:
                 if not sel_ids:
                     st.error("请先用多选框选择至少一颗星（或点“全选当前筛选结果”）。")
                 elif sl.add_entry(target, "norad_list", " ".join(map(str, sel_ids))):
-                    st.success(f"已把 {len(sel_ids)} 颗星（编号清单）加入「{target}」")
-                    st.rerun()
+                    flash(f"已把 {len(sel_ids)} 颗星（编号清单）加入「{target}」")
                 else:
-                    st.warning("该收藏夹里已经有相同的编号清单，未重复添加。")
+                    flash("该收藏夹里已经有相同的编号清单，未重复添加。", kind="warning")
+                st.rerun()
         if st.button("直接解析所选（不入收藏夹）", key="btn_resolve_sel"):
             if not sel_ids:
                 st.error("请先选择至少一颗星（或点“全选当前筛选结果”）。")
@@ -281,18 +324,26 @@ with tab_collections:
             new_name = st.text_input("新建收藏夹名称", key="new_col_name")
             if st.button("新建", key="btn_new_col"):
                 if new_name.strip():
-                    sl.create_collection(new_name.strip())
-                    st.rerun()
+                    ok = sl.create_collection(new_name.strip())
+                    flash("已新建收藏夹：" + new_name.strip() if ok
+                          else f"已存在同名收藏夹：{new_name.strip()}，未新建。",
+                          kind="success" if ok else "warning")
+                st.rerun()
             if not c.get("builtin"):
                 rename_to = st.text_input("改名为", key="rename_to")
                 if st.button("改名", key="btn_rename"):
                     if rename_to.strip():
-                        sl.rename_collection(c["name"], rename_to.strip())
+                        ok = sl.rename_collection(c["name"], rename_to.strip())
+                        flash(f"已改名：{c['name']} -> {rename_to.strip()}" if ok
+                              else "改名失败（可能重名）。",
+                              kind="success" if ok else "warning")
                         st.rerun()
                 confirm_del = st.checkbox("确认删除「当前夹」（不可撤销）", key="del_confirm")
                 if st.button("删除", key="btn_del"):
                     if confirm_del:
-                        sl.delete_collection(c["name"])
+                        ok = sl.delete_collection(c["name"])
+                        flash(f"已删除收藏夹：{c['name']}" if ok else "删除失败。",
+                              kind="success" if ok else "warning")
                         st.rerun()
                     else:
                         st.warning("请先勾选确认。")
@@ -302,7 +353,10 @@ with tab_collections:
                 src_name = st.selectbox("复制内置夹到我的",
                                         [b["name"] for b in builtin], key="copy_src")
                 if st.button("复制", key="btn_copy"):
-                    sl.copy_builtin_to_user(src_name)
+                    ok = sl.copy_builtin_to_user(src_name)
+                    flash(f"已复制「{src_name}」到我的收藏" if ok
+                          else "复制失败（可能重名）。",
+                          kind="success" if ok else "warning")
                     st.rerun()
 
         st.markdown("**管理条目**")
@@ -316,14 +370,19 @@ with tab_collections:
                     placeholder="名字规则：YAOGAN；编号清单：25544 31490")
                 if st.button("添加", key="btn_add_entry"):
                     if evalue.strip():
-                        sl.add_entry(c["name"], etype, evalue.strip())
+                        ok = sl.add_entry(c["name"], etype, evalue.strip())
+                        flash(f"已添加条目：{etype} = {evalue.strip()}" if ok
+                              else "已有相同条目，未重复添加。",
+                              kind="success" if ok else "warning")
                         st.rerun()
         with e2:
             if not c.get("builtin") and c["entries"]:
                 ridx = st.number_input("移除条目序号", min_value=1,
                                        max_value=len(c["entries"]), value=1, key="rm_idx")
                 if st.button("移除", key="btn_rm_entry"):
-                    sl.remove_entry(c["name"], int(ridx) - 1)
+                    ok = sl.remove_entry(c["name"], int(ridx) - 1)
+                    flash(f"已移除第 {ridx} 条" if ok else "移除失败。",
+                          kind="success" if ok else "warning")
                     st.rerun()
                 midx = st.number_input("移动条目序号", min_value=1,
                                        max_value=len(c["entries"]), value=1, key="mv_idx")
@@ -332,7 +391,9 @@ with tab_collections:
                 if others:
                     dst = st.selectbox("移动到", others, key="mv_dst")
                     if st.button("移动", key="btn_mv"):
-                        sl.move_entry(c["name"], int(midx) - 1, dst)
+                        ok = sl.move_entry(c["name"], int(midx) - 1, dst)
+                        flash(f"已把条目移动到「{dst}」" if ok else "移动失败。",
+                              kind="success" if ok else "warning")
                         st.rerun()
 
         st.markdown("**导入文件（TLE / 编号清单）**")
@@ -346,8 +407,10 @@ with tab_collections:
                 if dst.exists():
                     dst = sl.USER_FILES_DIR / f"{Path(f_up.name).stem}_{int(time.time())}{Path(f_up.name).suffix}"
                 dst.write_bytes(f_up.getvalue())
-                sl.add_entry(c["name"], "file", str(dst))
-                st.success(f"已导入并复制到 {dst.name}")
+                ok = sl.add_entry(c["name"], "file", str(dst))
+                flash(f"已导入并复制到 {dst.name}" if ok
+                      else "已有相同条目，未重复添加。",
+                      kind="success" if ok else "warning")
                 st.rerun()
 
 
@@ -408,7 +471,7 @@ with tab_download:
                     shutil.rmtree(item)
                 elif item.is_file():
                     item.unlink()
-            st.success("已清空缓存。")
+            flash("已清空缓存，下次会自动重新下载。")
             st.rerun()
 
     st.markdown("---")

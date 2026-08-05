@@ -49,11 +49,26 @@ def show_flash():
             st.warning(f["msg"])
 
 
+def _slider_bounds(values: list):
+    """根据数值列表计算滑块的全范围 (lo, hi)，上限向上取整避免截断丢星。"""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return None
+    lo, hi = int(min(vals)), int(max(vals)) + 1
+    if hi <= lo:
+        hi = lo + 1
+    return (lo, hi)
+
+
 def _reset_filters():
-    """重置结果内筛选（on_click 回调，在组件重建前执行），并重新拉取最新结果。"""
-    for k in ("f_country", "f_year", "f_alt", "f_inc"):
-        st.session_state.pop(k, None)
-    st.session_state["f_strict"] = False   # 显式取消勾选（比 pop 更可靠）
+    """重置结果内筛选（on_click 回调，在组件重建前执行），并重新拉取最新结果。
+
+    注意：必须"显式设回默认值"（而不是 pop 删键），否则新版 Streamlit 里
+    多选框/滑块的显示不会回到原始状态（严格匹配曾用 pop 就出现此问题）。
+    """
+    st.session_state["f_strict"] = False
+    st.session_state["f_country"] = []
+    st.session_state["f_year"] = []
     st.session_state.pop("search_multi", None)
     kw = str(st.session_state.get("kw", "")).strip()
     if kw:
@@ -65,6 +80,19 @@ def _reset_filters():
             max_alt_km=st.session_state.get("maxalt", 0.0) or None,
             offline=False)
         st.session_state["search_full"] = rows
+    else:
+        rows = st.session_state.get("search_full") or []
+    # 滑块设回全范围（与组件创建时的默认值完全一致）
+    b = _slider_bounds([r.get("altitude_km") for r in rows])
+    if b:
+        st.session_state["f_alt"] = b
+    else:
+        st.session_state.pop("f_alt", None)
+    b = _slider_bounds([r.get("inclination") for r in rows])
+    if b:
+        st.session_state["f_inc"] = b
+    else:
+        st.session_state.pop("f_inc", None)
 
 
 st.set_page_config(page_title="卫星数据加载器", page_icon="🛰️", layout="wide")
@@ -197,21 +225,14 @@ with tab_search:
         # 注意：不设 help，避免悬停提示框长时间停留（Streamlit 无法配置提示时长）
         st.button("重置筛选", key="btn_reset_filters", on_click=_reset_filters)
         f3, f4 = st.columns(2)
-        alts = [a for a in df["高度km"].tolist() if a is not None]
-        if alts:
-            # 上限用 int(max)+1（向上取整），避免截断把边界值（如 98.46°）排除
-            lo, hi = int(min(alts)), int(max(alts)) + 1
-            if hi <= lo:
-                hi = lo + 1
-            f_alt = f3.slider("高度范围（km）", lo, hi, (lo, hi), key="f_alt")
+        bounds = _slider_bounds(df["高度km"].tolist())
+        if bounds:
+            f_alt = f3.slider("高度范围（km）", bounds[0], bounds[1], bounds, key="f_alt")
         else:
             f_alt = None
-        incs = [i for i in df["倾角°"].tolist() if i is not None]
-        if incs:
-            ilo, ihi = int(min(incs)), int(max(incs)) + 1
-            if ihi <= ilo:
-                ihi = ilo + 1
-            f_inc = f4.slider("倾角范围（°）", ilo, ihi, (ilo, ihi), key="f_inc")
+        bounds = _slider_bounds(df["倾角°"].tolist())
+        if bounds:
+            f_inc = f4.slider("倾角范围（°）", bounds[0], bounds[1], bounds, key="f_inc")
         else:
             f_inc = None
 

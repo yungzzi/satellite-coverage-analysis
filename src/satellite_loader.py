@@ -311,12 +311,12 @@ def load_builtin_collections() -> List[dict]:
         data = tomllib.load(f)
     collections = []
     for c in data.get("collections", []):
+        entries = _dedupe_entries(c.get("entries", []))
         collections.append({
             "name": c.get("name", "未命名"),
             "description": c.get("description", ""),
             "builtin": True,
-            "entries": [{"type": e["type"], "value": e["value"]}
-                        for e in c.get("entries", [])],
+            "entries": entries,
         })
     return collections
 
@@ -333,14 +333,27 @@ def load_user_collections() -> List[dict]:
         return []
     collections = []
     for c in data.get("collections", []):
+        entries = _dedupe_entries(c.get("entries", []))
         collections.append({
             "name": c.get("name", "未命名"),
             "description": c.get("description", ""),
             "builtin": False,
-            "entries": [{"type": e["type"], "value": e["value"]}
-                        for e in c.get("entries", [])],
+            "entries": entries,
         })
     return collections
+
+
+def _dedupe_entries(entries: list) -> list:
+    """去掉完全重复的条目（同类型 + 同值只保留一条）。"""
+    seen = set()
+    out = []
+    for e in entries:
+        key = (e.get("type", ""), e.get("value", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"type": e["type"], "value": e["value"]})
+    return out
 
 
 def _dump_collections(collections: List[dict]) -> str:
@@ -461,6 +474,10 @@ def add_entry(collection_name: str, entry_type: str, value: str) -> bool:
     if entry_type not in ("name_filter", "norad_list", "file"):
         print(f"  [失败] 未知条目类型：{entry_type}")
         return False
+    for e in c["entries"]:
+        if e["type"] == entry_type and e["value"] == value:
+            print(f"  [跳过] 「{collection_name}」已存在相同条目：{entry_type} = {value}")
+            return False
     c["entries"].append({"type": entry_type, "value": value})
     save_user_collections(user)
     print(f"  [完成] 已加入「{collection_name}」：{entry_type} = {value}")

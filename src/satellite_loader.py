@@ -157,6 +157,15 @@ def _clean_legacy_cache():
                 p.unlink()
             except OSError:
                 pass
+    # 早期版本 name/norad 用 .txt 后缀，统一为 .tle 后清理旧文件
+    for sub in ("name", "norad"):
+        d = CACHE_DIR / sub
+        if d.exists():
+            for p in d.glob("*.txt"):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
 
 def _age_hours(path: Path) -> float:
@@ -310,7 +319,7 @@ def search_by_name_online(keyword: str, max_age_hours: float = DEFAULT_MAX_AGE_H
     """在线按名字模糊搜索（CelesTrak gp.php?NAME=...），返回 TLE 记录列表。"""
     import urllib.parse
     url = f"{CELESTRAK_GP}?NAME={urllib.parse.quote(keyword)}&FORMAT=TLE"
-    path = download_text(url, f"name/{_safe_cache_name(keyword, '.txt')}", max_age_hours,
+    path = download_text(url, f"name/{_safe_cache_name(keyword, '.tle')}", max_age_hours,
                          offline=offline)
     if path is None:
         return []
@@ -322,7 +331,7 @@ def search_by_norad_online(norad_id: int, max_age_hours: float = DEFAULT_MAX_AGE
                            offline: bool = False) -> List[dict]:
     """在线按 NORAD 编号查询单星（CelesTrak gp.php?CATNR=...）。"""
     url = f"{CELESTRAK_GP}?CATNR={norad_id}&FORMAT=TLE"
-    path = download_text(url, f"norad/{norad_id}.txt", max_age_hours, offline=offline)
+    path = download_text(url, f"norad/{norad_id}.tle", max_age_hours, offline=offline)
     if path is None:
         return []
     with open(path, "r", encoding="ascii", errors="replace") as f:

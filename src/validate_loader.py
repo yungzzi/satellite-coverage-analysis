@@ -87,7 +87,7 @@ def test_metadata_search_online():
 def test_cache_behavior():
     print("\n== 3. 缓存行为 ==")
     rows = sl.search_metadata("YAOGAN", max_results=100, offline=False)
-    path = sl.CACHE_DIR / "YAOGAN_meta.csv"
+    path = sl.CACHE_DIR / "meta" / "YAOGAN_meta.csv"
     if not rows or not path.exists():
         check("缓存文件存在", False, "首次下载失败")
         return
@@ -143,6 +143,9 @@ def test_resolve():
         check("名字规则解析数量", len(recs) >= 150, f"共 {len(recs)} 颗")
         check("NORAD 编号去重", len(set(norads)) == len(norads), "")
         check("记录含 TLE", all(r.get("line1") and r.get("line2") for r in recs[:50]), "")
+        saved = sl.save_resolved_tle("解析测试", recs)
+        check("合并 TLE 文件已生成", saved.exists() and saved.suffix == ".tle",
+              str(saved))
 
         # 编号清单：ISS（25544）
         sl.create_collection("编号测试")

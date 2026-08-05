@@ -66,6 +66,12 @@ st.html(
       window.__stCovShortcutsBlocked = true;
       function block(e) {
         var k = (e.key || '').toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && k === 'c') {
+          // Ctrl+C / Cmd+C 是复制手势：拦截掉 Streamlit 的快捷键，但不阻止浏览器复制
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          return;
+        }
         if (k !== 'c' && k !== 'r') return;
         var t = e.target;
         var tag = t && (t.tagName || '').toLowerCase();
@@ -165,6 +171,11 @@ with tab_search:
         years = sorted({str(x)[:4] for x in df["发射日期"].tolist()
                         if str(x)[:4].isdigit()})
         f_year = f2.multiselect("按发射年份筛选", years, key="f_year")
+        strict = st.checkbox(
+            "严格匹配：只显示名字以关键字开头的星（减少混入的无关星）",
+            key="f_strict",
+            help="CelesTrak 按名字搜索是'包含匹配'。例如搜 GF 会匹配到 CYGFM（长光一号）等；"
+                 "勾选后只保留名字以 GF 开头的星。")
         f3, f4 = st.columns(2)
         alts = [a for a in df["高度km"].tolist() if a is not None]
         if alts:
@@ -184,6 +195,9 @@ with tab_search:
             f_inc = None
 
         view = df.copy()
+        if strict and keyword.strip():
+            kw = keyword.strip().lower()
+            view = view[view["卫星名"].str.lower().str.startswith(kw)]
         if f_country:
             view = view[view["所属"].isin(f_country)]
         if f_year:
@@ -231,6 +245,10 @@ with tab_search:
         if mode.startswith("名字规则") and selected:
             st.caption("注意：名字规则会包含关键字匹配的全部卫星，当前勾选不会单独生效；"
                        "想只要勾选的星，请选“编号清单”。")
+        if strict and mode.startswith("名字规则"):
+            st.caption("提示：名字规则解析时仍按“名字包含关键字”取星（严格匹配只影响勾选），"
+                       "可能再次混入同名其他系列（如 GAOFEN 会带回吉林一号高分）；"
+                       "要锁定当前严格筛选出的这批星，请改用“编号清单”保存。")
         if st.button("加入收藏夹", key="btn_add"):
             target = col_target
             if new_name.strip():
@@ -289,8 +307,8 @@ with tab_collections:
         else:
             st.caption("（空收藏夹）")
 
-        st.markdown("**本夹全部卫星（解析显示完整信息）**")
-        if st.button("解析并显示本夹全部卫星", key="btn_show_col_sats"):
+        st.markdown("**查看本夹全部卫星（完整信息，只查看不保存）**")
+        if st.button("查看本夹全部卫星", key="btn_show_col_sats"):
             if not c["entries"]:
                 st.warning("这个收藏夹是空的，先添加条目。")
             else:
@@ -302,12 +320,11 @@ with tab_collections:
                         bar.progress(0.0, text=msg)
                 try:
                     rows_meta = sl.resolve_collection_with_meta(c, progress=cb)
-                    path = sl.save_resolved_tle(c["name"], rows_meta)
                 except Exception as ex:
                     st.error(f"解析失败：{ex}")
                 else:
                     st.success(f"本夹共 {len(rows_meta)} 颗卫星")
-                    st.caption(f"合并 TLE 已保存：`{path}`")
+                    st.caption("需要保存成 TLE 文件请到 ③下载与自检 页“解析下载”。")
                     if rows_meta:
                         df_all = pd.DataFrame(rows_meta)
                         df_all["类型"] = df_all["object_type"].map(sl._object_type_label)
@@ -417,7 +434,9 @@ with tab_collections:
 # ==================== ③ 下载与自检 ====================
 
 with tab_download:
-    st.subheader("下载解析（多夹合并去重）")
+    st.subheader("下载解析（合并多个收藏夹 → 生成 TLE 文件）")
+    st.caption("用途：把选中的收藏夹合并、去重，生成成品 TLE 文件；"
+               "只想查看某个夹的内容请用 ②页的“查看本夹全部卫星”。")
     names = [x["name"] for x in sl.load_all_collections()]
     sel_names = st.multiselect("选择要解析的收藏夹", names, key="resolve_sel")
     if st.button("解析下载", key="btn_resolve"):

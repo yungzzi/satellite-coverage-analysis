@@ -52,10 +52,14 @@ USER_CATALOG = DATA_DIR / "user_catalog.toml"           # 用户收藏（不入�
 CELESTRAK_GP = "https://celestrak.org/NORAD/elements/gp.php"
 # 编目元数据接口（名字/所属/发射日期/轨道参数；不含 TLE，TLE 走 gp.php）
 CELESTRAK_SATCAT = "https://celestrak.org/satcat/records.php"
+# 全集现役 TLE（一次下载覆盖大多数单星查询，避免逐个请求）
+CELESTRAK_ACTIVE = f"{CELESTRAK_GP}?GROUP=active&FORMAT=TLE"
 USER_AGENT = "satellite-coverage-analysis/0.1 (educational project)"
 
 # 缓存默认过期时间（小时）：搜索结果/编目 24 小时更新一次即可
 DEFAULT_MAX_AGE_HOURS = 24
+
+_ACTIVE_FAILED = False   # 本次运行中全集缓存下载失败过则不再重复尝试
 
 
 # ==================== 1. 包装类 Satellite ====================
@@ -140,6 +144,19 @@ def parse_tle_records(text: str) -> List[dict]:
 def _ensure_dirs():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     USER_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    _clean_legacy_cache()
+
+
+def _clean_legacy_cache():
+    """清理早期版本留在缓存根目录的散文件（新版本只允许 active.tle 在根目录）。"""
+    if not CACHE_DIR.exists():
+        return
+    for p in CACHE_DIR.iterdir():
+        if p.is_file() and p.name != "active.tle":
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
 
 def _age_hours(path: Path) -> float:
@@ -150,7 +167,8 @@ def _age_hours(path: Path) -> float:
 
 
 def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
-                  force: bool = False, offline: bool = False) -> Optional[Path]:
+                  force: bool = False, offline: bool = False,
+                  retries: int = 3) -> Optional[Path]:
     """下载文本文件并缓存；缓存未过期直接复用。返回本地文件路径。
 
     - cache_name: 缓存文件名（如 satcat.csv / search_YAOGAN.txt）
@@ -158,6 +176,7 @@ def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_
     """
     _ensure_dirs()
     cache_path = CACHE_DIR / cache_name
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     if cache_path.exists() and not force and _age_hours(cache_path) < max_age_hours:
         print(f"  [缓存命中] {cache_name}（{_age_hours(cache_path):.1f} 小时前下载）")
         return cache_path
@@ -165,16 +184,25 @@ def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_
         print(f"  [离线] 缓存 {cache_name} 缺失或过期，且离线模式不联网，跳过下载。")
         return None
 
-    print(f"  [下载] {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = resp.read()
-    except urllib.error.HTTPError as e:
-        print(f"  [失败] HTTP {e.code}: {url}")
-        return None
-    except Exception as e:
-        print(f"  [失败] 网络错误：{e}")
+    data = None
+    last_err = None
+    for attempt in range(1, retries + 1):   # 网络抖动自动重试
+        print(f"  [下载] {url}（第 {attempt}/{retries} 次尝试）")
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = resp.read()
+            break
+        except urllib.error.HTTPError as e:
+            print(f"  [失败] HTTP {e.code}: {url}")
+            return None
+        except Exception as e:
+            last_err = e
+            print(f"  [重试] 网络错误：{e}")
+            if attempt < retries:
+                time.sleep(2 * attempt)
+    if data is None:
+        print(f"  [失败] 重试 {retries} 次仍失败：{last_err}")
         return None
 
     # 先写临时文件再改名，避免半截文件污染缓存
@@ -216,7 +244,7 @@ def search_metadata(keyword: str,
     import urllib.parse
     url = (f"{CELESTRAK_SATCAT}?NAME={urllib.parse.quote(keyword)}"
            f"&FORMAT=CSV&MAX={int(max_results)}&PAYLOADS=1&ONORBIT=1")
-    path = download_text(url, _safe_cache_name(keyword, "_meta.csv"),
+    path = download_text(url, f"meta/{_safe_cache_name(keyword, '_meta.csv')}",
                          max_age_hours, offline=offline)
     if path is None:
         return []
@@ -282,7 +310,7 @@ def search_by_name_online(keyword: str, max_age_hours: float = DEFAULT_MAX_AGE_H
     """在线按名字模糊搜索（CelesTrak gp.php?NAME=...），返回 TLE 记录列表。"""
     import urllib.parse
     url = f"{CELESTRAK_GP}?NAME={urllib.parse.quote(keyword)}&FORMAT=TLE"
-    path = download_text(url, _safe_cache_name(keyword, ".txt"), max_age_hours,
+    path = download_text(url, f"name/{_safe_cache_name(keyword, '.txt')}", max_age_hours,
                          offline=offline)
     if path is None:
         return []
@@ -294,11 +322,42 @@ def search_by_norad_online(norad_id: int, max_age_hours: float = DEFAULT_MAX_AGE
                            offline: bool = False) -> List[dict]:
     """在线按 NORAD 编号查询单星（CelesTrak gp.php?CATNR=...）。"""
     url = f"{CELESTRAK_GP}?CATNR={norad_id}&FORMAT=TLE"
-    path = download_text(url, f"norad_{norad_id}.txt", max_age_hours, offline=offline)
+    path = download_text(url, f"norad/{norad_id}.txt", max_age_hours, offline=offline)
     if path is None:
         return []
     with open(path, "r", encoding="ascii", errors="replace") as f:
         return parse_tle_records(f.read())
+
+
+def ensure_active_tle(max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+                      force: bool = False, offline: bool = False) -> Optional[Path]:
+    """确保本地有"全集现役 TLE"缓存（一次下载，单星/名字查询优先查它）。
+
+    全集文件较大、网络差时容易失败，只试 1 次；失败会自动退回逐个单星下载。
+    """
+    global _ACTIVE_FAILED
+    if _ACTIVE_FAILED and not force:
+        return None
+    path = download_text(CELESTRAK_ACTIVE, "active.tle", max_age_hours,
+                         force, offline, retries=1)
+    if path is None and not offline:
+        _ACTIVE_FAILED = True
+    return path
+
+
+def load_active_tle(max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+                    offline: bool = False):
+    """读取全集缓存，返回 (by_id: {NORAD: 记录}, records: [记录, ...])。"""
+    path = ensure_active_tle(max_age_hours, offline=offline)
+    if path is None:
+        return {}, []
+    with open(path, "r", encoding="ascii", errors="replace") as f:
+        records = parse_tle_records(f.read())
+    by_id = {}
+    for r in records:
+        if r.get("norad_id") is not None:
+            by_id[r["norad_id"]] = r
+    return by_id, records
 
 
 # ==================== 4. 收藏夹（内置 + 用户） ====================
@@ -566,9 +625,18 @@ def _records_from_file(file_path: str, max_age_hours: float, offline: bool) -> L
 
 def _records_by_norad_ids(norad_ids: List[int], max_age_hours: float,
                           offline: bool) -> List[dict]:
-    """按编号清单找 TLE：每个编号走 gp.php?CATNR=，带本地缓存与小延时。"""
+    """按编号清单找 TLE：优先查"全集现役 TLE"缓存（一次下载覆盖大多数），
+    查不到的个别编号才逐个走 gp.php?CATNR=（带缓存与小延时）。"""
+    by_id, _ = load_active_tle(max_age_hours, offline=offline)
     out = []
+    missing = []
     for rid in norad_ids:
+        r = by_id.get(rid)
+        if r is not None:
+            out.append(r)
+        else:
+            missing.append(rid)
+    for rid in missing:
         recs = search_by_norad_online(rid, max_age_hours, offline=offline)
         if recs:
             out.append(recs[0])
@@ -580,18 +648,24 @@ def _records_by_norad_ids(norad_ids: List[int], max_age_hours: float,
 
 def _records_by_name_filter(keyword: str, max_age_hours: float,
                             offline: bool) -> List[dict]:
-    """按名字规则找 TLE：走 gp.php?NAME=，并只保留"在轨载荷"。
+    """按名字规则找 TLE：优先查"全集现役 TLE"缓存（按名字子串匹配），
+    并用编目元数据过滤掉碎片/火箭体/已再入物体，保证只含在轨载荷；
+    缓存里没有匹配时退回 gp.php?NAME=。
 
-    用编目元数据（records.php）过滤掉碎片/火箭体/已再入物体，
-    保证名字规则里只含真正有意义的卫星。
     """
-    recs = search_by_name_online(keyword, max_age_hours, offline=offline)
+    _, active_recs = load_active_tle(max_age_hours, offline=offline)
     meta = search_metadata(keyword, max_results=10000, max_age_hours=max_age_hours,
                            offline=offline)
     payload_ids = {m["norad_id"] for m in meta if m.get("norad_id") is not None}
+    recs = [r for r in active_recs if keyword.lower() in r.get("name", "").lower()]
     if payload_ids:
         recs = [r for r in recs if r.get("norad_id") in payload_ids]
-    return recs
+    if recs:
+        return recs
+    online = search_by_name_online(keyword, max_age_hours, offline=offline)
+    if payload_ids:
+        online = [r for r in online if r.get("norad_id") in payload_ids]
+    return online
 
 
 def resolve_collection(collection: dict, max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
@@ -616,10 +690,10 @@ def resolve_collection(collection: dict, max_age_hours: float = DEFAULT_MAX_AGE_
     return list(records.values())
 
 
-def resolve_collections_to_satellites(collection_names: List[str],
-                                      max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
-                                      offline: bool = False) -> List[Satellite]:
-    """选中多个收藏夹 -> 合并去重 -> 下载 TLE -> 解析成 Satellite 包装对象。"""
+def resolve_collections_to_records(collection_names: List[str],
+                                   max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+                                   offline: bool = False) -> List[dict]:
+    """选中多个收藏夹 -> 合并去重 -> 下载 TLE -> TLE 记录列表。"""
     all_collections = load_all_collections()
     records: Dict[int, dict] = {}
     for name in collection_names:
@@ -630,15 +704,51 @@ def resolve_collections_to_satellites(collection_names: List[str],
         for r in resolve_collection(c, max_age_hours, offline):
             if r.get("norad_id") is not None:
                 records[r["norad_id"]] = r
+    return list(records.values())
+
+
+def records_to_satellites(records: List[dict]) -> List[Satellite]:
+    """把 TLE 记录列表解析成 Satellite 包装对象列表。"""
     ts = load.timescale(builtin=True)
     sats = []
-    for r in records.values():
+    for r in records:
         try:
             orbit = EarthSatellite(r["line1"], r["line2"], r.get("name", ""), ts)
             sats.append(Satellite(orbit, r.get("name", ""), r["norad_id"]))
         except Exception as e:
             print(f"  [警告] 解析失败 {r.get('name', r['norad_id'])}: {e}")
     return sats
+
+
+def resolve_collections_to_satellites(collection_names: List[str],
+                                      max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+                                      offline: bool = False) -> List[Satellite]:
+    """选中多个收藏夹 -> 合并去重 -> 下载 TLE -> Satellite 包装对象。"""
+    return records_to_satellites(resolve_collections_to_records(
+        collection_names, max_age_hours, offline))
+
+
+def records_to_tle_text(records: List[dict]) -> str:
+    """把 TLE 记录拼成标准 3LE 文本（名字+两行，每 3 行一颗）。"""
+    lines = []
+    for r in records:
+        lines.append(r.get("name", ""))
+        lines.append(r.get("line1", ""))
+        lines.append(r.get("line2", ""))
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def save_resolved_tle(collection_name: str, records: List[dict]) -> Path:
+    """把解析结果合并写成一个文件（每个收藏夹一个 .tle，便于查看/复用）。"""
+    _ensure_dirs()
+    out_dir = CACHE_DIR / "resolved"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = "".join(ch for ch in collection_name if ch.isalnum() or ch in "-_").strip() \
+        or "collection"
+    path = out_dir / f"{safe[:40]}.tle"
+    path.write_text(records_to_tle_text(records), encoding="ascii", errors="replace")
+    print(f"  [完成] 已保存合并 TLE（{len(records)} 颗）：{path}")
+    return path
 
 
 # ==================== 6. 展示辅助 ====================
@@ -1005,6 +1115,8 @@ def main():
             print(f"「{args.resolve}」解析到 {len(recs)} 颗卫星。")
             for r in recs[:10]:
                 print(f"  {r['name']}  NORAD:{r['norad_id']}")
+            if recs:
+                save_resolved_tle(args.resolve, recs)
 
     # 没有任何参数时进入交互模式
     if not any([args.search, args.norad, args.catalog, args.create, args.rename,

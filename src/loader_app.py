@@ -19,7 +19,9 @@ loader_app.py —— 卫星数据加载器图形界面（Streamlit，阶段 1.5�
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -44,8 +46,12 @@ with st.sidebar:
     st.caption("CLI 入口保留：`python src\\satellite_loader.py`")
     st.divider()
     if st.button("停止并退出程序", key="btn_exit", icon=":material/stop:"):
-        os._exit(0)   # 结束 Streamlit 服务进程（关闭浏览器标签页不会停止程序）
-    st.caption("提示：关闭浏览器标签页不会停止程序，请点上面的按钮退出。")
+        # 先尝试让浏览器关闭标签页（受浏览器安全限制，可能不成功），再停服务
+        st.html("<script>window.close();</script>", unsafe_allow_javascript=True)
+        st.info("程序已停止；若页面没有自动关闭，请手动关闭这个标签页。")
+        threading.Timer(1.5, os._exit, args=(0,)).start()
+        st.stop()
+    st.caption("提示：浏览器一般不允许网页自己关闭标签页；若没自动关，手动关即可。")
 
 tab_search, tab_collections, tab_download = st.tabs(
     ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检"])
@@ -97,20 +103,36 @@ with tab_search:
         f1, f2 = st.columns(2)
         countries = sorted({x for x in df["所属"].tolist() if x})
         f_country = f1.multiselect("按所属国筛选", countries, key="f_country")
+        years = sorted({str(x)[:4] for x in df["发射日期"].tolist()
+                        if str(x)[:4].isdigit()})
+        f_year = f2.multiselect("按发射年份筛选", years, key="f_year")
+        f3, f4 = st.columns(2)
         alts = [a for a in df["高度km"].tolist() if a is not None]
         if alts:
             lo, hi = int(min(alts)), int(max(alts))
             if hi <= lo:
                 hi = lo + 1
-            f_alt = f2.slider("高度范围（km）", lo, hi, (lo, hi), key="f_alt")
+            f_alt = f3.slider("高度范围（km）", lo, hi, (lo, hi), key="f_alt")
         else:
             f_alt = None
+        incs = [i for i in df["倾角°"].tolist() if i is not None]
+        if incs:
+            ilo, ihi = int(min(incs)), int(max(incs))
+            if ihi <= ilo:
+                ihi = ilo + 1
+            f_inc = f4.slider("倾角范围（°）", ilo, ihi, (ilo, ihi), key="f_inc")
+        else:
+            f_inc = None
 
         view = df.copy()
         if f_country:
             view = view[view["所属"].isin(f_country)]
+        if f_year:
+            view = view[view["发射日期"].str[:4].isin(f_year)]
         if f_alt is not None:
             view = view[view["高度km"].between(f_alt[0], f_alt[1])]
+        if f_inc is not None:
+            view = view[view["倾角°"].between(f_inc[0], f_inc[1])]
 
         st.dataframe(view[["序号", "卫星名", "编号", "所属", "发射日期",
                            "高度km", "倾角°", "类型"]], hide_index=True)
@@ -297,14 +319,45 @@ with tab_download:
             st.warning("请至少选择一个收藏夹。")
         else:
             with st.spinner("正在下载/读取 TLE……"):
-                sats = sl.resolve_collections_to_satellites(sel_names)
-            st.success(f"解析完成：{len(sats)} 颗卫星（按 NORAD 编号去重）")
-            if sats:
+                recs = sl.resolve_collections_to_records(sel_names)
+                path = sl.save_resolved_tle(" + ".join(sel_names), recs)
+            st.success(f"解析完成：{len(recs)} 颗卫星（按 NORAD 编号去重）")
+            st.caption(f"已合并为一个文件：`{path}`（下次解析直接复用缓存，不重复下载）")
+            if recs:
                 st.dataframe(pd.DataFrame(
-                    [{"卫星名": s.name, "编号": s.norad_id} for s in sats[:200]]),
-                    hide_index=True, width="stretch")
-            st.caption("缓存目录：" + str(sl.CACHE_DIR) +
-                       "；同批卫星在过期前不会重复下载。")
+                    [{"卫星名": r["name"], "编号": r["norad_id"]} for r in recs[:200]]),
+                    hide_index=True)
+
+    st.markdown("---")
+    st.subheader("缓存管理（data/tle_cache/）")
+    cache_rows = []
+    for p in sorted(sl.CACHE_DIR.rglob("*")):
+        if p.is_file():
+            rel = p.relative_to(sl.CACHE_DIR)
+            cache_rows.append({
+                "文件": str(rel),
+                "大小 KB": round(p.stat().st_size / 1024, 1),
+                "更新于(小时前)": round((time.time() - p.stat().st_mtime) / 3600, 1),
+            })
+    if cache_rows:
+        st.dataframe(pd.DataFrame(cache_rows), hide_index=True)
+        st.caption("文件说明：active.tle=全集TLE缓存；meta/…=搜索结果元数据；"
+                   "name/…=按名字搜索的TLE；norad/…=单星TLE；"
+                   "resolved/…=每个收藏夹合并的TLE（重点看这个）")
+    else:
+        st.info("暂无缓存文件。")
+    confirm_clear = st.checkbox("确认清空全部缓存（下次会自动重新下载）", key="clear_confirm")
+    if st.button("清空缓存", key="btn_clear_cache"):
+        if not confirm_clear:
+            st.warning("请先勾选确认。")
+        else:
+            for item in sl.CACHE_DIR.iterdir():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                elif item.is_file():
+                    item.unlink()
+            st.success("已清空缓存。")
+            st.rerun()
 
     st.markdown("---")
     st.subheader("自检（联网部分需要网络）")

@@ -49,6 +49,23 @@ def show_flash():
             st.warning(f["msg"])
 
 
+def _reset_filters():
+    """重置结果内筛选（on_click 回调，在组件重建前执行），并重新拉取最新结果。"""
+    for k in ("f_country", "f_year", "f_alt", "f_inc", "f_strict"):
+        st.session_state.pop(k, None)
+    st.session_state.pop("search_multi", None)
+    kw = str(st.session_state.get("kw", "")).strip()
+    if kw:
+        rows = sl.search_metadata(
+            kw, max_results=500,
+            country=str(st.session_state.get("ctry", "")).strip() or None,
+            launch_year=str(st.session_state.get("ly", "")).strip() or None,
+            min_alt_km=st.session_state.get("minalt", 0.0) or None,
+            max_alt_km=st.session_state.get("maxalt", 0.0) or None,
+            offline=False)
+        st.session_state["search_full"] = rows
+
+
 st.set_page_config(page_title="卫星数据加载器", page_icon="🛰️", layout="wide")
 
 st.title("🛰️ 卫星数据加载器")
@@ -176,12 +193,9 @@ with tab_search:
             key="f_strict",
             help="CelesTrak 按名字搜索是'包含匹配'。例如搜 GF 会匹配到 CYGFM（长光一号）等；"
                  "勾选后只保留名字以 GF 开头的星。")
-        if st.button("重置筛选", key="btn_reset_filters",
-                     help="清空所属国/发射年份/高度/倾角/严格匹配，显示全部搜索结果"):
-            for k in ("f_country", "f_year", "f_alt", "f_inc", "f_strict"):
-                st.session_state.pop(k, None)
-            st.session_state.pop("search_multi", None)
-            st.rerun()
+        st.button("重置筛选", key="btn_reset_filters",
+                  help="清空所属国/发射年份/高度/倾角/严格匹配，并重新拉取最新搜索结果",
+                  on_click=_reset_filters)
         f3, f4 = st.columns(2)
         alts = [a for a in df["高度km"].tolist() if a is not None]
         if alts:
@@ -228,7 +242,7 @@ with tab_search:
             st.rerun()
         selected = st.multiselect("选择卫星（配合上方全选/清空按钮）", options,
                                   key="search_multi")
-        st.caption(f"筛选后 {len(view)} 条，当前已选 {len(selected)} 颗。")
+        st.caption(f"结果共 {len(df)} 条，筛选后 {len(view)} 条，当前已选 {len(selected)} 颗。")
 
         sel_ids = []
         for opt in selected:

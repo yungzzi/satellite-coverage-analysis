@@ -18,6 +18,7 @@ loader_app.py —— 卫星数据加载器图形界面（Streamlit，阶段 1.5�
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -41,6 +42,10 @@ with st.sidebar:
     st.caption(f"缓存目录：`{sl.CACHE_DIR}`")
     st.caption(f"用户收藏：`{sl.USER_CATALOG}`")
     st.caption("CLI 入口保留：`python src\\satellite_loader.py`")
+    st.divider()
+    if st.button("停止并退出程序", key="btn_exit", icon=":material/stop:"):
+        os._exit(0)   # 结束 Streamlit 服务进程（关闭浏览器标签页不会停止程序）
+    st.caption("提示：关闭浏览器标签页不会停止程序，请点上面的按钮退出。")
 
 tab_search, tab_collections, tab_download = st.tabs(
     ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检"])
@@ -72,57 +77,115 @@ with tab_search:
                     min_alt_km=min_alt or None,
                     max_alt_km=max_alt or None,
                     offline=False)
-            st.session_state["search_rows"] = rows
+            st.session_state["search_full"] = rows
+            st.session_state.pop("search_multi", None)   # 新搜索清空选择
 
-    rows = st.session_state.get("search_rows")
-    if rows is not None:
-        if not rows:
-            st.info("没有找到匹配的卫星，换个关键字试试。")
+    rows = st.session_state.get("search_full")
+    if rows is None:
+        st.info("先在上方输入关键字点“搜索”，结果会出现在这里。")
+    elif not rows:
+        st.info("没有找到匹配的卫星，换个关键字试试。")
+    else:
+        df = pd.DataFrame(rows)
+        df["序号"] = range(1, len(df) + 1)
+        df = df.rename(columns={
+            "name": "卫星名", "norad_id": "编号", "country": "所属",
+            "launch_date": "发射日期", "altitude_km": "高度km",
+            "inclination": "倾角°", "object_type": "类型"})
+
+        st.markdown("**结果内筛选**（只影响显示与勾选，不重新搜索）")
+        f1, f2 = st.columns(2)
+        countries = sorted({x for x in df["所属"].tolist() if x})
+        f_country = f1.multiselect("按所属国筛选", countries, key="f_country")
+        alts = [a for a in df["高度km"].tolist() if a is not None]
+        if alts:
+            lo, hi = int(min(alts)), int(max(alts))
+            if hi <= lo:
+                hi = lo + 1
+            f_alt = f2.slider("高度范围（km）", lo, hi, (lo, hi), key="f_alt")
         else:
-            df = pd.DataFrame(rows)
-            df["选"] = False
-            df = df.rename(columns={
-                "name": "卫星名", "norad_id": "编号", "country": "所属",
-                "launch_date": "发射日期", "altitude_km": "高度km",
-                "inclination": "倾角°", "object_type": "类型"})
-            edited = st.data_editor(
-                df[["选", "卫星名", "编号", "所属", "发射日期", "高度km", "倾角°", "类型"]],
-                hide_index=True, key="search_editor",
-                disabled=["卫星名", "编号", "所属", "发射日期", "高度km", "倾角°", "类型"])
-            sel = edited[edited["选"]]
-            st.caption(f"搜索结果 {len(rows)} 条，当前勾选 {len(sel)} 条。")
+            f_alt = None
 
-            user_names = [x["name"] for x in sl.load_user_collections()]
-            col_target = st.selectbox(
-                "存入收藏夹（先到②管理，或下面快速新建）",
-                user_names, key="target_col") if user_names else None
-            new_name = st.text_input("快速新建收藏夹（留空则用上面的）", key="newcol",
-                                     placeholder="如 我的遥感")
-            mode = st.radio("保存方式",
-                            ["名字规则（活，自动纳入新星）",
-                             "编号清单（固定，只含勾选的星）"],
-                            key="save_mode")
-            if st.button("加入收藏夹", key="btn_add"):
-                target = col_target
-                if new_name.strip():
-                    if sl.create_collection(new_name.strip()):
-                        target = new_name.strip()
-                    else:
-                        target = new_name.strip()  # 已存在同名夹则直接使用
-                if not target:
-                    st.error("请先选择或新建一个收藏夹。")
-                elif mode.startswith("名字规则"):
-                    sl.add_entry(target, "name_filter", keyword.strip())
+        view = df.copy()
+        if f_country:
+            view = view[view["所属"].isin(f_country)]
+        if f_alt is not None:
+            view = view[view["高度km"].between(f_alt[0], f_alt[1])]
+
+        st.dataframe(view[["序号", "卫星名", "编号", "所属", "发射日期",
+                           "高度km", "倾角°", "类型"]], hide_index=True)
+
+        options = [f"{i}. {name} (NORAD {rid})" for i, name, rid in
+                   zip(view["序号"], view["卫星名"], view["编号"])]
+        b1, b2 = st.columns(2)
+        if b1.button("全选当前筛选结果", key="btn_sel_all"):
+            st.session_state["search_multi"] = list(options)
+            st.rerun()
+        if b2.button("清空选择", key="btn_sel_none"):
+            st.session_state["search_multi"] = []
+            st.rerun()
+        selected = st.multiselect("选择卫星（配合上方全选/清空按钮）", options,
+                                  key="search_multi")
+        st.caption(f"筛选后 {len(view)} 条，当前已选 {len(selected)} 颗。")
+
+        sel_ids = []
+        for opt in selected:
+            try:
+                rid = int(opt.rsplit("NORAD ", 1)[1].rstrip(")"))
+            except (ValueError, IndexError):
+                continue
+            if rid not in sel_ids:
+                sel_ids.append(rid)
+
+        st.markdown("**保存或直接使用**")
+        user_names = [x["name"] for x in sl.load_user_collections()]
+        col_target = st.selectbox(
+            "存入收藏夹", user_names, key="target_col") if user_names else None
+        new_name = st.text_input("快速新建收藏夹（留空则用上面的）", key="newcol",
+                                 placeholder="如 我的遥感")
+        mode = st.radio("保存方式",
+                        ["名字规则（活，自动纳入新星；包含关键字匹配的全部卫星，与勾选无关）",
+                         "编号清单（固定，只保存勾选的星）"],
+                        key="save_mode")
+        if mode.startswith("名字规则") and selected:
+            st.caption("注意：名字规则会包含关键字匹配的全部卫星，当前勾选不会单独生效；"
+                       "想只要勾选的星，请选“编号清单”。")
+        if st.button("加入收藏夹", key="btn_add"):
+            target = col_target
+            if new_name.strip():
+                if sl.create_collection(new_name.strip()):
+                    target = new_name.strip()
+                else:
+                    target = new_name.strip()  # 已存在同名夹则直接使用
+            if not target:
+                st.error("请先选择或新建一个收藏夹。")
+            elif mode.startswith("名字规则"):
+                if sl.add_entry(target, "name_filter", keyword.strip()):
                     st.success(f"已把名字规则「{keyword}」加入「{target}」")
                     st.rerun()
                 else:
-                    ids = [str(x) for x in sel["编号"].tolist() if pd.notna(x)]
-                    if not ids:
-                        st.error("请先在表格里勾选至少一颗星。")
-                    else:
-                        sl.add_entry(target, "norad_list", " ".join(ids))
-                        st.success(f"已把 {len(ids)} 颗星（编号清单）加入「{target}」")
-                        st.rerun()
+                    st.warning("该收藏夹里已经有相同的名字规则，未重复添加。")
+            else:
+                if not sel_ids:
+                    st.error("请先用多选框选择至少一颗星（或点“全选当前筛选结果”）。")
+                elif sl.add_entry(target, "norad_list", " ".join(map(str, sel_ids))):
+                    st.success(f"已把 {len(sel_ids)} 颗星（编号清单）加入「{target}」")
+                    st.rerun()
+                else:
+                    st.warning("该收藏夹里已经有相同的编号清单，未重复添加。")
+        if st.button("直接解析所选（不入收藏夹）", key="btn_resolve_sel"):
+            if not sel_ids:
+                st.error("请先选择至少一颗星（或点“全选当前筛选结果”）。")
+            else:
+                with st.spinner("正在下载/读取 TLE……"):
+                    temp = {"entries": [{"type": "norad_list",
+                                         "value": " ".join(map(str, sel_ids))}]}
+                    recs = sl.resolve_collection(temp, offline=False)
+                st.success(f"已解析 {len(recs)} 颗卫星（不入收藏夹，TLE 已缓存）")
+                if recs:
+                    st.dataframe(pd.DataFrame(
+                        [{"卫星名": r["name"], "编号": r["norad_id"]} for r in recs[:200]]),
+                        hide_index=True)
 
 
 # ==================== ② 收藏夹管理 ====================

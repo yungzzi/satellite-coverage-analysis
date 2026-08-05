@@ -4,7 +4,7 @@ loader_app.py —— 卫星数据加载器图形界面（Streamlit，阶段 1.5�
 
 只做"卫星数据导入"这一部分的 GUI，三个页签：
   ① 搜索与收藏：按名字/所属国/发射年份/高度搜索，勾选后加入收藏夹
-  ② 收藏夹管理：新建/改名/删除/移动条目/复制内置到我的/导入文件
+  ② 收藏夹管理：自动规则（名字规则）+ 手动卫星（编号清单可单颗删除/追加/归纳规则）/ 导入文件
   ③ 下载与自检：多夹合并解析（下载 TLE 缓存）+ 一键自检
 
 设计原则（与 CLI 一致）：
@@ -344,6 +344,8 @@ with tab_search:
 
 with tab_collections:
     st.subheader("收藏夹管理")
+    st.caption("一个收藏夹分两部分：**自动规则**（名字规则，活）和 **手动卫星**（固定清单）；"
+               "解析下载时自动合并、按编号去重。")
     all_c = sl.load_all_collections()
     if not all_c:
         st.info("暂无收藏夹。")
@@ -354,43 +356,173 @@ with tab_collections:
                            format_func=lambda i: labels[i], key="col_sel")
         c = all_c[idx]
         st.markdown(f"**{c['name']}** —— {c.get('description') or '（无备注）'}")
-        if c["entries"]:
-            ent_df = pd.DataFrame([
-                {"序号": i + 1, "类型": sl._entry_label(e).split(" = ")[0],
-                 "值": e["value"]} for i, e in enumerate(c["entries"])])
-            st.dataframe(ent_df, hide_index=True, width="stretch")
-        else:
-            st.caption("（空收藏夹）")
+        if c.get("builtin"):
+            st.caption("内置夹只读，不能直接修改；想要自己的版本，请新建收藏夹后手动添加同样的规则或编号。")
 
-        st.markdown("**查看本夹全部卫星（完整信息，只查看不保存）**")
-        if st.button("查看本夹全部卫星", key="btn_show_col_sats"):
-            if not c["entries"]:
-                st.warning("这个收藏夹是空的，先添加条目。")
-            else:
-                bar = st.progress(0.0, text="开始解析……")
-                def cb(done, total, msg):
-                    if total:
-                        bar.progress(min(done / total, 1.0), text=msg)
-                    else:
-                        bar.progress(0.0, text=msg)
-                try:
-                    rows_meta = sl.resolve_collection_with_meta(c, progress=cb)
-                except Exception as ex:
-                    st.error(f"解析失败：{ex}")
+        # ---------- 分区 1：自动规则（名字规则） ----------
+        st.markdown("### ① 自动规则（名字规则）")
+        st.caption("解析时自动匹配名字含关键字的全部在轨卫星；新发射的同名卫星会自动纳入，不用手动更新。")
+        rule_entries = [e for e in c["entries"] if e["type"] == "name_filter"]
+        if not rule_entries:
+            st.caption("（暂无自动规则）")
+        for i, e in enumerate(c["entries"]):
+            if e["type"] != "name_filter":
+                continue
+            r1, r2 = st.columns([5, 1])
+            r1.markdown(f"名字规则：**{e['value']}**")
+            if not c.get("builtin") and r2.button("删除", key=f"del_rule_{c['name']}_{i}"):
+                sl.remove_entry(c["name"], i)
+                flash(f"已删除名字规则「{e['value']}」")
+                st.rerun()
+        if not c.get("builtin"):
+            a1, a2 = st.columns([4, 1])
+            new_rule = a1.text_input("新增名字规则（关键字，如 YAOGAN）", key=f"new_rule_{c['name']}")
+            if a2.button("添加规则", key=f"btn_new_rule_{c['name']}"):
+                if not new_rule.strip():
+                    st.warning("请先输入关键字。")
                 else:
-                    st.success(f"本夹共 {len(rows_meta)} 颗卫星")
-                    st.caption("需要保存成 TLE 文件请到 ③下载与自检 页“解析下载”。")
-                    if rows_meta:
-                        df_all = pd.DataFrame(rows_meta)
-                        df_all["类型"] = df_all["object_type"].map(sl._object_type_label)
-                        st.dataframe(df_all.rename(columns={
-                            "name": "卫星名", "norad_id": "编号", "country": "所属",
-                            "launch_date": "发射日期", "altitude_km": "高度km",
-                            "inclination": "倾角°"})[
-                            ["卫星名", "编号", "所属", "发射日期", "高度km", "倾角°", "类型"]],
-                            hide_index=True)
+                    ok = sl.add_entry(c["name"], "name_filter", new_rule.strip())
+                    flash(f"已添加名字规则「{new_rule.strip()}」" if ok
+                          else "已有相同的名字规则，未重复添加。",
+                          kind="success" if ok else "warning")
+                    st.rerun()
 
-        st.markdown("**管理收藏夹**")
+        st.divider()
+
+        # ---------- 分区 2：手动卫星（固定清单） ----------
+        st.markdown("### ② 手动卫星（固定清单）")
+        st.caption("手动勾选或输入编号保存的星，固定不变（新发射的星不会自动进来）；"
+                   "可单颗删除、追加编号，或把整批归纳成自动规则。")
+        list_entries = [e for e in c["entries"] if e["type"] == "norad_list"]
+        file_entries = [e for e in c["entries"] if e["type"] == "file"]
+        if not list_entries and not file_entries:
+            st.caption("（暂无手动卫星）")
+        else:
+            declared_ids = sorted({int(x) for e in list_entries
+                                   for x in e["value"].replace(",", " ").split()
+                                   if x.strip().isdigit()})
+            if declared_ids:
+                with st.spinner("读取编号清单中的卫星……"):
+                    list_recs = sl.resolve_collection(
+                        {"entries": [dict(e) for e in list_entries]}, offline=False)
+                by_id = {r["norad_id"]: r for r in list_recs}
+                rows = []
+                for rid in declared_ids:
+                    r = by_id.get(rid)
+                    rows.append({"卫星名": r["name"] if r else f"（编号 {rid}：未取到 TLE）",
+                                 "编号": rid})
+                # 把"行号 -> 编号"存进会话状态，供行内删除回调按行定位
+                st.session_state[f"manual_ids_{c['name']}"] = [r["编号"] for r in rows]
+
+                def _del_sat(collection_name):
+                    # ButtonColumn 点击触发：行号在 session_state[key] 里（{"row","label"}）
+                    click = st.session_state.get(f"btn_del_sat_{collection_name}")
+                    if click is None:
+                        return
+                    ids = st.session_state.get(f"manual_ids_{collection_name}", [])
+                    row = click["row"]
+                    if not 0 <= row < len(ids):
+                        return
+                    rid = ids[row]
+                    if sl.remove_norad_from_collection(collection_name, rid):
+                        flash(f"已从「{collection_name}」删除卫星 NORAD {rid}")
+                    else:
+                        flash(f"删除失败：编号 {rid} 不在收藏夹中。", kind="warning")
+
+                df_manual = pd.DataFrame(rows)
+                if c.get("builtin"):
+                    st.dataframe(df_manual, hide_index=True, width="stretch")
+                else:
+                    df_manual["删除"] = ":material/delete:"
+                    st.dataframe(
+                        df_manual, hide_index=True, width="stretch",
+                        column_config={
+                            "删除": st.column_config.ButtonColumn(
+                                "删除", on_click=_del_sat, args=(c["name"],),
+                                key=f"btn_del_sat_{c['name']}"),
+                        })
+
+                if not c.get("builtin"):
+                    # 追加编号
+                    b1, b2 = st.columns([4, 1])
+                    append_ids = b1.text_input(
+                        "追加编号（空格或逗号分隔，如 25544 31490）",
+                        key=f"append_ids_{c['name']}")
+                    if b2.button("追加", key=f"btn_append_{c['name']}"):
+                        ids = [int(x) for x in append_ids.replace(",", " ").split()
+                               if x.strip().isdigit()]
+                        if not ids:
+                            st.warning("请输入有效的 NORAD 编号。")
+                        else:
+                            sl.add_norad_to_collection(c["name"], ids)
+                            flash(f"已向「{c['name']}」追加 {len(ids)} 颗星（重复编号自动去重）")
+                            st.rerun()
+
+                    # 归纳成自动规则：这批星有公共名字前缀时给出建议
+                    names = [r["name"] for r in by_id.values() if r.get("name")]
+                    prefix = sl.longest_common_prefix(names) if len(names) >= 2 else ""
+                    if len(prefix) >= 3:
+                        k1, k2 = st.columns([5, 1])
+                        k1.markdown(f"这批星的名字都带 **{prefix}** —— 可转成自动规则（以后自动纳入所有同名新星）：")
+                        if k2.button(f"转为自动规则「{prefix}」", key=f"btn_to_rule_{c['name']}"):
+                            ok = sl.add_entry(c["name"], "name_filter", prefix)
+                            flash(f"已添加名字规则「{prefix}」" if ok
+                                  else "已有相同名字规则，未重复添加。",
+                                  kind="success" if ok else "warning")
+                            st.rerun()
+
+            # 导入文件条目：只读展示，可整条移除
+            for fi, e in enumerate(file_entries):
+                try:
+                    text = Path(e["value"]).read_text(encoding="ascii", errors="replace")
+                    f_recs = sl.parse_tle_records(text)
+                    f_n = len(f_recs) if f_recs else len(
+                        [ln for ln in text.splitlines() if ln.strip().isdigit()])
+                except Exception:
+                    f_n = "?"
+                f1, f2 = st.columns([5, 1])
+                f1.markdown(f"📄 导入文件：**{Path(e['value']).name}**（{f_n} 颗，只读）")
+                if not c.get("builtin") and f2.button("移除文件条目", key=f"del_file_{c['name']}_{fi}"):
+                    fidx = next((i for i, x in enumerate(c["entries"])
+                                 if x["type"] == "file" and x["value"] == e["value"]), None)
+                    if fidx is not None:
+                        sl.remove_entry(c["name"], fidx)
+                        flash(f"已移除导入文件条目「{Path(e['value']).name}」")
+                        st.rerun()
+
+        st.divider()
+
+        # ---------- 查看本夹全部卫星（完整信息，只查看不保存） ----------
+        with st.expander("查看本夹全部卫星（完整信息，只查看不保存）"):
+            if st.button("查看本夹全部卫星", key="btn_show_col_sats"):
+                if not c["entries"]:
+                    st.warning("这个收藏夹是空的，先添加条目。")
+                else:
+                    bar = st.progress(0.0, text="开始解析……")
+                    def cb(done, total, msg):
+                        if total:
+                            bar.progress(min(done / total, 1.0), text=msg)
+                        else:
+                            bar.progress(0.0, text=msg)
+                    try:
+                        rows_meta = sl.resolve_collection_with_meta(c, progress=cb)
+                    except Exception as ex:
+                        st.error(f"解析失败：{ex}")
+                    else:
+                        st.success(f"本夹共 {len(rows_meta)} 颗卫星")
+                        st.caption("需要保存成 TLE 文件请到 ③下载与自检 页“解析下载”。")
+                        if rows_meta:
+                            df_all = pd.DataFrame(rows_meta)
+                            df_all["类型"] = df_all["object_type"].map(sl._object_type_label)
+                            st.dataframe(df_all.rename(columns={
+                                "name": "卫星名", "norad_id": "编号", "country": "所属",
+                                "launch_date": "发射日期", "altitude_km": "高度km",
+                                "inclination": "倾角°"})[
+                                ["卫星名", "编号", "所属", "发射日期", "高度km", "倾角°", "类型"]],
+                                hide_index=True)
+
+        # ---------- 管理收藏夹 ----------
+        st.markdown("### 管理收藏夹")
         m1, m2 = st.columns(2)
         with m1:
             new_name = st.text_input("新建收藏夹名称", key="new_col_name")
@@ -420,70 +552,22 @@ with tab_collections:
                     else:
                         st.warning("请先勾选确认。")
         with m2:
-            builtin = sl.load_builtin_collections()
-            if builtin:
-                src_name = st.selectbox("复制内置夹到我的",
-                                        [b["name"] for b in builtin], key="copy_src")
-                if st.button("复制", key="btn_copy"):
-                    ok = sl.copy_builtin_to_user(src_name)
-                    flash(f"已复制「{src_name}」到我的收藏" if ok
-                          else "复制失败（可能重名）。",
+            st.caption("导入本地文件（TLE 或编号清单），程序会复制到 data/user_files/ 统一管理：")
+            f_up = st.file_uploader("选择文件（.txt / .tle）", type=["txt", "tle"], key="file_up")
+            if f_up is not None and st.button("导入并加入当前收藏夹", key="btn_import"):
+                if c.get("builtin"):
+                    st.error("内置夹只读，请新建收藏夹后再导入。")
+                else:
+                    sl._ensure_dirs()
+                    dst = sl.USER_FILES_DIR / f_up.name
+                    if dst.exists():
+                        dst = sl.USER_FILES_DIR / f"{Path(f_up.name).stem}_{int(time.time())}{Path(f_up.name).suffix}"
+                    dst.write_bytes(f_up.getvalue())
+                    ok = sl.add_entry(c["name"], "file", str(dst))
+                    flash(f"已导入并复制到 {dst.name}" if ok
+                          else "已有相同条目，未重复添加。",
                           kind="success" if ok else "warning")
                     st.rerun()
-
-        st.markdown("**管理条目**")
-        e1, e2 = st.columns(2)
-        with e1:
-            if not c.get("builtin"):
-                etype = st.selectbox("添加条目类型",
-                                     ["name_filter", "norad_list"], key="add_type")
-                evalue = st.text_input(
-                    "条目值", key="add_value",
-                    placeholder="名字规则：YAOGAN；编号清单：25544 31490")
-                if st.button("添加", key="btn_add_entry"):
-                    if evalue.strip():
-                        ok = sl.add_entry(c["name"], etype, evalue.strip())
-                        flash(f"已添加条目：{etype} = {evalue.strip()}" if ok
-                              else "已有相同条目，未重复添加。",
-                              kind="success" if ok else "warning")
-                        st.rerun()
-        with e2:
-            if not c.get("builtin") and c["entries"]:
-                ridx = st.number_input("移除条目序号", min_value=1,
-                                       max_value=len(c["entries"]), value=1, key="rm_idx")
-                if st.button("移除", key="btn_rm_entry"):
-                    ok = sl.remove_entry(c["name"], int(ridx) - 1)
-                    flash(f"已移除第 {ridx} 条" if ok else "移除失败。",
-                          kind="success" if ok else "warning")
-                    st.rerun()
-                midx = st.number_input("移动条目序号", min_value=1,
-                                       max_value=len(c["entries"]), value=1, key="mv_idx")
-                others = [x["name"] for x in sl.load_user_collections()
-                          if x["name"] != c["name"]]
-                if others:
-                    dst = st.selectbox("移动到", others, key="mv_dst")
-                    if st.button("移动", key="btn_mv"):
-                        ok = sl.move_entry(c["name"], int(midx) - 1, dst)
-                        flash(f"已把条目移动到「{dst}」" if ok else "移动失败。",
-                              kind="success" if ok else "warning")
-                        st.rerun()
-
-        st.markdown("**导入文件（TLE / 编号清单）**")
-        f_up = st.file_uploader("选择文件（.txt / .tle）", type=["txt", "tle"], key="file_up")
-        if f_up is not None and st.button("导入并加入当前收藏夹", key="btn_import"):
-            if c.get("builtin"):
-                st.error("内置夹只读，请先复制到我的收藏再导入。")
-            else:
-                sl._ensure_dirs()
-                dst = sl.USER_FILES_DIR / f_up.name
-                if dst.exists():
-                    dst = sl.USER_FILES_DIR / f"{Path(f_up.name).stem}_{int(time.time())}{Path(f_up.name).suffix}"
-                dst.write_bytes(f_up.getvalue())
-                ok = sl.add_entry(c["name"], "file", str(dst))
-                flash(f"已导入并复制到 {dst.name}" if ok
-                      else "已有相同条目，未重复添加。",
-                      kind="success" if ok else "warning")
-                st.rerun()
 
 
 # ==================== ③ 下载与自检 ====================
@@ -550,6 +634,21 @@ with tab_download:
 
     st.markdown("---")
     st.subheader("自检（联网部分需要网络）")
+    with st.expander("自检是什么？为什么要自检？"):
+        st.markdown(
+            "**自检 = 自动检查“卫星数据加载器”的每个核心环节是否正常**（37 项，6 组）。\n\n"
+            "**为什么要做**：本软件的所有卫星数据都来自 CelesTrak 网站，中间还要经过本地缓存、"
+            "收藏夹、解析、合并去重等环节。网络波动、缓存损坏、程序更新都可能让某一环悄悄出错，"
+            "自检能把这些环节逐项过一遍，确保进入覆盖分析的卫星数据是可靠的。\n\n"
+            "**自检会做什么**：\n"
+            "1. TLE 解析（离线）——确认能读懂 TLE 文件、算得出星下点；\n"
+            "2. 编目搜索（联网）——确认能搜到卫星档案（名字/国家/轨道参数）；\n"
+            "3. 缓存行为——确认第二次查询不再重复下载；\n"
+            "4. 收藏夹增删改移——用临时测试夹验证改名/删除/移动（自动清理，不碰你的收藏夹）；\n"
+            "5. 收藏夹解析——名字规则 / 编号清单 / 导入文件三种方式都能解析成卫星；\n"
+            "6. 多夹合并去重——确认重复的星只算一次。\n\n"
+            "**注意**：自检会联网下载少量数据（走缓存，不重复请求）；"
+            "不会改动你的真实收藏夹，也不会影响覆盖分析结果。")
     if st.button("运行自检", key="btn_selftest"):
         with st.spinner("正在运行自检（约 10 秒）……"):
             results = validate_loader.run_all()

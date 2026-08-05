@@ -194,9 +194,8 @@ with tab_search:
             key="f_strict",
             help="CelesTrak 按名字搜索是'包含匹配'。例如搜 GF 会匹配到 CYGFM（长光一号）等；"
                  "勾选后只保留名字以 GF 开头的星。")
-        st.button("重置筛选", key="btn_reset_filters",
-                  help="清空所属国/发射年份/高度/倾角/严格匹配，并重新拉取最新搜索结果",
-                  on_click=_reset_filters)
+        # 注意：不设 help，避免悬停提示框长时间停留（Streamlit 无法配置提示时长）
+        st.button("重置筛选", key="btn_reset_filters", on_click=_reset_filters)
         f3, f4 = st.columns(2)
         alts = [a for a in df["高度km"].tolist() if a is not None]
         if alts:

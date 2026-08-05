@@ -49,6 +49,55 @@ def show_flash():
             st.warning(f["msg"])
 
 
+# ---------- 撤销 / 重做（收藏夹文件快照栈，仅本次会话内有效） ----------
+
+def _catalog_text() -> str:
+    """读当前用户收藏夹文件内容（文件不存在时返回空串）。"""
+    try:
+        return sl.USER_CATALOG.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _snapshot():
+    """在修改收藏夹【之前】调用：把当前文件内容压入撤销栈，并清空重做栈。"""
+    st.session_state.setdefault("undo_stack", [])
+    st.session_state["redo_stack"] = []
+    st.session_state["undo_stack"].append(_catalog_text())
+    if len(st.session_state["undo_stack"]) > 50:   # 防止无限增长
+        st.session_state["undo_stack"].pop(0)
+
+
+def _restore_catalog(text: str):
+    """把用户收藏夹文件恢复成某次快照的文本。"""
+    sl._ensure_dirs()
+    sl.USER_CATALOG.write_text(text, encoding="utf-8")
+
+
+def _do_undo():
+    """撤销上一步：当前状态进重做栈，恢复上一次快照。"""
+    if not st.session_state.get("undo_stack"):
+        flash("没有可撤销的操作。", kind="warning")
+        return
+    current = _catalog_text()
+    prev = st.session_state["undo_stack"].pop()
+    st.session_state.setdefault("redo_stack", []).append(current)
+    _restore_catalog(prev)
+    flash("已撤销上一步操作。")
+
+
+def _do_redo():
+    """重做下一步：当前状态进撤销栈，恢复被撤销掉的状态。"""
+    if not st.session_state.get("redo_stack"):
+        flash("没有可重做的操作。", kind="warning")
+        return
+    current = _catalog_text()
+    nxt = st.session_state["redo_stack"].pop()
+    st.session_state.setdefault("undo_stack", []).append(current)
+    _restore_catalog(nxt)
+    flash("已重做下一步操作。")
+
+
 def _slider_bounds(values: list):
     """根据数值列表计算滑块的全范围 (lo, hi)，上限向上取整避免截断丢星。"""
     vals = [v for v in values if v is not None]
@@ -151,12 +200,13 @@ with st.sidebar:
     st.caption("提示：浏览器不允许网页自己关闭标签页；退出后页面会变成白屏提示，手动关即可。")
 
 tab_search, tab_collections, tab_download = st.tabs(
-    ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检"])
+    ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检"],
+    key="main_tabs", on_change="rerun")
 
 
 # ==================== ① 搜索与收藏 ====================
 
-with tab_search:
+if tab_search.open:
     st.subheader("搜索卫星（CelesTrak，免费、无 token）")
     c1, c2, c3 = st.columns([2, 1, 1])
     keyword = c1.text_input("名字关键字", key="kw",
@@ -307,11 +357,13 @@ with tab_search:
         if st.button("加入收藏夹", key="btn_add"):
             target = col_target
             if new_name.strip():
+                _snapshot()
                 sl.create_collection(new_name.strip())
                 target = new_name.strip()
             if not target:
                 st.error("请先选择或新建一个收藏夹。")
             elif mode.startswith("名字规则"):
+                _snapshot()
                 if sl.add_entry(target, "name_filter", keyword.strip()):
                     flash(f"已把名字规则「{keyword}」加入「{target}」")
                 else:
@@ -320,11 +372,13 @@ with tab_search:
             else:
                 if not sel_ids:
                     st.error("请先用多选框选择至少一颗星（或点“全选当前筛选结果”）。")
-                elif sl.add_entry(target, "norad_list", " ".join(map(str, sel_ids))):
-                    flash(f"已把 {len(sel_ids)} 颗星（编号清单）加入「{target}」")
                 else:
-                    flash("该收藏夹里已经有相同的编号清单，未重复添加。", kind="warning")
-                st.rerun()
+                    _snapshot()
+                    if sl.add_entry(target, "norad_list", " ".join(map(str, sel_ids))):
+                        flash(f"已把 {len(sel_ids)} 颗星（编号清单）加入「{target}」")
+                    else:
+                        flash("该收藏夹里已经有相同的编号清单，未重复添加。", kind="warning")
+                    st.rerun()
         if st.button("直接解析所选（不入收藏夹）", key="btn_resolve_sel"):
             if not sel_ids:
                 st.error("请先选择至少一颗星（或点“全选当前筛选结果”）。")
@@ -342,8 +396,12 @@ with tab_search:
 
 # ==================== ② 收藏夹管理 ====================
 
-with tab_collections:
+if tab_collections.open:
     st.subheader("收藏夹管理")
+    u1, u2, u3 = st.columns([1, 1, 3])
+    u1.button("撤销上一步", key="btn_undo", on_click=_do_undo, icon=":material/undo:")
+    u2.button("重做下一步", key="btn_redo", on_click=_do_redo, icon=":material/redo:")
+    u3.caption("撤销/重做只对本次打开软件期间的收藏夹操作有效，关闭页面后历史清空。")
     st.caption("一个收藏夹分两部分：**自动规则**（名字规则，活）和 **手动卫星**（固定清单）；"
                "解析下载时自动合并、按编号去重。")
     all_c = sl.load_all_collections()
@@ -371,6 +429,7 @@ with tab_collections:
             r1, r2 = st.columns([5, 1])
             r1.markdown(f"名字规则：**{e['value']}**")
             if not c.get("builtin") and r2.button("删除", key=f"del_rule_{c['name']}_{i}"):
+                _snapshot()
                 sl.remove_entry(c["name"], i)
                 flash(f"已删除名字规则「{e['value']}」")
                 st.rerun()
@@ -381,6 +440,7 @@ with tab_collections:
                 if not new_rule.strip():
                     st.warning("请先输入关键字。")
                 else:
+                    _snapshot()
                     ok = sl.add_entry(c["name"], "name_filter", new_rule.strip())
                     flash(f"已添加名字规则「{new_rule.strip()}」" if ok
                           else "已有相同的名字规则，未重复添加。",
@@ -424,8 +484,9 @@ with tab_collections:
                     if not 0 <= row < len(ids):
                         return
                     rid = ids[row]
+                    _snapshot()
                     if sl.remove_norad_from_collection(collection_name, rid):
-                        flash(f"已从「{collection_name}」删除卫星 NORAD {rid}")
+                        flash(f"已从「{collection_name}」清单中删除卫星 NORAD {rid}")
                     else:
                         flash(f"删除失败：编号 {rid} 不在收藏夹中。", kind="warning")
 
@@ -454,6 +515,7 @@ with tab_collections:
                         if not ids:
                             st.warning("请输入有效的 NORAD 编号。")
                         else:
+                            _snapshot()
                             sl.add_norad_to_collection(c["name"], ids)
                             flash(f"已向「{c['name']}」追加 {len(ids)} 颗星（重复编号自动去重）")
                             st.rerun()
@@ -465,6 +527,7 @@ with tab_collections:
                         k1, k2 = st.columns([5, 1])
                         k1.markdown(f"这批星的名字都带 **{prefix}** —— 可转成自动规则（以后自动纳入所有同名新星）：")
                         if k2.button(f"转为自动规则「{prefix}」", key=f"btn_to_rule_{c['name']}"):
+                            _snapshot()
                             ok = sl.add_entry(c["name"], "name_filter", prefix)
                             flash(f"已添加名字规则「{prefix}」" if ok
                                   else "已有相同名字规则，未重复添加。",
@@ -486,6 +549,7 @@ with tab_collections:
                     fidx = next((i for i, x in enumerate(c["entries"])
                                  if x["type"] == "file" and x["value"] == e["value"]), None)
                     if fidx is not None:
+                        _snapshot()
                         sl.remove_entry(c["name"], fidx)
                         flash(f"已移除导入文件条目「{Path(e['value']).name}」")
                         st.rerun()
@@ -528,6 +592,7 @@ with tab_collections:
             new_name = st.text_input("新建收藏夹名称", key="new_col_name")
             if st.button("新建", key="btn_new_col"):
                 if new_name.strip():
+                    _snapshot()
                     ok = sl.create_collection(new_name.strip())
                     flash("已新建收藏夹：" + new_name.strip() if ok
                           else f"已存在同名收藏夹：{new_name.strip()}，未新建。",
@@ -537,6 +602,7 @@ with tab_collections:
                 rename_to = st.text_input("改名为", key="rename_to")
                 if st.button("改名", key="btn_rename"):
                     if rename_to.strip():
+                        _snapshot()
                         ok = sl.rename_collection(c["name"], rename_to.strip())
                         flash(f"已改名：{c['name']} -> {rename_to.strip()}" if ok
                               else "改名失败（可能重名）。",
@@ -545,6 +611,7 @@ with tab_collections:
                 confirm_del = st.checkbox("确认删除「当前夹」（不可撤销）", key="del_confirm")
                 if st.button("删除", key="btn_del"):
                     if confirm_del:
+                        _snapshot()
                         ok = sl.delete_collection(c["name"])
                         flash(f"已删除收藏夹：{c['name']}" if ok else "删除失败。",
                               kind="success" if ok else "warning")
@@ -563,6 +630,7 @@ with tab_collections:
                     if dst.exists():
                         dst = sl.USER_FILES_DIR / f"{Path(f_up.name).stem}_{int(time.time())}{Path(f_up.name).suffix}"
                     dst.write_bytes(f_up.getvalue())
+                    _snapshot()
                     ok = sl.add_entry(c["name"], "file", str(dst))
                     flash(f"已导入并复制到 {dst.name}" if ok
                           else "已有相同条目，未重复添加。",
@@ -572,7 +640,7 @@ with tab_collections:
 
 # ==================== ③ 下载与自检 ====================
 
-with tab_download:
+if tab_download.open:
     st.subheader("下载解析（合并多个收藏夹 → 生成 TLE 文件）")
     st.caption("用途：把选中的收藏夹合并、去重，生成成品 TLE 文件；"
                "只想查看某个夹的内容请用 ②页的“查看本夹全部卫星”。")
@@ -647,6 +715,12 @@ with tab_download:
             "4. 收藏夹增删改移——用临时测试夹验证改名/删除/移动（自动清理，不碰你的收藏夹）；\n"
             "5. 收藏夹解析——名字规则 / 编号清单 / 导入文件三种方式都能解析成卫星；\n"
             "6. 多夹合并去重——确认重复的星只算一次。\n\n"
+            "**什么时候建议自检**：\n"
+            "1. 第一次使用、或软件/代码更新之后；\n"
+            "2. 网络不好、下载报过错（比如缓存下载失败）之后；\n"
+            "3. 手动动过缓存或收藏夹文件之后；\n"
+            "4. 要导入大量卫星（几百上千颗）之前；\n"
+            "5. 覆盖分析结果出现异常、想排查是不是数据环节出问题时。\n\n"
             "**注意**：自检会联网下载少量数据（走缓存，不重复请求）；"
             "不会改动你的真实收藏夹，也不会影响覆盖分析结果。")
     if st.button("运行自检", key="btn_selftest"):

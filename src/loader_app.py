@@ -265,7 +265,7 @@ if tab_search.open:
         df = pd.DataFrame(rows)
         df["序号"] = range(1, len(df) + 1)
         df = df.rename(columns={
-            "name": "卫星名", "norad_id": "编号", "object_id": "国际编号",
+            "name": "卫星名", "norad_id": "NORAD 编号", "object_id": "国际编号",
             "country": "所属",
             "launch_date": "发射日期", "altitude_km": "高度km",
             "inclination": "倾角°", "object_type": "类型"})
@@ -336,11 +336,11 @@ if tab_search.open:
         else:
             st.caption("当前无筛选，显示全部搜索结果。")
 
-        st.dataframe(view[["序号", "卫星名", "编号", "国际编号", "所属", "发射日期",
+        st.dataframe(view[["序号", "卫星名", "NORAD 编号", "国际编号", "所属", "发射日期",
                            "高度km", "倾角°", "类型"]], hide_index=True)
 
         options = [f"{i}. {name} (NORAD {rid})" for i, name, rid in
-                   zip(view["序号"], view["卫星名"], view["编号"])]
+                   zip(view["序号"], view["卫星名"], view["NORAD 编号"])]
         b1, b2 = st.columns(2)
         if b1.button("全选当前筛选结果", key="btn_sel_all"):
             st.session_state["search_multi"] = list(options)
@@ -421,7 +421,7 @@ if tab_search.open:
                 st.success(f"已解析 {len(recs)} 颗卫星（不入收藏夹，TLE 已缓存）")
                 if recs:
                     st.dataframe(pd.DataFrame(
-                        [{"卫星名": r["name"], "编号": r["norad_id"]} for r in recs[:200]]),
+                        [{"卫星名": r["name"], "NORAD 编号": r["norad_id"]} for r in recs[:200]]),
                         hide_index=True)
 
 
@@ -501,9 +501,9 @@ if tab_collections.open:
                 for rid in declared_ids:
                     r = by_id.get(rid)
                     rows.append({"卫星名": r["name"] if r else f"（编号 {rid}：未取到 TLE）",
-                                 "编号": rid})
-                # 把"行号 -> 编号"存进会话状态，供行内删除回调按行定位
-                st.session_state[f"manual_ids_{c['name']}"] = [r["编号"] for r in rows]
+                                 "NORAD 编号": rid})
+                # 把"行号 -> NORAD 编号"存进会话状态，供行内删除回调按行定位
+                st.session_state[f"manual_ids_{c['name']}"] = [r["NORAD 编号"] for r in rows]
 
                 def _del_sat(collection_name):
                     # ButtonColumn 点击触发：行号在 session_state[key] 里（{"row","label"}）
@@ -610,10 +610,10 @@ if tab_collections.open:
                             df_all = pd.DataFrame(rows_meta)
                             df_all["类型"] = df_all["object_type"].map(sl._object_type_label)
                             st.dataframe(df_all.rename(columns={
-                                "name": "卫星名", "norad_id": "编号", "country": "所属",
+                                "name": "卫星名", "norad_id": "NORAD 编号", "country": "所属",
                                 "launch_date": "发射日期", "altitude_km": "高度km",
                                 "inclination": "倾角°"})[
-                                ["卫星名", "编号", "所属", "发射日期", "高度km", "倾角°", "类型"]],
+                                ["卫星名", "NORAD 编号", "所属", "发射日期", "高度km", "倾角°", "类型"]],
                                 hide_index=True)
 
         # ---------- 管理收藏夹 ----------
@@ -693,7 +693,7 @@ if tab_download.open:
             st.caption(f"已合并为一个文件：`{path}`（下次解析直接复用缓存，不重复下载）")
             if recs:
                 st.dataframe(pd.DataFrame(
-                    [{"卫星名": r["name"], "编号": r["norad_id"]} for r in recs[:200]]),
+                    [{"卫星名": r["name"], "NORAD 编号": r["norad_id"]} for r in recs[:200]]),
                     hide_index=True)
 
     st.markdown("---")

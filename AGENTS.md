@@ -91,6 +91,10 @@ matplotlib（甘特图）、requests（下载数据）。
 - [x] 阶段1：卫星数据加载器（2026-08-05，独立模块，coverage_analysis.py 未改动）
       —— CelesTrak 搜索/下载缓存 + 收藏夹（内置+用户，三类条目）+ 包装类 Satellite
       —— 自检 validate_loader.py 36 项全部通过；内置夹"中国遥感系列"解析 165 颗在轨载荷
+- [x] 阶段1.5：卫星导入部分图形界面（2026-08-05，Streamlit，src/loader_app.py）
+      —— 三个页签：搜索与收藏 / 收藏夹管理 / 下载与自检（自检并入 GUI）
+      —— CLI 保留（机器接口）；启动：run_gui.bat 或 streamlit run src\loader_app.py
+      —— coverage_analysis.py 仍未改动
 
 ## 12. 输入层设计（阶段1已定，待阶段2集成）
 - 交互：命令行菜单（搜索→勾选→入收藏→解析下载）；以后 GUI 只替换交互层。

@@ -26,10 +26,12 @@ import satellite_loader as sl
 
 PASS = 0
 FAIL = 0
+RESULTS: list = []   # 每项检查的结果 (名称, 是否通过, 说明)，供 GUI 复用
 
 
 def check(name: str, ok: bool, detail: str = ""):
     global PASS, FAIL
+    RESULTS.append((name, ok, detail))
     if ok:
         PASS += 1
         print(f"  [PASS] {name} {detail}")
@@ -187,11 +189,12 @@ def test_multi_collection_merge():
         shutil.rmtree(tmp.parent, ignore_errors=True)
 
 
-def main():
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+def run_all() -> list:
+    """运行全部自检，返回 [(名称, 是否通过, 说明), ...]；CLI 和 GUI 共用。"""
+    global PASS, FAIL, RESULTS
+    PASS = 0
+    FAIL = 0
+    RESULTS = []
     print("satellite_loader 自检开始（联网部分需要能访问 celestrak.org）")
     test_tle_parse_offline()
     test_metadata_search_online()
@@ -199,6 +202,15 @@ def main():
     test_collections_crud()
     test_resolve()
     test_multi_collection_merge()
+    return list(RESULTS)
+
+
+def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    run_all()
     print("\n" + "=" * 40)
     print(f"结果：{PASS} 项通过，{FAIL} 项失败")
     sys.exit(1 if FAIL else 0)

@@ -423,11 +423,11 @@ def suggest_similar_names(keyword: str, n: int = 3, cutoff: float = 0.6,
         # 去掉第一个数字之后的部分，再清掉两端分隔符：STARLINK-1234 -> STARLINK
         fam = re.sub(r"[0-9].*$", "", r.get("name", "")).strip(" -_")
         if len(fam) >= 3:
-            fams.add(fam)
+            fams.add(fam.upper())   # 统一大写，否则小写输入（yaogen）匹配不到 YAOGAN
     names = sorted(fams)
     if not names:
         return []
-    return difflib.get_close_matches(keyword, names, n=n, cutoff=cutoff)
+    return difflib.get_close_matches(keyword.upper(), names, n=n, cutoff=cutoff)
 
 
 def ensure_active_tle(max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
@@ -497,6 +497,7 @@ def load_user_collections() -> List[dict]:
         collections.append({
             "name": c.get("name", "未命名"),
             "description": c.get("description", ""),
+            "kind": c.get("kind", ""),
             "builtin": False,
             "entries": entries,
         })
@@ -525,6 +526,8 @@ def _dump_collections(collections: List[dict]) -> str:
     for c in collections:
         lines.append("[[collections]]")
         lines.append(f"name = {q(c['name'])}")
+        if c.get("kind"):
+            lines.append(f"kind = {q(c['kind'])}")
         if c.get("description"):
             lines.append(f"description = {q(c['description'])}")
         lines.append("entries = [")
@@ -572,13 +575,14 @@ def find_collection(collections: List[dict], name: str) -> Optional[dict]:
     return None
 
 
-def create_collection(name: str, description: str = "") -> bool:
-    """新建用户收藏夹；同名返回 False。"""
+def create_collection(name: str, description: str = "", kind: str = "") -> bool:
+    """新建用户收藏夹；同名返回 False。kind 用于标记特殊收藏夹（如 constellation）。"""
     user = load_user_collections()
     if find_collection(user, name) or find_collection(load_builtin_collections(), name):
         print(f"  [失败] 已存在同名收藏夹：{name}")
         return False
-    user.append({"name": name, "description": description, "builtin": False, "entries": []})
+    user.append({"name": name, "description": description, "kind": kind,
+                 "builtin": False, "entries": []})
     save_user_collections(user)
     print(f"  [完成] 已新建收藏夹：{name}")
     return True

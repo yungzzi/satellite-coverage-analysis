@@ -203,6 +203,8 @@ def test_search_enhancements():
     check("星座分组下载（gps-ops）", len(g) > 0, f"共 {len(g)} 颗")
     sug = sl.suggest_similar_names("STARLNK", offline=False)
     check("拼写纠错提示", any("STARLINK" in s for s in sug), str(sug))
+    sug_lower = sl.suggest_similar_names("yaogen", offline=False)
+    check("拼写提示忽略大小写", "YAOGAN" in sug_lower, str(sug_lower))
 
 
 def run_all() -> list:

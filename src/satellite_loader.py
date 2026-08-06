@@ -57,8 +57,12 @@ CELESTRAK_SATCAT = "https://celestrak.org/satcat/records.php"
 CELESTRAK_ACTIVE = f"{CELESTRAK_GP}?GROUP=active&FORMAT=TLE"
 USER_AGENT = "satellite-coverage-analysis/0.1 (educational project)"
 
-# 缓存默认过期时间（小时）：搜索结果/编目 24 小时更新一次即可
+# 缓存默认过期时间（小时）——分档，避免频繁请求（Q86 拍板）：
+# - 全集 TLE / 星座分组：2 小时（跟随 CelesTrak 每 2 小时更新节奏，一天最多 12 次）
+# - 搜索档案 / 单星：24 小时（名字、发射日期几乎不变，单星仅作缓存兜底）
 DEFAULT_MAX_AGE_HOURS = 24
+ACTIVE_MAX_AGE_HOURS = 2.0    # active.tle 全集 TLE
+GROUP_MAX_AGE_HOURS = 2.0     # 星座分组 TLE
 
 _ACTIVE_FAILED = False   # 本次运行中全集缓存下载失败过则不再重复尝试
 
@@ -219,7 +223,11 @@ def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_
         print(f"  [缓存命中] {cache_name}（{_age_hours(cache_path):.1f} 小时前下载）")
         return cache_path
     if offline:
-        print(f"  [离线] 缓存 {cache_name} 缺失或过期，且离线模式不联网，跳过下载。")
+        if cache_path.exists():
+            print(f"  [离线] 缓存 {cache_name} 已过期（{_age_hours(cache_path):.1f}h），"
+                  f"离线模式不联网，回退使用过期缓存。")
+            return cache_path
+        print(f"  [离线] 缓存 {cache_name} 缺失，且离线模式不联网，跳过下载。")
         return None
 
     def _fallback_stale(reason: str) -> Optional[Path]:
@@ -449,7 +457,7 @@ def suggest_similar_names(keyword: str, n: int = 3, cutoff: float = 0.6,
     return difflib.get_close_matches(keyword.upper(), names, n=n, cutoff=cutoff)
 
 
-def ensure_active_tle(max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+def ensure_active_tle(max_age_hours: float = ACTIVE_MAX_AGE_HOURS,
                       force: bool = False, offline: bool = False) -> Optional[Path]:
     """确保本地有"全集现役 TLE"缓存（一次下载，单星/名字查询优先查它）。
 
@@ -465,7 +473,7 @@ def ensure_active_tle(max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
     return path
 
 
-def load_active_tle(max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+def load_active_tle(max_age_hours: float = ACTIVE_MAX_AGE_HOURS,
                     offline: bool = False):
     """读取全集缓存，返回 (by_id: {NORAD: 记录}, records: [记录, ...])。"""
     path = ensure_active_tle(max_age_hours, offline=offline)
@@ -478,6 +486,26 @@ def load_active_tle(max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
         if r.get("norad_id") is not None:
             by_id[r["norad_id"]] = r
     return by_id, records
+
+
+def force_refresh_collections(collection_names: List[str]) -> int:
+    """强制重下全集与选中收藏夹的星座分组缓存（忽略缓存时长，Q86/Q87 拍板）。
+
+    编号清单基于全集，全集刷新后编号清单自动同步；只刷新批量数据，
+    不做任何逐颗下载。返回实际发起的请求次数（含全集 1 次）。
+    """
+    requests = 0
+    ensure_active_tle(force=True)
+    requests += 1
+    for name in collection_names:
+        c = find_collection(load_all_collections(), name)
+        if c is None:
+            continue
+        for e in c.get("entries", []):
+            if e.get("type") == "celestrak_group":
+                _records_by_group(e["value"], force=True)
+                requests += 1
+    return requests
 
 
 # ==================== 4. 收藏夹（内置 + 用户） ====================
@@ -810,11 +838,13 @@ def _records_from_file(file_path: str, max_age_hours: float, offline: bool,
     return _records_by_norad_ids(ids, max_age_hours, offline, progress=progress)
 
 
-def _records_by_norad_ids(norad_ids: List[int], max_age_hours: float,
-                          offline: bool, progress=None) -> List[dict]:
-    """按编号清单找 TLE：优先查"全集现役 TLE"缓存（一次下载覆盖大多数），
-    查不到的少量编号才逐个走 gp.php?CATNR=（带缓存与小延时）；
-    缺失过多（>200）时停止逐个下载，避免触发数据源限流（Q84）。"""
+def _records_by_norad_ids(norad_ids: List[int], max_age_hours: Optional[float] = None,
+                          offline: bool = False, progress=None) -> List[dict]:
+    """按编号清单找 TLE：只从全集 active.tle 本地拿（+已有单星缓存兜底），
+    缺失**不再联网**（Q87 拍板：退役/保密/新发射的星下载也拿不到，等全集更新）。
+    彻底消除逐颗请求，从源头规避限流。"""
+    if max_age_hours is None:
+        max_age_hours = ACTIVE_MAX_AGE_HOURS
     by_id, _ = load_active_tle(max_age_hours, offline=offline)
     out = []
     missing = []
@@ -822,20 +852,17 @@ def _records_by_norad_ids(norad_ids: List[int], max_age_hours: float,
         r = by_id.get(rid)
         if r is not None:
             out.append(r)
+            continue
+        cached = search_by_norad_online(rid, max_age_hours, offline=True)   # 只读已有缓存
+        if cached:
+            out.append(cached[0])
         else:
             missing.append(rid)
     if missing:
-        if len(missing) > 200:
-            print(f"  [警告] {len(missing)} 个编号不在全集缓存中（>200），为避免触发数据源限流，"
-                  f"本次不逐个下载；已取全集命中的 {len(out)} 颗，其余可稍后重试。")
-        else:
-            for rid in missing:
-                recs = search_by_norad_online(rid, max_age_hours, offline=offline)
-                if recs:
-                    out.append(recs[0])
-                else:
-                    print(f"  [警告] 查不到编号 {rid}")
-                time.sleep(0.2)   # 礼貌性小延时，避免高频请求
+        shown = "、".join(str(x) for x in missing[:20])
+        more = f" 等 {len(missing)} 个" if len(missing) > 20 else ""
+        print(f"  [提示] 编号 {shown}{more} 不在全集/缓存中（可能已退役/保密/新发射），"
+              f"未联网下载，等全集更新后重试。")
     total = len(norad_ids)
     for i, rid in enumerate(norad_ids, 1):
         if progress:
@@ -864,8 +891,8 @@ _GROUP_NAME_FALLBACK = {
 }
 
 
-def _records_by_name_filter(keyword: str, max_age_hours: float,
-                            offline: bool) -> List[dict]:
+def _records_by_name_filter(keyword: str, max_age_hours: Optional[float] = None,
+                            offline: bool = False) -> List[dict]:
     """按名字规则找 TLE：优先查"全集现役 TLE"缓存（按名字子串匹配），
     黑名单排除名字含碎片/火箭体标记的物体，保证只含载荷；
     缓存里没有匹配时退回 gp.php?NAME=。
@@ -874,6 +901,8 @@ def _records_by_name_filter(keyword: str, max_age_hours: float,
     硬上限，STARLINK 会漏 769 颗；改为黑名单后全集内载荷全量保留
     （实测 YAOGAN/GAOFEN 两种口径结果一致，无副作用）。
     """
+    if max_age_hours is None:
+        max_age_hours = ACTIVE_MAX_AGE_HOURS
     _, active_recs = load_active_tle(max_age_hours, offline=offline)
     recs = [r for r in active_recs if keyword.lower() in r.get("name", "").lower()
             and not _is_debris_name(r.get("name", ""))]
@@ -883,8 +912,8 @@ def _records_by_name_filter(keyword: str, max_age_hours: float,
     return [r for r in online if not _is_debris_name(r.get("name", ""))]
 
 
-def _records_by_group(group: str, max_age_hours: float,
-                      offline: bool) -> List[dict]:
+def _records_by_group(group: str, max_age_hours: Optional[float] = None,
+                      offline: bool = False, force: bool = False) -> List[dict]:
     """按 CelesTrak 星座分组（GROUP=starlink / beidou 等）下载整组 TLE。
 
     分组是官方维护的"一个星座一整包"，不受 records.php 约万条上限影响；
@@ -893,9 +922,11 @@ def _records_by_group(group: str, max_age_hours: float,
     回退用全集 active.tle 按名字特征过滤（近似但可离线工作，Q84）。
     """
     import urllib.parse
+    if max_age_hours is None:
+        max_age_hours = GROUP_MAX_AGE_HOURS
     url = f"{CELESTRAK_GP}?GROUP={urllib.parse.quote(group)}&FORMAT=TLE"
     path = download_text(url, f"group/{_safe_cache_name(group, '.tle')}",
-                         max_age_hours, offline=offline)
+                         max_age_hours, force=force, offline=offline)
     if path is None:
         kw = _GROUP_NAME_FALLBACK.get(group)
         if kw:
@@ -940,12 +971,12 @@ def resolve_collection(collection: dict, max_age_hours: float = DEFAULT_MAX_AGE_
         etype, value = entry["type"], entry["value"]
         units = _entry_units(entry)
         if etype == "name_filter":
-            recs = _records_by_name_filter(value, max_age_hours, offline)
+            recs = _records_by_name_filter(value, offline=offline)
             done += units
             if progress:
                 progress(done, total, f"处理条目：{_entry_label(entry)}")
         elif etype == "celestrak_group":
-            recs = _records_by_group(value, max_age_hours, offline)
+            recs = _records_by_group(value, offline=offline)
             done += units
             if progress:
                 progress(done, total, f"处理条目：{_entry_label(entry)}")
@@ -954,7 +985,7 @@ def resolve_collection(collection: dict, max_age_hours: float = DEFAULT_MAX_AGE_
             def sub(d, t, m):
                 if progress:
                     progress(done + d, total, m)
-            recs = _records_by_norad_ids(ids, max_age_hours, offline, progress=sub)
+            recs = _records_by_norad_ids(ids, offline=offline, progress=sub)
             done += units
         elif etype == "file":
             def sub2(d, t, m):

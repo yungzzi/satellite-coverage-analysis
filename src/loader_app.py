@@ -717,10 +717,21 @@ if tab_download.open:
     st.subheader("下载解析（合并多个收藏夹 → 生成 TLE 文件）")
     st.caption("用途：把选中的收藏夹合并、去重，生成成品 TLE 文件；"
                "只想查看某个夹的内容请用 ②页的“查看本夹全部卫星”。")
-    names = [x["name"] for x in sl.load_all_collections()]
+    all_cols = sl.load_all_collections()
+
+    def _col_label(x):
+        return f"📡 {x['name']}（星座）" if x.get("kind") == "constellation" else x["name"]
+
+    def _strip_col_label(n: str) -> str:
+        n = n[len("📡 "):] if n.startswith("📡 ") else n
+        return n[:-len("（星座）")] if n.endswith("（星座）") else n
+
+    names = [_col_label(x) for x in all_cols]
     sel_names = st.multiselect("选择要解析的收藏夹", names, key="resolve_sel")
-    if st.button("解析下载", key="btn_resolve"):
-        if not sel_names:
+    r1, r2 = st.columns(2)
+    if r1.button("解析下载", key="btn_resolve"):
+        real = [_strip_col_label(n) for n in sel_names]
+        if not real:
             st.warning("请至少选择一个收藏夹。")
         else:
             bar = st.progress(0.0, text="开始解析……")
@@ -729,8 +740,8 @@ if tab_download.open:
                     bar.progress(min(done / total, 1.0), text=msg)
                 else:
                     bar.progress(0.0, text=msg)
-            recs = sl.resolve_collections_to_records(sel_names, progress=cb)
-            path = sl.save_resolved_tle(" + ".join(sel_names), recs)
+            recs = sl.resolve_collections_to_records(real, progress=cb)
+            path = sl.save_resolved_tle(" + ".join(real), recs)
             if not recs:
                 st.warning("没有解析到卫星：缓存被清空且数据源下载被拒（限流）时会出现；请稍后重试。")
             st.success(f"解析完成：{len(recs)} 颗卫星（按 NORAD 编号去重）")
@@ -739,6 +750,13 @@ if tab_download.open:
                 st.dataframe(pd.DataFrame(
                     [{"卫星名": r["name"], "NORAD 编号": r["norad_id"]} for r in recs[:200]]),
                     hide_index=True)
+    if r2.button("强制更新（重下全集与星座缓存）", key="btn_force_refresh",
+                 help="忽略缓存，重新下载全集 active.tle 与选中星座分组；编号清单随全集自动同步"):
+        real = [_strip_col_label(n) for n in sel_names]
+        with st.spinner("正在强制更新（联网）……"):
+            n_req = sl.force_refresh_collections(real)
+        flash(f"强制更新完成：本次请求 {n_req} 次（全集 + 选中星座分组），编号清单已随全集同步。")
+        st.rerun()
 
     st.markdown("---")
     st.subheader("缓存管理（data/tle_cache/）")
@@ -816,9 +834,10 @@ if tab_download.open:
 # ==================== ④ 星座导入 ====================
 
 if tab_constellations.open:
-    st.subheader("星座导入")
-    st.caption("按用途选一个星座，一键加入收藏夹（自动建夹），之后到③页解析下载整组 TLE；"
-               "遥感家族没有现成 GROUP 分组的走名字规则，新发射的同名星会自动纳入。")
+    st.subheader("星座 / 常用卫星导入")
+    st.caption("按用途选一个星座（或常用单星，会标注“单星”），一键加入收藏夹（自动建夹），"
+               "之后到③页解析下载整组 TLE；遥感家族没有现成 GROUP 分组的走名字规则，"
+               "新发射的同名星会自动纳入。")
     cons = sl.load_constellations()
     if not cons:
         st.info("暂无星座目录（data/constellations.toml 缺失或为空）。")
@@ -831,7 +850,8 @@ if tab_constellations.open:
         sel_name = p2.selectbox("星座", [c["name"] for c in cands], key="cons_sel")
         c = next(x for x in cands if x["name"] == sel_name)
         src = c["source"]
-        st.markdown(f"**{c['name']}** —— {c.get('description') or '（暂无简介）'}")
+        sing = "（单星）" if c.get("singleton") else ""
+        st.markdown(f"**{c['name']}**{sing} —— {c.get('description') or '（暂无简介）'}")
         st.caption("数据来源：" + ("CelesTrak 整组下载（GROUP=" + src["value"] + "）"
                                    if src["type"] == "celestrak_group"
                                    else "名字规则（关键字 " + src["value"] + "）"))

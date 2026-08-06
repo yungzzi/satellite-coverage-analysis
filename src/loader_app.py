@@ -460,12 +460,18 @@ if tab_collections.open:
     if not all_c:
         st.info("暂无收藏夹。")
     else:
-        labels = [f"{x['name']}（内置，只读）" if x.get("builtin")
-                  else f"{x['name']}（我的）" for x in all_c]
+        def _col_label(x):
+            if x.get("builtin"):
+                return f"{x['name']}（内置，只读）"
+            tag = "（📡 星座）" if x.get("kind") == "constellation" else "（我的）"
+            return f"{x['name']}{tag}"
+
+        labels = [_col_label(x) for x in all_c]
         idx = st.selectbox("选择收藏夹", range(len(all_c)),
                            format_func=lambda i: labels[i], key="col_sel")
         c = all_c[idx]
-        st.markdown(f"**{c['name']}** —— {c.get('description') or '（无备注）'}")
+        tag = "（📡 星座收藏夹）" if c.get("kind") == "constellation" else ""
+        st.markdown(f"**{c['name']}**{tag} —— {c.get('description') or '（无备注）'}")
         if c.get("builtin"):
             st.caption("内置夹只读，不能直接修改；想要自己的版本，请新建收藏夹后手动添加同样的规则或编号。")
 
@@ -756,7 +762,7 @@ if tab_download.open:
     st.subheader("自检（联网部分需要网络）")
     with st.expander("自检是什么？为什么要自检？"):
         st.markdown(
-            "**自检 = 自动检查“卫星数据加载器”的每个核心环节是否正常**（41 项，7 组）。\n\n"
+            "**自检 = 自动检查“卫星数据加载器”的每个核心环节是否正常**（42 项，7 组）。\n\n"
             "**为什么要做**：本软件的所有卫星数据都来自 CelesTrak 网站，中间还要经过本地缓存、"
             "收藏夹、解析、合并去重等环节。网络波动、缓存损坏、程序更新都可能让某一环悄悄出错，"
             "自检能把这些环节逐项过一遍，确保进入覆盖分析的卫星数据是可靠的。\n\n"
@@ -821,9 +827,9 @@ if tab_constellations.open:
         if b2.button("加入收藏夹（自动建夹）", key="btn_cons_add"):
             _snapshot()
             if sl.find_collection(sl.load_user_collections(), c["name"]) is None:
-                sl.create_collection(c["name"])
+                sl.create_collection(c["name"], kind="constellation")
             ok = sl.add_entry(c["name"], src["type"], src["value"])
-            flash(f"已把「{c['name']}」加入收藏夹" if ok
+            flash(f"已把「{c['name']}」加入收藏夹（📡 星座收藏夹）" if ok
                   else "该收藏夹里已有相同条目，未重复添加。",
                   kind="success" if ok else "warning")
             st.rerun()

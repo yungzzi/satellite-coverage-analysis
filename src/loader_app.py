@@ -23,6 +23,7 @@ import shutil
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -30,8 +31,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pandas as pd
 import streamlit as st
 
+import coverage_analysis as cov
 import satellite_loader as sl
 import validate_loader
+
+# 覆盖分析的输出写相对路径 "output/"，把工作目录固定到项目根，避免写错位置
+os.chdir(str(sl.PROJECT_ROOT))
 
 
 def flash(msg: str, kind: str = "success"):
@@ -120,6 +125,27 @@ def _name_search(keyword: str) -> list:
         offline=False)
 
 
+def _collection_label(x: dict) -> str:
+    """收藏夹在下拉/多选框里的显示名：星座收藏夹带 📡 标识。"""
+    if x.get("builtin"):
+        return f"{x['name']}（内置，只读）"
+    if x.get("kind") == "constellation":
+        return f"📡 {x['name']}（星座）"
+    return f"{x['name']}（我的）"
+
+
+def _strip_collection_label(n: str) -> str:
+    """把带标识的显示名还原成收藏夹原名（③⑤页解析前调用）。"""
+    n = n[len("📡 "):] if n.startswith("📡 ") else n
+    if n.endswith("（星座）"):
+        n = n[:-len("（星座）")]
+    if n.endswith("（内置，只读）"):
+        n = n[:-len("（内置，只读）")]
+    if n.endswith("（我的）"):
+        n = n[:-len("（我的）")]
+    return n
+
+
 def _reset_filters():
     """重置结果内筛选（on_click 回调）：递增"筛选版本号"让所有筛选控件换新 key
     重建（自动回到默认值），并重新拉取最新结果。
@@ -204,8 +230,8 @@ with st.sidebar:
         st.stop()
     st.caption("提示：浏览器不允许网页自己关闭标签页；退出后页面会变成白屏提示，手动关即可。")
 
-tab_search, tab_collections, tab_download, tab_constellations = st.tabs(
-    ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检", "④ 星座导入"],
+tab_search, tab_collections, tab_download, tab_constellations, tab_analysis = st.tabs(
+    ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检", "④ 星座导入", "⑤ 覆盖分析"],
     key="main_tabs", on_change="rerun")
 
 
@@ -467,13 +493,7 @@ if tab_collections.open:
     if not all_c:
         st.info("暂无收藏夹。")
     else:
-        def _col_label(x):
-            if x.get("builtin"):
-                return f"{x['name']}（内置，只读）"
-            tag = "（📡 星座）" if x.get("kind") == "constellation" else "（我的）"
-            return f"{x['name']}{tag}"
-
-        labels = [_col_label(x) for x in all_c]
+        labels = [_collection_label(x) for x in all_c]
         idx = st.selectbox("选择收藏夹", range(len(all_c)),
                            format_func=lambda i: labels[i], key="col_sel")
         c = all_c[idx]
@@ -718,19 +738,11 @@ if tab_download.open:
     st.caption("用途：把选中的收藏夹合并、去重，生成成品 TLE 文件；"
                "只想查看某个夹的内容请用 ②页的“查看本夹全部卫星”。")
     all_cols = sl.load_all_collections()
-
-    def _col_label(x):
-        return f"📡 {x['name']}（星座）" if x.get("kind") == "constellation" else x["name"]
-
-    def _strip_col_label(n: str) -> str:
-        n = n[len("📡 "):] if n.startswith("📡 ") else n
-        return n[:-len("（星座）")] if n.endswith("（星座）") else n
-
-    names = [_col_label(x) for x in all_cols]
+    names = [_collection_label(x) for x in all_cols]
     sel_names = st.multiselect("选择要解析的收藏夹", names, key="resolve_sel")
     r1, r2 = st.columns(2)
     if r1.button("解析下载", key="btn_resolve"):
-        real = [_strip_col_label(n) for n in sel_names]
+        real = [_strip_collection_label(n) for n in sel_names]
         if not real:
             st.warning("请至少选择一个收藏夹。")
         else:
@@ -752,7 +764,7 @@ if tab_download.open:
                     hide_index=True)
     if r2.button("强制更新（重下全集与星座缓存）", key="btn_force_refresh",
                  help="忽略缓存，重新下载全集 active.tle 与选中星座分组；编号清单随全集自动同步"):
-        real = [_strip_col_label(n) for n in sel_names]
+        real = [_strip_collection_label(n) for n in sel_names]
         with st.spinner("正在强制更新（联网）……"):
             n_req = sl.force_refresh_collections(real)
         flash(f"强制更新完成：本次请求 {n_req} 次（全集 + 选中星座分组），编号清单已随全集同步。")
@@ -881,3 +893,133 @@ if tab_constellations.open:
             st.dataframe(pd.DataFrame(
                 [{"卫星名": r["name"], "NORAD 编号": r["norad_id"]} for r in recs[:100]]),
                 hide_index=True)
+
+
+# ==================== ⑤ 覆盖分析 ====================
+
+if tab_analysis.open:
+    st.subheader("覆盖分析")
+    st.caption("选好收藏夹（卫星来源）后，设置目标区域与时间直接开算；"
+               "覆盖判定参数沿用已拍板默认值（视场半角 30°、最小仰角 10°、1 分钟步长 + 10 秒精化）。")
+    all_cols = sl.load_all_collections()
+    cov_names = [_collection_label(x) for x in all_cols]
+
+    c1, c2 = st.columns(2)
+    with c1:
+        cov_mode = st.radio("目标区域", ["点+半径", "地区多边形"], key="cov_mode",
+                            horizontal=True)
+        grid_spacing = 0.2
+        if cov_mode == "点+半径":
+            la, lo, ra = st.columns(3)
+            cov_lat = la.number_input("纬度", value=30.25, step=0.01, key="cov_lat")
+            cov_lon = lo.number_input("经度", value=120.15, step=0.01, key="cov_lon")
+            cov_rad = ra.number_input("半径(km)", value=5.0, min_value=0.1, step=0.5,
+                                      key="cov_rad")
+        else:
+            geo_dir = sl.PROJECT_ROOT / "data" / "geo"
+            geo_files = {p.stem: str(p) for p in sorted(geo_dir.glob("*.json"))}
+            cov_geo = st.selectbox("预设地区", list(geo_files), key="cov_geo")
+            cov_grid = st.number_input("网格间距(°)", value=0.2, min_value=0.05,
+                                       step=0.05, key="cov_grid")
+            grid_spacing = float(cov_grid)
+        d1, d2 = st.columns(2)
+        cov_t0 = d1.datetime_input("开始时间 (UTC)", value=datetime(2026, 8, 3, 0, 0,
+                                                                    tzinfo=timezone.utc),
+                                   key="cov_t0")
+        cov_t1 = d2.datetime_input("结束时间 (UTC)", value=datetime(2026, 8, 4, 0, 0,
+                                                                    tzinfo=timezone.utc),
+                                   key="cov_t1")
+        cov_sats = st.multiselect("卫星来源（收藏夹）", cov_names, key="cov_cols")
+    with c2:
+        p1, p2 = st.columns(2)
+        cov_fov = p1.number_input("视场半角(°)", value=30.0, min_value=1.0, max_value=89.0,
+                                  step=1.0, key="cov_fov")
+        cov_elev = p2.number_input("最小仰角(°)", value=10.0, min_value=0.0, max_value=85.0,
+                                   step=1.0, key="cov_elev")
+        p3, p4 = st.columns(2)
+        cov_step = p3.number_input("时间步长(分钟)", value=1, min_value=1, step=1,
+                                   key="cov_step")
+        cov_refine = p4.number_input("边界精化(秒)", value=10, min_value=0, step=5,
+                                     key="cov_refine")
+        cov_gantt = st.checkbox("生成甘特图", value=True, key="cov_gantt")
+        st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。"
+                   "结果会同时保存到 output/ 目录。")
+
+    if st.button("开始覆盖分析", key="btn_cov_run", type="primary"):
+        real_cols = [_strip_collection_label(n) for n in cov_sats]
+        if not real_cols:
+            st.warning("请至少选择一个收藏夹作为卫星来源。")
+        elif cov_t1 <= cov_t0:
+            st.warning("结束时间需晚于开始时间。")
+        else:
+            bar = st.progress(0.0, text="解析卫星（走缓存，不重复下载）……")
+            def cb(done, total, msg):
+                bar.progress(min(done / total, 1.0), text=msg)
+            recs = sl.resolve_collections_to_records(real_cols, progress=cb)
+            if not recs:
+                st.warning("没有解析到卫星（可能缓存缺失且数据源不可用），请先到③页解析。")
+            else:
+                ts = sl.load.timescale(builtin=True)
+                t, dt_list = cov.make_time_array(
+                    ts, cov_t0.strftime("%Y-%m-%d %H:%M:%S"),
+                    cov_t1.strftime("%Y-%m-%d %H:%M:%S"), int(cov_step))
+                cfg = {
+                    "region_name": "",
+                    "region_mode": "circle" if cov_mode == "点+半径" else "polygon",
+                    "tle_file": "GUI 收藏夹解析（合并 TLE）",
+                    "fov_half_angle_deg": float(cov_fov),
+                    "min_elevation_deg": float(cov_elev),
+                    "step_minutes": int(cov_step),
+                    "refine_step_seconds": int(cov_refine),
+                    "grid_spacing_deg": grid_spacing,
+                    "save_gantt": bool(cov_gantt),
+                    "max_gantt_rows": 15,
+                }
+                if cov_mode == "点+半径":
+                    region = {"mode": "circle", "lat": float(cov_lat),
+                              "lon": float(cov_lon), "radius_km": float(cov_rad)}
+                    cfg["target"] = {"lat": float(cov_lat), "lon": float(cov_lon),
+                                     "radius_km": float(cov_rad)}
+                    cfg["region_name"] = f"圆心({cov_lat:.4f},{cov_lon:.4f}) 半径{cov_rad}km"
+                else:
+                    polygon = cov.load_region_polygon(geo_files[cov_geo])
+                    grid_lats, grid_lons = cov.make_grid_points(polygon, grid_spacing)
+                    region = {"mode": "polygon", "lats": grid_lats, "lons": grid_lons}
+                    cfg["region_name"] = cov_geo
+                sats = sl.records_to_satellites(recs)
+                all_windows = []
+                for i, sat in enumerate(sats):
+                    bar.progress((i + 1) / len(sats),
+                                 text=f"分析 {sat.name}（{i + 1}/{len(sats)}）")
+                    windows = cov.analyze_one_satellite(sat, t, dt_list, region, cfg)
+                    all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
+                bar.progress(1.0, text="整理输出……")
+                if not all_windows:
+                    st.warning("该时段内没有卫星覆盖目标区域（无窗口）。可尝试：更长时段、"
+                               "更大的目标区域，或更大的视场角。")
+                else:
+                    dfs = cov.build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats))
+                    st.session_state["cov_result"] = {
+                        "dfs": dfs, "cfg": cfg, "n_sats": len(sats),
+                        "n_win": len(all_windows),
+                    }
+
+    res = st.session_state.get("cov_result")
+    if res:
+        dfs = res["dfs"]
+        df_windows, df_summary, df_state, df_gaps = dfs
+        st.success(f"分析完成：{res['n_sats']} 颗卫星参与，{len(df_summary)} 颗有覆盖，"
+                   f"共 {res['n_win']} 个窗口（目标：{res['cfg']['region_name']}）")
+        with st.expander("卫星汇总（每颗星覆盖时长/覆盖率，按时长排名）"):
+            st.dataframe(df_summary, hide_index=True, width="stretch")
+        with st.expander("整体状态表（每分钟几颗星在覆盖）"):
+            st.dataframe(df_state, hide_index=True, width="stretch")
+        with st.expander("窗口明细（卫星视角，开始/结束/时长）"):
+            st.dataframe(df_windows, hide_index=True, width="stretch")
+        if (sl.PROJECT_ROOT / "output" / "availability_curve.png").exists():
+            g1, g2 = st.columns(2)
+            g1.image(str(sl.PROJECT_ROOT / "output" / "availability_curve.png"),
+                     caption="可用卫星数曲线")
+            if res["cfg"].get("save_gantt") and \
+                    (sl.PROJECT_ROOT / "output" / "gantt.png").exists():
+                g2.image(str(sl.PROJECT_ROOT / "output" / "gantt.png"), caption="覆盖甘特图")

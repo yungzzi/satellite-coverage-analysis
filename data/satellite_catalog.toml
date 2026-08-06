@@ -10,7 +10,7 @@
 # ============================================================
 
 [[collections]]
-name = "中国遥感系列"
+name = "中国遥感系列（示例）"
 description = "遥感卫星家族（名字规则，自动纳入新星；数据来自 CelesTrak 编目）"
 entries = [
   { type = "name_filter", value = "YAOGAN" },

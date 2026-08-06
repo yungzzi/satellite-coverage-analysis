@@ -941,14 +941,42 @@ def resolve_collections_to_records(collection_names: List[str],
     return list(records.values())
 
 
+def _tle_derived_meta(line1: str, line2: str) -> dict:
+    """从 TLE 推算出可展示的倾角/高度（近似值），避免大星座逐个联网补档案。
+
+    倾角：TLE 第 2 行第 9~16 列（0 起 8:16）。
+    高度：平均运动 n（转/天）→ 周期 T（分）→ 半长轴 a（km），高度 ≈ a - 地球平均半径。
+    注意这是平均轨道的近似值，仅用于展示（标注"约"），覆盖计算仍用 SGP4 精算。
+    """
+    out = {"inclination": None, "altitude_km": None}
+    if not line2 or not line2.startswith("2 "):
+        return out
+    try:
+        out["inclination"] = float(line2[8:16])
+    except (ValueError, IndexError):
+        pass
+    try:
+        n = float(line2[52:63])   # 平均运动（转/天）
+        if n > 0:
+            period_min = 1440.0 / n
+            mu = 398600.4418      # 地球引力常数 km^3/s^2
+            a = (mu * (period_min * 60.0 / (2.0 * 3.141592653589793)) ** 2) ** (1.0 / 3.0)
+            out["altitude_km"] = round(a - 6371.0, 1)
+    except (ValueError, IndexError):
+        pass
+    return out
+
+
 def resolve_collection_with_meta(collection: dict,
                                  max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
                                  offline: bool = False,
                                  progress=None) -> List[dict]:
     """解析收藏夹并补全元数据（所属/发射日期/高度/倾角），供 GUI 完整展示。
 
-    元数据来源：名字规则直接用已缓存的搜索档案表；
-    编号清单里的星逐个用 records.php?CATNR= 补（缓存到 meta/catnr_*.csv）。
+    元数据来源：名字规则直接用已缓存的搜索档案表（records.php 缓存）；
+    缺失的星只读已缓存的 records.php?CATNR= 档案（meta/catnr_*.csv），
+    **不再主动联网逐个补**——批量请求会被 CelesTrak 拒绝（Q82 实测 403/10054）。
+    高度/倾角用 TLE 推导的近似值兜底，保证"能看到全部卫星"且秒开。
     """
     recs = resolve_collection(collection, max_age_hours, offline, progress=progress)
     meta_map = {}
@@ -960,21 +988,24 @@ def resolve_collection_with_meta(collection: dict,
                     meta_map[m["norad_id"]] = m
     missing = [r["norad_id"] for r in recs if r["norad_id"] not in meta_map]
     for rid in missing:
-        for m in search_metadata_by_norad(rid, max_age_hours, offline=offline):
+        for m in search_metadata_by_norad(rid, max_age_hours, offline=True):
             if m.get("norad_id") is not None:
                 meta_map[m["norad_id"]] = m
-        time.sleep(0.1)
     out = []
     for r in recs:
         m = meta_map.get(r["norad_id"], {})
+        d = _tle_derived_meta(r.get("line1", ""), r.get("line2", ""))
         out.append({
             "name": r.get("name") or m.get("name", ""),
             "norad_id": r["norad_id"],
             "country": m.get("country", ""),
             "launch_date": m.get("launch_date", ""),
             "object_type": m.get("object_type", ""),
-            "altitude_km": m.get("altitude_km"),
-            "inclination": m.get("inclination"),
+            "altitude_km": m.get("altitude_km") if m.get("altitude_km") is not None
+                           else d["altitude_km"],
+            "inclination": m.get("inclination") if m.get("inclination") is not None
+                           else d["inclination"],
+            "meta_complete": bool(m),
             "line1": r.get("line1"),
             "line2": r.get("line2"),
         })

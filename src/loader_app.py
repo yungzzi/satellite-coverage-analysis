@@ -633,9 +633,14 @@ if tab_collections.open:
                     else:
                         st.success(f"本夹共 {len(rows_meta)} 颗卫星")
                         st.caption("需要保存成 TLE 文件请到 ③下载与自检 页“解析下载”。")
+                        n_incomplete = sum(1 for x in rows_meta if not x.get("meta_complete"))
+                        if n_incomplete:
+                            st.caption(f"其中 {n_incomplete} 颗星的所属/发射日期等档案未联网补全"
+                                       "（星数较多，避免被数据源拒绝）；高度/倾角为轨道近似值。")
                         if rows_meta:
                             df_all = pd.DataFrame(rows_meta)
                             df_all["类型"] = df_all["object_type"].map(sl._object_type_label)
+                            df_all = df_all.replace("", "—").fillna("—")
                             st.dataframe(df_all.rename(columns={
                                 "name": "卫星名", "norad_id": "NORAD 编号", "country": "所属",
                                 "launch_date": "发射日期", "altitude_km": "高度km",
@@ -762,7 +767,7 @@ if tab_download.open:
     st.subheader("自检（联网部分需要网络）")
     with st.expander("自检是什么？为什么要自检？"):
         st.markdown(
-            "**自检 = 自动检查“卫星数据加载器”的每个核心环节是否正常**（42 项，7 组）。\n\n"
+            "**自检 = 自动检查“卫星数据加载器”的每个核心环节是否正常**（43 项，7 组）。\n\n"
             "**为什么要做**：本软件的所有卫星数据都来自 CelesTrak 网站，中间还要经过本地缓存、"
             "收藏夹、解析、合并去重等环节。网络波动、缓存损坏、程序更新都可能让某一环悄悄出错，"
             "自检能把这些环节逐项过一遍，确保进入覆盖分析的卫星数据是可靠的。\n\n"

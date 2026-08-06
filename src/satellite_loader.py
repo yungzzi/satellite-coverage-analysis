@@ -202,11 +202,15 @@ def _age_hours(path: Path) -> float:
 
 def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
                   force: bool = False, offline: bool = False,
-                  retries: int = 3) -> Optional[Path]:
+                  retries: int = 2) -> Optional[Path]:
     """下载文本文件并缓存；缓存未过期直接复用。返回本地文件路径。
 
     - cache_name: 缓存文件名（如 satcat.csv / search_YAOGAN.txt）
     - offline   : True 时不联网，只用缓存；缓存缺失则返回 None
+
+    容错（Q83）：HTTP 403 是 CelesTrak 的限流/禁止信号（usage-policy 说明），
+    不重试；下载失败时若本地有**过期的旧缓存**，回退使用它（OpenSpace 同款策略），
+    避免"网络抖动一次就丢数据"。
     """
     _ensure_dirs()
     cache_path = CACHE_DIR / cache_name
@@ -218,18 +222,33 @@ def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_
         print(f"  [离线] 缓存 {cache_name} 缺失或过期，且离线模式不联网，跳过下载。")
         return None
 
+    def _fallback_stale(reason: str) -> Optional[Path]:
+        if cache_path.exists():
+            print(f"  [警告] {reason}；本地有过期缓存，回退使用：{cache_name}")
+            return cache_path
+        return None
+
     data = None
     last_err = None
     for attempt in range(1, retries + 1):   # 网络抖动自动重试
         print(f"  [下载] {url}（第 {attempt}/{retries} 次尝试）")
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 data = resp.read()
             break
         except urllib.error.HTTPError as e:
-            print(f"  [失败] HTTP {e.code}: {url}")
-            return None
+            body = ""
+            try:
+                body = e.read(300).decode("utf-8", errors="replace").strip()
+            except Exception:
+                pass
+            detail = f"：{body}" if body else ""
+            print(f"  [失败] HTTP {e.code}: {url}{detail}")
+            if e.code == 403:
+                print("  [提示] 403 通常是 CelesTrak 限流/禁止（见 celestrak.org/usage-policy.php）；"
+                      "请降低请求频率或稍后重试。")
+            return _fallback_stale(f"HTTP {e.code}")   # 4xx 不重试
         except Exception as e:
             last_err = e
             print(f"  [重试] 网络错误：{e}")
@@ -237,7 +256,7 @@ def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_
                 time.sleep(2 * attempt)
     if data is None:
         print(f"  [失败] 重试 {retries} 次仍失败：{last_err}")
-        return None
+        return _fallback_stale("下载失败")
 
     # 先写临时文件再改名，避免半截文件污染缓存
     fd, tmp_name = tempfile.mkstemp(dir=str(CACHE_DIR), suffix=".tmp")
@@ -281,7 +300,7 @@ def search_metadata(keyword: str,
     path = download_text(url, f"meta/{_safe_cache_name(keyword, '_meta.csv')}",
                          max_age_hours, offline=offline)
     if path is None:
-        return []
+        return None   # 下载失败/离线无缓存；None=拿不到数据，[]=确实没有匹配
 
     out = []
     for row in _parse_meta_csv(path):
@@ -358,7 +377,7 @@ def search_metadata_by_norad(norad_id: int,
     path = download_text(url, f"meta/catnr_{norad_id}.csv",
                          max_age_hours, offline=offline)
     if path is None:
-        return []
+        return None   # 同上：None=拿不到数据
     return [_row_to_meta(row) for row in _parse_meta_csv(path)]
 
 
@@ -377,7 +396,7 @@ def search_metadata_by_intdes(intdes: str,
     path = download_text(url, f"meta/{_safe_cache_name(intdes, '_intdes.csv')}",
                          max_age_hours, offline=offline)
     if path is None:
-        return []
+        return None   # 同上：None=拿不到数据
     return [_row_to_meta(row) for row in _parse_meta_csv(path)]
 
 
@@ -982,15 +1001,24 @@ def resolve_collection_with_meta(collection: dict,
     meta_map = {}
     for e in collection.get("entries", []):
         if e.get("type") == "name_filter":
-            for m in search_metadata(e["value"], max_results=10000,
-                                     max_age_hours=max_age_hours, offline=offline):
-                if m.get("norad_id") is not None:
-                    meta_map[m["norad_id"]] = m
-    missing = [r["norad_id"] for r in recs if r["norad_id"] not in meta_map]
-    for rid in missing:
-        for m in search_metadata_by_norad(rid, max_age_hours, offline=True):
-            if m.get("norad_id") is not None:
-                meta_map[m["norad_id"]] = m
+            meta_rows = search_metadata(e["value"], max_results=10000,
+                                        max_age_hours=max_age_hours, offline=offline)
+            if meta_rows:
+                for m in meta_rows:
+                    if m.get("norad_id") is not None:
+                        meta_map[m["norad_id"]] = m
+    # 星座分组等没有名字规则来源时：用组内星名的公共前缀拉一次档案缓存。
+    # offline=True 只读缓存，绝不联网逐个补档案（Q82/Q83：批量请求会被限流）。
+    if not meta_map and len(recs) >= 2:
+        names = [r.get("name", "") for r in recs if r.get("name")]
+        prefix = longest_common_prefix(names)
+        if len(prefix) >= 3:
+            meta_rows = search_metadata(prefix, max_results=10000,
+                                        max_age_hours=max_age_hours, offline=True)
+            if meta_rows:
+                for m in meta_rows:
+                    if m.get("norad_id") is not None:
+                        meta_map[m["norad_id"]] = m
     out = []
     for r in recs:
         m = meta_map.get(r["norad_id"], {})
@@ -1176,6 +1204,9 @@ def _menu_search():
         return
     print("  正在搜索编目（首次会自动下载并缓存）……")
     rows = search_metadata(keyword=keyword, max_results=300, offline=False)
+    if rows is None:
+        print("  [失败] 数据下载失败（可能被数据源限流/禁止），请稍后重试。")
+        return
     if not rows:
         print(f"  [结果] 没有找到名字含「{keyword}」的卫星。")
         return

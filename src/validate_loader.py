@@ -69,6 +69,9 @@ def test_tle_parse_offline():
 def test_metadata_search_online():
     print("\n== 2. 编目搜索（联网） ==")
     rows = sl.search_metadata("YAOGAN", max_results=10000, offline=False)
+    if rows is None:
+        check("编目搜索成功", False, "下载失败（可能被数据源限流/禁止）")
+        return
     check("编目搜索成功", len(rows) >= 150, f"共 {len(rows)} 条（在轨载荷）")
     if not rows:
         return
@@ -77,18 +80,19 @@ def test_metadata_search_online():
           and bool(r["country"]), f"{r['name']} / {r['country']}")
     check("编目不直接含 TLE（设计如此）", r["has_tle"] is False, "")
     c = sl.search_metadata("YAOGAN", country="PRC", max_results=10000)
-    check("按国家筛选（PRC）", len(c) > 0, f"共 {len(c)} 条")
+    check("按国家筛选（PRC）", c is not None and len(c) > 0,
+          f"共 {len(c) if c else 0} 条")
     a = sl.search_metadata("ISS", max_results=50)
     check("按高度筛选（ISS，约 400km）",
-          any(r.get("altitude_km") and 300 < r["altitude_km"] < 500 for r in a),
-          [f"{r['name']}:{r.get('altitude_km')}" for r in a][:3])
+          a is not None and any(r.get("altitude_km") and 300 < r["altitude_km"] < 500 for r in a),
+          [f"{r['name']}:{r.get('altitude_km')}" for r in (a or [])][:3])
 
 
 def test_cache_behavior():
     print("\n== 3. 缓存行为 ==")
     rows = sl.search_metadata("YAOGAN", max_results=100, offline=False)
     path = sl.CACHE_DIR / "meta" / "YAOGAN_meta.csv"
-    if not rows or not path.exists():
+    if rows is None or not path.exists():
         check("缓存文件存在", False, "首次下载失败")
         return
     mtime1 = path.stat().st_mtime

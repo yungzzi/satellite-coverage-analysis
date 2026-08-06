@@ -238,21 +238,26 @@ if tab_search.open:
             with st.spinner("正在按编号搜索……"):
                 rows = sl.search_metadata_by_norad(int(norad_str))
             st.session_state["search_kind"] = "norad"
-            st.session_state["search_note"] = ""
+            st.session_state["search_note"] = ("数据下载失败（可能被数据源限流），请稍后重试。"
+                                               if rows is None else "")
             st.session_state["search_full"] = rows
             st.session_state.pop("search_multi", None)   # 新搜索清空选择
         elif intdes_str:
             with st.spinner("正在按国际编号搜索……"):
                 rows = sl.search_metadata_by_intdes(intdes_str)
             st.session_state["search_kind"] = "intdes"
-            st.session_state["search_note"] = ""
+            st.session_state["search_note"] = ("数据下载失败（可能被数据源限流），请稍后重试。"
+                                               if rows is None else "")
             st.session_state["search_full"] = rows
             st.session_state.pop("search_multi", None)
         elif kw:
             note = ""
             with st.spinner("正在搜索并下载缓存……"):
                 rows = _name_search(kw)
-            if not rows:
+            if rows is None:
+                note = "数据下载失败（可能被数据源限流），请稍后重试。"
+                rows = []
+            elif not rows:
                 # 变体重查：连字符 <-> 空格（Q78 拍板方案，标注来源）
                 variant = kw.replace("-", " ").strip()
                 if variant and variant != kw:
@@ -261,8 +266,8 @@ if tab_search.open:
                         note = f"原名「{kw}」未找到，已按变体「{variant}」查到 {len(rows_v)} 条。"
                         rows = rows_v
                 if not rows:
-                    # 拼写纠错提示：本地名字表编辑距离匹配（Q78 拍板方案，不自动替换）
-                    sug = sl.suggest_similar_names(kw, n=3)
+                    # 拼写纠错提示：本地名字表编辑距离匹配（只用已有缓存，不触发下载）
+                    sug = sl.suggest_similar_names(kw, n=3, offline=True)
                     if sug:
                         note = f"「{kw}」未找到。你是不是想找：{'、'.join(sug)}？"
             st.session_state["search_note"] = note
@@ -277,9 +282,11 @@ if tab_search.open:
     if note:
         st.warning(note)
     if rows is None:
-        st.info("先在上方填写搜索条件（名字 / NORAD 编号 / 国际编号）点“搜索”，结果会出现在这里。")
+        if not note:
+            st.info("先在上方填写搜索条件（名字 / NORAD 编号 / 国际编号）点“搜索”，结果会出现在这里。")
     elif not rows:
-        st.info("没有找到匹配的卫星，换个关键字试试。")
+        if not note:
+            st.info("没有找到匹配的卫星，换个关键字试试。")
     else:
         df = pd.DataFrame(rows)
         df["序号"] = range(1, len(df) + 1)
@@ -631,6 +638,9 @@ if tab_collections.open:
                     except Exception as ex:
                         st.error(f"解析失败：{ex}")
                     else:
+                        if not rows_meta:
+                            st.warning("未能获取卫星数据：缓存被清空且数据源下载被拒（限流/网络异常）时会出现；"
+                                       "请稍后重试，或到③页重新解析。")
                         st.success(f"本夹共 {len(rows_meta)} 颗卫星")
                         st.caption("需要保存成 TLE 文件请到 ③下载与自检 页“解析下载”。")
                         n_incomplete = sum(1 for x in rows_meta if not x.get("meta_complete"))
@@ -721,6 +731,8 @@ if tab_download.open:
                     bar.progress(0.0, text=msg)
             recs = sl.resolve_collections_to_records(sel_names, progress=cb)
             path = sl.save_resolved_tle(" + ".join(sel_names), recs)
+            if not recs:
+                st.warning("没有解析到卫星：缓存被清空且数据源下载被拒（限流）时会出现；请稍后重试。")
             st.success(f"解析完成：{len(recs)} 颗卫星（按 NORAD 编号去重）")
             st.caption(f"已合并为一个文件：`{path}`（下次解析直接复用缓存，不重复下载）")
             if recs:
@@ -750,7 +762,9 @@ if tab_download.open:
                        "resolved/…=每个收藏夹合并的TLE（重点看这个）")
         else:
             st.info("暂无缓存文件。")
-    confirm_clear = st.checkbox("确认清空全部缓存（下次会自动重新下载）", key="clear_confirm")
+    confirm_clear = st.checkbox(
+        "确认清空全部缓存（下次需全部重新下载；CelesTrak 有 2 小时更新窗口和频率限制，"
+        "刚清空时可能下载失败，建议仅在缓存损坏时清空）", key="clear_confirm")
     if st.button("清空缓存", key="btn_clear_cache"):
         if not confirm_clear:
             st.warning("请先勾选确认。")
@@ -827,6 +841,8 @@ if tab_constellations.open:
                 recs = sl.resolve_collection(
                     {"entries": [{"type": src["type"], "value": src["value"]}]},
                     offline=False)
+            if not recs:
+                st.warning("未取到该星座数据：缓存被清空且数据源下载被拒（限流）时会出现；请稍后重试。")
             st.session_state["cons_preview"] = {"name": c["name"], "recs": recs}
             st.rerun()
         if b2.button("加入收藏夹（自动建夹）", key="btn_cons_add"):

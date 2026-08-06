@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-loader_app.py —— 卫星数据加载器图形界面（Streamlit，阶段 1.5）
+loader_app.py —— 卫星覆盖分析工作台图形界面（Streamlit）
 
 只做"卫星数据导入"这一部分的 GUI，三个页签：
   ① 搜索与收藏：按名字/所属国/发射年份/高度搜索，勾选后加入收藏夹
@@ -32,6 +32,7 @@ import pandas as pd
 import streamlit as st
 
 import coverage_analysis as cov
+import query_coverage as qc
 import satellite_loader as sl
 import validate_loader
 
@@ -161,10 +162,10 @@ def _reset_filters():
         st.session_state["search_full"] = rows
 
 
-st.set_page_config(page_title="卫星数据加载器", page_icon="🛰️", layout="wide")
+st.set_page_config(page_title="卫星覆盖分析工作台", page_icon="🛰️", layout="wide")
 
-st.title("🛰️ 卫星数据加载器")
-st.caption("搜索 / 收藏夹 / 下载 —— 只负责卫星数据导入，覆盖分析（coverage_analysis.py）不动。")
+st.title("🛰️ 卫星覆盖分析工作台")
+st.caption("卫星导入 / 星座 / 覆盖分析 / 选星决策 —— 一体化工作台")
 show_flash()
 
 # 拦截 Streamlit 的页面级快捷键（c=清空缓存、r=重新运行），
@@ -230,8 +231,8 @@ with st.sidebar:
         st.stop()
     st.caption("提示：浏览器不允许网页自己关闭标签页；退出后页面会变成白屏提示，手动关即可。")
 
-tab_search, tab_collections, tab_download, tab_constellations, tab_analysis = st.tabs(
-    ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检", "④ 星座导入", "⑤ 覆盖分析"],
+tab_search, tab_collections, tab_constellations, tab_download, tab_analysis = st.tabs(
+    ["① 搜索与收藏", "② 收藏夹管理", "③ 星座导入", "④ 下载与自检", "⑤ 覆盖分析"],
     key="main_tabs", on_change="rerun")
 
 
@@ -811,7 +812,7 @@ if tab_download.open:
     st.subheader("自检（联网部分需要网络）")
     with st.expander("自检是什么？为什么要自检？"):
         st.markdown(
-            "**自检 = 自动检查“卫星数据加载器”的每个核心环节是否正常**（43 项，7 组）。\n\n"
+            "**自检 = 自动检查“卫星覆盖分析工作台”数据环节是否正常**（43 项，7 组）。\n\n"
             "**为什么要做**：本软件的所有卫星数据都来自 CelesTrak 网站，中间还要经过本地缓存、"
             "收藏夹、解析、合并去重等环节。网络波动、缓存损坏、程序更新都可能让某一环悄悄出错，"
             "自检能把这些环节逐项过一遍，确保进入覆盖分析的卫星数据是可靠的。\n\n"
@@ -1010,6 +1011,38 @@ if tab_analysis.open:
         df_windows, df_summary, df_state, df_gaps = dfs
         st.success(f"分析完成：{res['n_sats']} 颗卫星参与，{len(df_summary)} 颗有覆盖，"
                    f"共 {res['n_win']} 个窗口（目标：{res['cfg']['region_name']}）")
+        x1, x2 = st.columns([1, 3])
+        if x1.button("导出 Excel", key="btn_cov_excel"):
+            meta = {
+                "region_name": res["cfg"].get("region_name", ""),
+                "region_mode": res["cfg"].get("region_mode", "circle"),
+                "start_utc": str(df_state["start_utc"].iloc[0])[:19],
+                "end_utc": str(df_state["end_utc"].iloc[-1])[:19],
+                "step_minutes": res["cfg"].get("step_minutes", 1),
+                "refine_step_seconds": res["cfg"].get("refine_step_seconds", 10),
+                "fov_half_angle_deg": res["cfg"].get("fov_half_angle_deg", 30.0),
+                "min_elevation_deg": res["cfg"].get("min_elevation_deg", 10.0),
+                "grid_spacing_deg": res["cfg"].get("grid_spacing_deg", 0.2),
+                "n_satellites_total": res["n_sats"],
+                "n_satellites_covered": len(df_summary),
+            }
+            out_dir = sl.PROJECT_ROOT / "output"
+            out_dir.mkdir(exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = str(out_dir / f"coverage_gui_{stamp}.xlsx")
+            qc.export_excel(meta, df_state, df_windows, df_summary, df_gaps,
+                            out_path, "整个分析时段")
+            st.session_state["cov_xlsx"] = {"data": Path(out_path).read_bytes(),
+                                            "name": Path(out_path).name,
+                                            "path": out_path}
+            st.rerun()
+        xlsx = st.session_state.get("cov_xlsx")
+        if xlsx:
+            st.download_button(
+                "下载 Excel", data=xlsx["data"], file_name=xlsx["name"],
+                key="btn_cov_dl",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.caption(f"已保存：{xlsx['path']}")
         with st.expander("卫星汇总（每颗星覆盖时长/覆盖率，按时长排名）"):
             st.dataframe(df_summary, hide_index=True, width="stretch")
         with st.expander("整体状态表（每分钟几颗星在覆盖）"):

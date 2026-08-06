@@ -109,6 +109,17 @@ def _slider_bounds(values: list):
     return (lo, hi)
 
 
+def _name_search(keyword: str) -> list:
+    """按名字搜索（附带界面上的 所属国/发射年份/高度 过滤），搜索与重置共用。"""
+    return sl.search_metadata(
+        keyword,
+        country=str(st.session_state.get("ctry", "")).strip() or None,
+        launch_year=str(st.session_state.get("ly", "")).strip() or None,
+        min_alt_km=st.session_state.get("minalt", 0.0) or None,
+        max_alt_km=st.session_state.get("maxalt", 0.0) or None,
+        offline=False)
+
+
 def _reset_filters():
     """重置结果内筛选（on_click 回调）：递增"筛选版本号"让所有筛选控件换新 key
     重建（自动回到默认值），并重新拉取最新结果。
@@ -120,13 +131,7 @@ def _reset_filters():
     st.session_state.pop("search_multi", None)
     kw = str(st.session_state.get("kw", "")).strip()
     if kw:
-        rows = sl.search_metadata(
-            kw, max_results=500,
-            country=str(st.session_state.get("ctry", "")).strip() or None,
-            launch_year=str(st.session_state.get("ly", "")).strip() or None,
-            min_alt_km=st.session_state.get("minalt", 0.0) or None,
-            max_alt_km=st.session_state.get("maxalt", 0.0) or None,
-            offline=False)
+        rows = _name_search(kw)
         st.session_state["search_full"] = rows
 
 
@@ -199,8 +204,8 @@ with st.sidebar:
         st.stop()
     st.caption("提示：浏览器不允许网页自己关闭标签页；退出后页面会变成白屏提示，手动关即可。")
 
-tab_search, tab_collections, tab_download = st.tabs(
-    ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检"],
+tab_search, tab_collections, tab_download, tab_constellations = st.tabs(
+    ["① 搜索与收藏", "② 收藏夹管理", "③ 下载与自检", "④ 星座导入"],
     key="main_tabs", on_change="rerun")
 
 
@@ -233,23 +238,34 @@ if tab_search.open:
             with st.spinner("正在按编号搜索……"):
                 rows = sl.search_metadata_by_norad(int(norad_str))
             st.session_state["search_kind"] = "norad"
+            st.session_state["search_note"] = ""
             st.session_state["search_full"] = rows
             st.session_state.pop("search_multi", None)   # 新搜索清空选择
         elif intdes_str:
             with st.spinner("正在按国际编号搜索……"):
                 rows = sl.search_metadata_by_intdes(intdes_str)
             st.session_state["search_kind"] = "intdes"
+            st.session_state["search_note"] = ""
             st.session_state["search_full"] = rows
             st.session_state.pop("search_multi", None)
         elif kw:
+            note = ""
             with st.spinner("正在搜索并下载缓存……"):
-                rows = sl.search_metadata(
-                    kw, max_results=500,
-                    country=country.strip() or None,
-                    launch_year=launch_year.strip() or None,
-                    min_alt_km=min_alt or None,
-                    max_alt_km=max_alt or None,
-                    offline=False)
+                rows = _name_search(kw)
+            if not rows:
+                # 变体重查：连字符 <-> 空格（Q78 拍板方案，标注来源）
+                variant = kw.replace("-", " ").strip()
+                if variant and variant != kw:
+                    rows_v = _name_search(variant)
+                    if rows_v:
+                        note = f"原名「{kw}」未找到，已按变体「{variant}」查到 {len(rows_v)} 条。"
+                        rows = rows_v
+                if not rows:
+                    # 拼写纠错提示：本地名字表编辑距离匹配（Q78 拍板方案，不自动替换）
+                    sug = sl.suggest_similar_names(kw, n=3)
+                    if sug:
+                        note = f"「{kw}」未找到。你是不是想找：{'、'.join(sug)}？"
+            st.session_state["search_note"] = note
             st.session_state["search_kind"] = "name"
             st.session_state["search_full"] = rows
             st.session_state.pop("search_multi", None)
@@ -257,6 +273,9 @@ if tab_search.open:
             st.warning("请至少填写一个搜索条件：名字关键字 / NORAD 编号 / 国际编号。")
 
     rows = st.session_state.get("search_full")
+    note = st.session_state.get("search_note")
+    if note:
+        st.warning(note)
     if rows is None:
         st.info("先在上方填写搜索条件（名字 / NORAD 编号 / 国际编号）点“搜索”，结果会出现在这里。")
     elif not rows:
@@ -351,6 +370,8 @@ if tab_search.open:
         selected = st.multiselect("选择卫星（配合上方全选/清空按钮）", options,
                                   key="search_multi")
         st.caption(f"结果共 {len(df)} 条，筛选后 {len(view)} 条，当前已选 {len(selected)} 颗。")
+        if len(df) > 500:
+            st.caption("结果较多（>500 条），建议用④星座导入一键收藏，或直接存为名字规则，避免逐颗勾选。")
 
         sel_ids = []
         for opt in selected:
@@ -735,7 +756,7 @@ if tab_download.open:
     st.subheader("自检（联网部分需要网络）")
     with st.expander("自检是什么？为什么要自检？"):
         st.markdown(
-            "**自检 = 自动检查“卫星数据加载器”的每个核心环节是否正常**（37 项，6 组）。\n\n"
+            "**自检 = 自动检查“卫星数据加载器”的每个核心环节是否正常**（41 项，7 组）。\n\n"
             "**为什么要做**：本软件的所有卫星数据都来自 CelesTrak 网站，中间还要经过本地缓存、"
             "收藏夹、解析、合并去重等环节。网络波动、缓存损坏、程序更新都可能让某一环悄悄出错，"
             "自检能把这些环节逐项过一遍，确保进入覆盖分析的卫星数据是可靠的。\n\n"
@@ -745,7 +766,8 @@ if tab_download.open:
             "3. 缓存行为——确认第二次查询不再重复下载；\n"
             "4. 收藏夹增删改移——用临时测试夹验证改名/删除/移动（自动清理，不碰你的收藏夹）；\n"
             "5. 收藏夹解析——名字规则 / 编号清单 / 导入文件三种方式都能解析成卫星；\n"
-            "6. 多夹合并去重——确认重复的星只算一次。\n\n"
+            "6. 多夹合并去重——确认重复的星只算一次；\n"
+            "7. 星座导入与搜索增强——星座整组下载、名字规则黑名单过滤（星链不再被截断）、拼写纠错提示。\n\n"
             "**什么时候建议自检**：\n"
             "1. 第一次使用、或软件/代码更新之后；\n"
             "2. 网络不好、下载报过错（比如缓存下载失败）之后；\n"
@@ -764,3 +786,51 @@ if tab_download.open:
                 st.success(f"{name}　{detail}")
             else:
                 st.error(f"{name}　{detail}")
+
+
+# ==================== ④ 星座导入 ====================
+
+if tab_constellations.open:
+    st.subheader("星座导入")
+    st.caption("按用途选一个星座，一键加入收藏夹（自动建夹），之后到③页解析下载整组 TLE；"
+               "遥感家族没有现成 GROUP 分组的走名字规则，新发射的同名星会自动纳入。")
+    cons = sl.load_constellations()
+    if not cons:
+        st.info("暂无星座目录（data/constellations.toml 缺失或为空）。")
+    else:
+        purposes = list(dict.fromkeys(c["purpose"] for c in cons))
+        p1, p2 = st.columns([2, 3])
+        purpose = p1.segmented_control("用途分类", purposes,
+                                       key="cons_purpose", default=purposes[0])
+        cands = [c for c in cons if c["purpose"] == purpose]
+        sel_name = p2.selectbox("星座", [c["name"] for c in cands], key="cons_sel")
+        c = next(x for x in cands if x["name"] == sel_name)
+        src = c["source"]
+        st.markdown(f"**{c['name']}** —— {c.get('description') or '（暂无简介）'}")
+        st.caption("数据来源：" + ("CelesTrak 整组下载（GROUP=" + src["value"] + "）"
+                                   if src["type"] == "celestrak_group"
+                                   else "名字规则（关键字 " + src["value"] + "）"))
+        b1, b2 = st.columns(2)
+        if b1.button("预览成员数", key="btn_cons_preview"):
+            with st.spinner("正在下载整组 TLE（首次稍慢，之后走缓存）……"):
+                recs = sl.resolve_collection(
+                    {"entries": [{"type": src["type"], "value": src["value"]}]},
+                    offline=False)
+            st.session_state["cons_preview"] = {"name": c["name"], "recs": recs}
+            st.rerun()
+        if b2.button("加入收藏夹（自动建夹）", key="btn_cons_add"):
+            _snapshot()
+            if sl.find_collection(sl.load_user_collections(), c["name"]) is None:
+                sl.create_collection(c["name"])
+            ok = sl.add_entry(c["name"], src["type"], src["value"])
+            flash(f"已把「{c['name']}」加入收藏夹" if ok
+                  else "该收藏夹里已有相同条目，未重复添加。",
+                  kind="success" if ok else "warning")
+            st.rerun()
+        prev = st.session_state.get("cons_preview")
+        if prev and prev.get("name") == c["name"]:
+            recs = prev["recs"]
+            st.success(f"「{c['name']}」解析到 {len(recs)} 颗卫星（按 NORAD 编号去重）")
+            st.dataframe(pd.DataFrame(
+                [{"卫星名": r["name"], "NORAD 编号": r["norad_id"]} for r in recs[:100]]),
+                hide_index=True)

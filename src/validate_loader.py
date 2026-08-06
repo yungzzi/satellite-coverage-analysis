@@ -193,6 +193,18 @@ def test_multi_collection_merge():
         shutil.rmtree(tmp.parent, ignore_errors=True)
 
 
+def test_search_enhancements():
+    print("\n== 7. 星座导入与搜索增强（黑名单/分组/拼写） ==")
+    cons = sl.load_constellations()
+    check("星座目录可读", len(cons) > 0, f"{len(cons)} 个星座条目")
+    recs = sl._records_by_name_filter("STARLINK", 24, offline=False)
+    check("名字规则黑名单不截断星链", len(recs) >= 10000, f"共 {len(recs)} 颗")
+    g = sl._records_by_group("gps-ops", 24, offline=False)
+    check("星座分组下载（gps-ops）", len(g) > 0, f"共 {len(g)} 颗")
+    sug = sl.suggest_similar_names("STARLNK", offline=False)
+    check("拼写纠错提示", any("STARLINK" in s for s in sug), str(sug))
+
+
 def run_all() -> list:
     """运行全部自检，返回 [(名称, 是否通过, 说明), ...]；CLI 和 GUI 共用。"""
     global PASS, FAIL, RESULTS
@@ -206,6 +218,7 @@ def run_all() -> list:
     test_collections_crud()
     test_resolve()
     test_multi_collection_merge()
+    test_search_enhancements()
     return list(RESULTS)
 
 

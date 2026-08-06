@@ -1,0 +1,110 @@
+# ============================================================
+# 星座目录（④页"星座导入"用，入库，可随软件更新）
+#
+# source.type 两种：
+#   celestrak_group = CelesTrak 整组下载（gp.php?GROUP=...），一个请求一整组
+#   name_filter     = 名字规则（按关键字匹配全集在轨载荷，新发射自动纳入）
+# purpose 用途分类：遥感 / 通信（含互联网） / 导航 / 其他
+# ============================================================
+
+[[constellations]]
+name = "星链 Starlink"
+purpose = "通信（含互联网）"
+source = { type = "celestrak_group", value = "starlink" }
+description = "SpaceX 低轨宽带互联网星座，现役最大的星座（1 万余颗）"
+
+[[constellations]]
+name = "一网 OneWeb"
+purpose = "通信（含互联网）"
+source = { type = "celestrak_group", value = "oneweb" }
+description = "英国低轨宽带互联网星座（600 余颗）"
+
+[[constellations]]
+name = "千帆星座（G60）"
+purpose = "通信（含互联网）"
+source = { type = "name_filter", value = "QIANFAN" }
+description = "中国低轨宽带互联网星座（230 余颗，无现成 GROUP 分组，用名字规则）"
+
+[[constellations]]
+name = "铱星 Iridium"
+purpose = "通信（含互联网）"
+source = { type = "celestrak_group", value = "iridium-NEXT" }
+description = "美国低轨通信星座（含 NEXT 二代）"
+
+[[constellations]]
+name = "遥感系列 YAOGAN"
+purpose = "遥感"
+source = { type = "name_filter", value = "YAOGAN" }
+description = "中国遥感卫星系列（光学 / SAR / 电子侦察等）"
+
+[[constellations]]
+name = "高分系列 GAOFEN"
+purpose = "遥感"
+source = { type = "name_filter", value = "GAOFEN" }
+description = "中国高分辨率对地观测系列（光学 / SAR / 高轨）"
+
+[[constellations]]
+name = "吉林一号 JILIN-1"
+purpose = "遥感"
+source = { type = "name_filter", value = "JILIN-1" }
+description = "长光卫星商业遥感星座"
+
+[[constellations]]
+name = "珠海一号 ZHUHAI-1"
+purpose = "遥感"
+source = { type = "name_filter", value = "ZHUHAI-1" }
+description = "珠海欧比特视频 / 高光谱卫星星座"
+
+[[constellations]]
+name = "珞珈一号 LUOJIA-1"
+purpose = "遥感"
+source = { type = "name_filter", value = "LUOJIA" }
+description = "武汉大学夜光遥感卫星"
+
+[[constellations]]
+name = "天绘 TIANHUI"
+purpose = "遥感"
+source = { type = "name_filter", value = "TIANHUI" }
+description = "中国测绘卫星系列"
+
+[[constellations]]
+name = "资源 ZIYUAN"
+purpose = "遥感"
+source = { type = "name_filter", value = "ZIYUAN" }
+description = "中国资源卫星系列（含资源三号测绘）"
+
+[[constellations]]
+name = "北斗 BEIDOU"
+purpose = "导航"
+source = { type = "celestrak_group", value = "beidou" }
+description = "中国北斗卫星导航系统"
+
+[[constellations]]
+name = "GPS"
+purpose = "导航"
+source = { type = "celestrak_group", value = "gps-ops" }
+description = "美国全球定位系统（在轨运行星）"
+
+[[constellations]]
+name = "格洛纳斯 GLONASS"
+purpose = "导航"
+source = { type = "celestrak_group", value = "glo-ops" }
+description = "俄罗斯卫星导航系统（在轨运行星）"
+
+[[constellations]]
+name = "伽利略 GALILEO"
+purpose = "导航"
+source = { type = "celestrak_group", value = "galileo" }
+description = "欧盟卫星导航系统"
+
+[[constellations]]
+name = "气象卫星合集"
+purpose = "其他"
+source = { type = "celestrak_group", value = "weather" }
+description = "国际气象卫星合集（NOAA / GOES / DMSP / Meteosat 等，GROUP=weather）"
+
+[[constellations]]
+name = "GOES 气象"
+purpose = "其他"
+source = { type = "celestrak_group", value = "goes" }
+description = "美国 GOES 静止气象卫星"

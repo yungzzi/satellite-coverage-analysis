@@ -383,6 +383,8 @@ def analyze_one_satellite(sat, t, dt_list, region, cfg):
         # 精化会向窗口两侧多扫 margin 分钟，可能越过分析时段边界，裁回分析时段内
         t_lo, t_hi = dt_list[0], dt_list[-1]
         windows = [(max(s, t_lo), min(e, t_hi), r) for s, e, r in windows]
+        # 边界裁剪后可能出现 0 时长伪窗口（窗口实际在时段外），过滤掉（Q92 多坐标验证发现）
+        windows = [w for w in windows if w[1] > w[0]]
     return windows
 
 

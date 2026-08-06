@@ -5,31 +5,8 @@
 #   celestrak_group = CelesTrak 整组下载（gp.php?GROUP=...），一个请求一整组
 #   name_filter     = 名字规则（按关键字匹配全集在轨载荷，新发射自动纳入）
 # purpose 用途分类：遥感 / 通信（含互联网） / 导航 / 其他
+# 顺序即界面用途分类的显示顺序：遥感在前（当前任务以遥感为主）
 # ============================================================
-
-[[constellations]]
-name = "星链 Starlink"
-purpose = "通信（含互联网）"
-source = { type = "celestrak_group", value = "starlink" }
-description = "SpaceX 低轨宽带互联网星座，现役最大的星座（1 万余颗）"
-
-[[constellations]]
-name = "一网 OneWeb"
-purpose = "通信（含互联网）"
-source = { type = "celestrak_group", value = "oneweb" }
-description = "英国低轨宽带互联网星座（600 余颗）"
-
-[[constellations]]
-name = "千帆星座（G60）"
-purpose = "通信（含互联网）"
-source = { type = "name_filter", value = "QIANFAN" }
-description = "中国低轨宽带互联网星座（230 余颗，无现成 GROUP 分组，用名字规则）"
-
-[[constellations]]
-name = "铱星 Iridium"
-purpose = "通信（含互联网）"
-source = { type = "celestrak_group", value = "iridium-NEXT" }
-description = "美国低轨通信星座（含 NEXT 二代）"
 
 [[constellations]]
 name = "遥感系列 YAOGAN"
@@ -73,6 +50,30 @@ name = "资源 ZIYUAN"
 purpose = "遥感"
 source = { type = "name_filter", value = "ZIYUAN" }
 description = "中国资源卫星系列（含资源三号测绘）"
+
+[[constellations]]
+name = "星链 Starlink"
+purpose = "通信（含互联网）"
+source = { type = "celestrak_group", value = "starlink" }
+description = "SpaceX 低轨宽带互联网星座，现役最大的星座（1 万余颗）"
+
+[[constellations]]
+name = "一网 OneWeb"
+purpose = "通信（含互联网）"
+source = { type = "celestrak_group", value = "oneweb" }
+description = "英国低轨宽带互联网星座（600 余颗）"
+
+[[constellations]]
+name = "千帆星座（G60）"
+purpose = "通信（含互联网）"
+source = { type = "name_filter", value = "QIANFAN" }
+description = "中国低轨宽带互联网星座（230 余颗，无现成 GROUP 分组，用名字规则）"
+
+[[constellations]]
+name = "铱星 Iridium"
+purpose = "通信（含互联网）"
+source = { type = "celestrak_group", value = "iridium-NEXT" }
+description = "美国低轨通信星座（含 NEXT 二代）"
 
 [[constellations]]
 name = "北斗 BEIDOU"

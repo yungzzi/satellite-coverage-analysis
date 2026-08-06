@@ -858,9 +858,9 @@ if tab_constellations.open:
         purposes = list(dict.fromkeys(c["purpose"] for c in cons))
         p1, p2 = st.columns([2, 3])
         purpose = p1.segmented_control("用途分类", purposes,
-                                       key="cons_purpose", default=purposes[0])
+                                       key="cons_purpose", default=purposes[0], persist_state="session")
         cands = [c for c in cons if c["purpose"] == purpose]
-        sel_name = p2.selectbox("星座", [c["name"] for c in cands], key="cons_sel")
+        sel_name = p2.selectbox("星座", [c["name"] for c in cands], key="cons_sel", persist_state="session")
         c = next(x for x in cands if x["name"] == sel_name)
         src = c["source"]
         sing = "（单星）" if c.get("singleton") else ""

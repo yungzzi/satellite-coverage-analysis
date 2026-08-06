@@ -46,6 +46,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 CACHE_DIR = DATA_DIR / "tle_cache"          # 下载缓存（不入库）
 USER_FILES_DIR = DATA_DIR / "user_files"    # 用户导入文件的副本（程序管理，不入库）
 BUILTIN_CATALOG = DATA_DIR / "satellite_catalog.toml"   # 内置目录（入库）
+CONSTELLATIONS_CATALOG = DATA_DIR / "constellations.toml"  # 星座目录（入库，④页用）
 USER_CATALOG = DATA_DIR / "user_catalog.toml"           # 用户收藏（不入库）
 
 # CelesTrak 免费接口（URL 即接口，无需 token）
@@ -69,6 +70,7 @@ data/tle_cache/ —— 卫星数据缓存目录（程序自动维护；整个目
                     网络差时可能下载失败而缺失，程序会自动退回逐个单星下载
 - meta/*.csv        搜索结果"卫星档案表"（CelesTrak records.php，CSV 表格）
 - name/*.tle        按名字搜索的 TLE（gp.php?NAME=）
+- group/*.tle       按星座整组下载的 TLE（gp.php?GROUP=starlink 等，④页星座导入用）
 - norad/*.tle       单颗星 TLE（gp.php?CATNR=）
 - resolved/*.tle    成品：每个收藏夹解析后的合并 TLE（人看这个文件夹即可）
 
@@ -260,7 +262,7 @@ def _safe_cache_name(keyword: str, suffix: str) -> str:
 
 
 def search_metadata(keyword: str,
-                    max_results: int = 300,
+                    max_results: int = 10000,
                     country: Optional[str] = None,
                     launch_year: Optional[str] = None,
                     min_alt_km: Optional[float] = None,
@@ -403,6 +405,31 @@ def search_by_norad_online(norad_id: int, max_age_hours: float = DEFAULT_MAX_AGE
         return parse_tle_records(f.read())
 
 
+def suggest_similar_names(keyword: str, n: int = 3, cutoff: float = 0.6,
+                          max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+                          offline: bool = False) -> List[str]:
+    """拼写纠错提示：在全集 TLE 名字表里找编辑距离最近的名字（标准库 difflib）。
+
+    仅用于"搜不到"时的提示（"你是不是想找 X？"），不自动替换搜索结果。
+    名字表来自 active.tle（全集现役 TLE 缓存），约 1.6 万条，毫秒级匹配。
+    先把带编号的全名（如 STARLINK-1234）归并成"家族名"（STARLINK）再匹配，
+    否则 difflib 拿短关键字匹配长编号名会找不到（Q79 实测教训）。
+    """
+    import difflib
+    import re
+    _, active_recs = load_active_tle(max_age_hours, offline=offline)
+    fams = set()
+    for r in active_recs:
+        # 去掉第一个数字之后的部分，再清掉两端分隔符：STARLINK-1234 -> STARLINK
+        fam = re.sub(r"[0-9].*$", "", r.get("name", "")).strip(" -_")
+        if len(fam) >= 3:
+            fams.add(fam)
+    names = sorted(fams)
+    if not names:
+        return []
+    return difflib.get_close_matches(keyword, names, n=n, cutoff=cutoff)
+
+
 def ensure_active_tle(max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
                       force: bool = False, offline: bool = False) -> Optional[Path]:
     """确保本地有"全集现役 TLE"缓存（一次下载，单星/名字查询优先查它）。
@@ -529,6 +556,15 @@ def load_all_collections() -> List[dict]:
     return load_builtin_collections() + load_user_collections()
 
 
+def load_constellations() -> List[dict]:
+    """读取星座目录（data/constellations.toml，入库只读），④页"星座导入"用。"""
+    if tomllib is None or not CONSTELLATIONS_CATALOG.exists():
+        return []
+    with open(CONSTELLATIONS_CATALOG, "rb") as f:
+        data = tomllib.load(f)
+    return list(data.get("constellations", []))
+
+
 def find_collection(collections: List[dict], name: str) -> Optional[dict]:
     for c in collections:
         if c["name"] == name:
@@ -604,7 +640,7 @@ def add_entry(collection_name: str, entry_type: str, value: str) -> bool:
     if c is None:
         print(f"  [失败] 未找到用户收藏夹：{collection_name}")
         return False
-    if entry_type not in ("name_filter", "norad_list", "file"):
+    if entry_type not in ("name_filter", "norad_list", "file", "celestrak_group"):
         print(f"  [失败] 未知条目类型：{entry_type}")
         return False
     for e in c["entries"]:
@@ -774,26 +810,47 @@ def _records_by_norad_ids(norad_ids: List[int], max_age_hours: float,
     return out
 
 
+def _is_debris_name(name: str) -> bool:
+    """根据名字判断是否为碎片/火箭体（黑名单过滤用，大小写不敏感）。"""
+    n = name.upper()
+    return "DEB" in n or "R/B" in n
+
+
 def _records_by_name_filter(keyword: str, max_age_hours: float,
                             offline: bool) -> List[dict]:
     """按名字规则找 TLE：优先查"全集现役 TLE"缓存（按名字子串匹配），
-    并用编目元数据过滤掉碎片/火箭体/已再入物体，保证只含在轨载荷；
+    黑名单排除名字含碎片/火箭体标记的物体，保证只含载荷；
     缓存里没有匹配时退回 gp.php?NAME=。
 
+    注意：早期版本用"编目白名单"（records.php 元数据）过滤，但该接口有约一万条
+    硬上限，STARLINK 会漏 769 颗；改为黑名单后全集内载荷全量保留
+    （实测 YAOGAN/GAOFEN 两种口径结果一致，无副作用）。
     """
     _, active_recs = load_active_tle(max_age_hours, offline=offline)
-    meta = search_metadata(keyword, max_results=10000, max_age_hours=max_age_hours,
-                           offline=offline)
-    payload_ids = {m["norad_id"] for m in meta if m.get("norad_id") is not None}
-    recs = [r for r in active_recs if keyword.lower() in r.get("name", "").lower()]
-    if payload_ids:
-        recs = [r for r in recs if r.get("norad_id") in payload_ids]
+    recs = [r for r in active_recs if keyword.lower() in r.get("name", "").lower()
+            and not _is_debris_name(r.get("name", ""))]
     if recs:
         return recs
     online = search_by_name_online(keyword, max_age_hours, offline=offline)
-    if payload_ids:
-        online = [r for r in online if r.get("norad_id") in payload_ids]
-    return online
+    return [r for r in online if not _is_debris_name(r.get("name", ""))]
+
+
+def _records_by_group(group: str, max_age_hours: float,
+                      offline: bool) -> List[dict]:
+    """按 CelesTrak 星座分组（GROUP=starlink / beidou 等）下载整组 TLE。
+
+    分组是官方维护的"一个星座一整包"，不受 records.php 约万条上限影响；
+    同样做黑名单过滤（个别分组可能混入火箭体）。
+    """
+    import urllib.parse
+    url = f"{CELESTRAK_GP}?GROUP={urllib.parse.quote(group)}&FORMAT=TLE"
+    path = download_text(url, f"group/{_safe_cache_name(group, '.tle')}",
+                         max_age_hours, offline=offline)
+    if path is None:
+        return []
+    with open(path, "r", encoding="ascii", errors="replace") as f:
+        recs = parse_tle_records(f.read())
+    return [r for r in recs if not _is_debris_name(r.get("name", ""))]
 
 
 def _entry_units(entry: dict) -> int:
@@ -824,6 +881,11 @@ def resolve_collection(collection: dict, max_age_hours: float = DEFAULT_MAX_AGE_
         units = _entry_units(entry)
         if etype == "name_filter":
             recs = _records_by_name_filter(value, max_age_hours, offline)
+            done += units
+            if progress:
+                progress(done, total, f"处理条目：{_entry_label(entry)}")
+        elif etype == "celestrak_group":
+            recs = _records_by_group(value, max_age_hours, offline)
             done += units
             if progress:
                 progress(done, total, f"处理条目：{_entry_label(entry)}")
@@ -962,7 +1024,8 @@ def save_resolved_tle(collection_name: str, records: List[dict]) -> Path:
 # ==================== 6. 展示辅助 ====================
 
 def _entry_label(entry: dict) -> str:
-    labels = {"name_filter": "名字规则", "norad_list": "编号清单", "file": "导入文件"}
+    labels = {"name_filter": "名字规则", "norad_list": "编号清单",
+              "file": "导入文件", "celestrak_group": "星座分组"}
     return f"{labels.get(entry['type'], entry['type'])} = {entry['value']}"
 
 

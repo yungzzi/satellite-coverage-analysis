@@ -23,3 +23,10 @@ entries = [
   { type = "name_filter", value = "STARLINK" },
   { type = "name_filter", value = "ONEWEB" },
 ]
+
+[[collections]]
+name = "吉林一号全量（测试 58 颗）"
+description = "长光吉林一号全部可得卫星（快照 2026-08-06，含未命名星）；数据来自 data/test_data/jilin1_all.tle"
+entries = [
+  { type = "file", value = "data/test_data/jilin1_all.tle" },
+]

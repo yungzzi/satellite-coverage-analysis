@@ -204,6 +204,39 @@ def _age_hours(path: Path) -> float:
     return (time.time() - path.stat().st_mtime) / 3600.0
 
 
+def _tle_text_ok(text: str) -> bool:
+    """粗略校验 TLE 文本完整性：行数是 3 的倍数，且每组三行格式正确。
+
+    防止网络截断把半截文件存进缓存（2026-08-06 实测出现整组下载被截断）。
+    """
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines or len(lines) % 3 != 0:
+        return False
+    for i in range(0, len(lines), 3):
+        name = lines[i].strip()
+        l1 = lines[i + 1].strip()
+        l2 = lines[i + 2].strip()
+        if not name or not l1.startswith("1 ") or not l2.startswith("2 "):
+            return False
+        if len(l1) < 69 or len(l2) < 69:
+            return False
+    return True
+def _tle_cache_ok(path: Path) -> bool:
+    """TLE 缓存文件是否完整（防截断缓存污染）。"""
+    try:
+        return _tle_text_ok(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+
+
+def _tle_cache_ok(path: Path) -> bool:
+    """TLE 缓存文件是否完整（防截断缓存污染）。"""
+    try:
+        return _tle_text_ok(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+
+
 def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
                   force: bool = False, offline: bool = False,
                   retries: int = 2) -> Optional[Path]:
@@ -212,27 +245,44 @@ def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_
     - cache_name: 缓存文件名（如 satcat.csv / search_YAOGAN.txt）
     - offline   : True 时不联网，只用缓存；缓存缺失则返回 None
 
-    容错（Q83）：HTTP 403 是 CelesTrak 的限流/禁止信号（usage-policy 说明），
-    不重试；下载失败时若本地有**过期的旧缓存**，回退使用它（OpenSpace 同款策略），
-    避免"网络抖动一次就丢数据"。
+    容错（Q83/Q100）：HTTP 403 是 CelesTrak 的限流/禁止信号，不重试；
+    下载失败时若本地有**过期且完整**的旧缓存，回退使用它；
+    TLE 下载/缓存会做完整性校验（行数是 3 的倍数 + 每三行格式正确），
+    截断文件不会作为"好缓存"使用，但下载失败时允许**降级使用**并大声警告
+    （2026-08-06 修复：实测整组下载被网络截断成半截文件并污染缓存）。
     """
     _ensure_dirs()
     cache_path = CACHE_DIR / cache_name
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    is_tle = cache_name.endswith(".tle")
+
+    def _cache_ok() -> bool:
+        return (not is_tle) or _tle_cache_ok(cache_path)
+
     if cache_path.exists() and not force and _age_hours(cache_path) < max_age_hours:
-        print(f"  [缓存命中] {cache_name}（{_age_hours(cache_path):.1f} 小时前下载）")
-        return cache_path
+        if _cache_ok():
+            print(f"  [缓存命中] {cache_name}（{_age_hours(cache_path):.1f} 小时前下载）")
+            return cache_path
+        print(f"  [警告] 缓存 {cache_name} 内容不完整（可能被截断），忽略并重新下载。")
     if offline:
-        if cache_path.exists():
+        if cache_path.exists() and _cache_ok():
             print(f"  [离线] 缓存 {cache_name} 已过期（{_age_hours(cache_path):.1f}h），"
                   f"离线模式不联网，回退使用过期缓存。")
+            return cache_path
+        if cache_path.exists():
+            print(f"  [离线] 缓存 {cache_name} 不完整（可能被截断），离线模式无网，"
+                  f"降级使用（结果可能缺最新卫星）。")
             return cache_path
         print(f"  [离线] 缓存 {cache_name} 缺失，且离线模式不联网，跳过下载。")
         return None
 
     def _fallback_stale(reason: str) -> Optional[Path]:
-        if cache_path.exists():
+        if cache_path.exists() and _cache_ok():
             print(f"  [警告] {reason}；本地有过期缓存，回退使用：{cache_name}")
+            return cache_path
+        if cache_path.exists():
+            print(f"  [警告] {reason}；本地缓存 {cache_name} 不完整（可能被截断），"
+                  f"降级使用旧数据（结果可能缺最新卫星，稍后重试可自动修复）。")
             return cache_path
         return None
 
@@ -242,8 +292,10 @@ def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_
         print(f"  [下载] {url}（第 {attempt}/{retries} 次尝试）")
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 data = resp.read()
+            if is_tle and not _tle_text_ok(data.decode("utf-8", errors="replace")):
+                raise ValueError("下载内容不完整（TLE 被截断），丢弃本次下载")
             break
         except urllib.error.HTTPError as e:
             body = ""
@@ -277,8 +329,6 @@ def download_text(url: str, cache_name: str, max_age_hours: float = DEFAULT_MAX_
             os.remove(tmp_name)
     print(f"  [完成] 已缓存到 {cache_path}")
     return cache_path
-
-
 # ==================== 3. 编目搜索（CelesTrak satcat） ====================
 
 
@@ -822,6 +872,8 @@ def _records_from_file(file_path: str, max_age_hours: float, offline: bool,
                        progress=None) -> List[dict]:
     """读本地文件：TLE 文本 或 NORAD 编号清单。"""
     path = Path(file_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path  # 相对路径统一按项目根解析（内置 file 条目用）
     if not path.exists():
         print(f"  [警告] 导入文件不存在，跳过：{path}")
         return []

@@ -813,21 +813,31 @@ def _records_from_file(file_path: str, max_age_hours: float, offline: bool,
 def _records_by_norad_ids(norad_ids: List[int], max_age_hours: float,
                           offline: bool, progress=None) -> List[dict]:
     """按编号清单找 TLE：优先查"全集现役 TLE"缓存（一次下载覆盖大多数），
-    查不到的个别编号才逐个走 gp.php?CATNR=（带缓存与小延时）。"""
+    查不到的少量编号才逐个走 gp.php?CATNR=（带缓存与小延时）；
+    缺失过多（>200）时停止逐个下载，避免触发数据源限流（Q84）。"""
     by_id, _ = load_active_tle(max_age_hours, offline=offline)
     out = []
-    total = len(norad_ids)
-    for i, rid in enumerate(norad_ids, 1):
+    missing = []
+    for rid in norad_ids:
         r = by_id.get(rid)
         if r is not None:
             out.append(r)
         else:
-            recs = search_by_norad_online(rid, max_age_hours, offline=offline)
-            if recs:
-                out.append(recs[0])
-            else:
-                print(f"  [警告] 查不到编号 {rid}")
-            time.sleep(0.2)  # 礼貌性小延时，避免高频请求
+            missing.append(rid)
+    if missing:
+        if len(missing) > 200:
+            print(f"  [警告] {len(missing)} 个编号不在全集缓存中（>200），为避免触发数据源限流，"
+                  f"本次不逐个下载；已取全集命中的 {len(out)} 颗，其余可稍后重试。")
+        else:
+            for rid in missing:
+                recs = search_by_norad_online(rid, max_age_hours, offline=offline)
+                if recs:
+                    out.append(recs[0])
+                else:
+                    print(f"  [警告] 查不到编号 {rid}")
+                time.sleep(0.2)   # 礼貌性小延时，避免高频请求
+    total = len(norad_ids)
+    for i, rid in enumerate(norad_ids, 1):
         if progress:
             progress(i, total, f"获取编号 {rid}（{i}/{total}）")
     return out
@@ -837,6 +847,21 @@ def _is_debris_name(name: str) -> bool:
     """根据名字判断是否为碎片/火箭体（黑名单过滤用，大小写不敏感）。"""
     n = name.upper()
     return "DEB" in n or "R/B" in n
+
+
+# CelesTrak 星座分组 -> 全集 TLE 中的名字特征（用于分组下载失败/离线时的回退）
+_GROUP_NAME_FALLBACK = {
+    "starlink": "STARLINK",
+    "oneweb": "ONEWEB",
+    "beidou": "BEIDOU",
+    "gps-ops": "GPS",
+    "glo-ops": "GLONASS",
+    "galileo": "GALILEO",
+    "iridium-NEXT": "IRIDIUM",
+    "goes": "GOES",
+    "noaa": "NOAA",
+    # weather 无统一名字特征，无法回退
+}
 
 
 def _records_by_name_filter(keyword: str, max_age_hours: float,
@@ -864,12 +889,24 @@ def _records_by_group(group: str, max_age_hours: float,
 
     分组是官方维护的"一个星座一整包"，不受 records.php 约万条上限影响；
     同样做黑名单过滤（个别分组可能混入火箭体）。
+    分组下载失败/离线时（如 CelesTrak 2 小时更新窗口、缓存被清），
+    回退用全集 active.tle 按名字特征过滤（近似但可离线工作，Q84）。
     """
     import urllib.parse
     url = f"{CELESTRAK_GP}?GROUP={urllib.parse.quote(group)}&FORMAT=TLE"
     path = download_text(url, f"group/{_safe_cache_name(group, '.tle')}",
                          max_age_hours, offline=offline)
     if path is None:
+        kw = _GROUP_NAME_FALLBACK.get(group)
+        if kw:
+            _, active_recs = load_active_tle(max_age_hours, offline=True)
+            recs = [r for r in active_recs
+                    if kw.lower() in r.get("name", "").lower()
+                    and not _is_debris_name(r.get("name", ""))]
+            if recs:
+                print(f"  [回退] GROUP={group} 未下载，已用全集 TLE 按名字「{kw}」"
+                      f"过滤到 {len(recs)} 颗（近似口径）")
+                return recs
         return []
     with open(path, "r", encoding="ascii", errors="replace") as f:
         recs = parse_tle_records(f.read())

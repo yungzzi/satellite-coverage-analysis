@@ -205,6 +205,14 @@ def test_search_enhancements():
     check("拼写纠错提示", any("STARLINK" in s for s in sug), str(sug))
     sug_lower = sl.suggest_similar_names("yaogen", offline=False)
     check("拼写提示忽略大小写", "YAOGAN" in sug_lower, str(sug_lower))
+    iss = next((r for r in sl.load_active_tle(offline=True)[1]
+                if r.get("norad_id") == 25544), None)
+    if iss:
+        d = sl._tle_derived_meta(iss.get("line1", ""), iss.get("line2", ""))
+        check("TLE 推导倾角/高度", bool(d["inclination"] and 50 < d["inclination"] < 53
+              and d["altitude_km"] and 350 < d["altitude_km"] < 500), str(d))
+    else:
+        check("TLE 推导倾角/高度", False, "缓存无 ISS")
 
 
 def run_all() -> list:

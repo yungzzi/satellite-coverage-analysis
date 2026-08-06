@@ -60,6 +60,7 @@ name = "珞珈一号 LUOJIA-1"
 purpose = "遥感"
 source = { type = "name_filter", value = "LUOJIA" }
 description = "武汉大学夜光遥感卫星"
+singleton = true
 
 [[constellations]]
 name = "天绘 TIANHUI"

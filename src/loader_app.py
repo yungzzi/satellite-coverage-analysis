@@ -990,10 +990,12 @@ if tab_analysis.open:
                     cfg["region_name"] = cov_geo
                 sats = sl.records_to_satellites(recs)
                 all_windows = []
+                windows_by_sat = []
                 for i, sat in enumerate(sats):
                     bar.progress((i + 1) / len(sats),
                                  text=f"分析 {sat.name}（{i + 1}/{len(sats)}）")
                     windows = cov.analyze_one_satellite(sat, t, dt_list, region, cfg)
+                    windows_by_sat.append(windows)
                     all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
                 bar.progress(1.0, text="整理输出……")
                 if not all_windows:

@@ -154,6 +154,59 @@ def main():
         check("全部最优方案 K=1 → 4 种", len(_s1) == 4, str(len(_s1)))
         check("全部最优方案 K=2 → 6 种", len(_s2) == 6, str(len(_s2)))
 
+    print("== 6. 预算型任务（MMRT/MART）+ 五任务字段 + 尽力而为说明 ==")
+    if result:
+        from datetime import datetime, timedelta, timezone
+        import numpy as np
+        _m2 = 12
+        _sc2 = [
+            np.array([1,1,1,1,1,1,0,0,0,0,0,0], bool),
+            np.array([0,0,0,0,1,1,1,1,1,1,0,0], bool),
+            np.array([0,0,0,0,0,0,0,1,1,1,1,1], bool),
+            np.array([1,1,1,0,0,0,0,0,0,0,0,0], bool),
+            np.array([0,0,0,0,0,0,1,1,1,1,1,1], bool),
+            np.array([0,0,0,0,0,0,0,0,0,0,0,1], bool),
+        ]
+        _ss2 = [type("S", (), {"name": f"T{j}"})() for j in range(len(_sc2))]
+        _t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        _t1 = _t0 + timedelta(minutes=_m2)
+        s_mm, _c1 = ss.select_min_gap(_sc2, 2, 1, 1, _t0, _t1, mode="max")
+        s_ma, _c2 = ss.select_min_gap(_sc2, 2, 1, 1, _t0, _t1, mode="avg")
+        check("MMRT 贪心能选出星", 0 < len(s_mm) <= 2, f"选 {len(s_mm)} 颗")
+        check("MART 贪心能选出星", 0 < len(s_ma) <= 2, f"选 {len(s_ma)} 颗")
+        wbs2 = []
+        for c in _sc2:
+            wins = []
+            i2 = 0
+            while i2 < len(c):
+                if c[i2]:
+                    j2 = i2
+                    while j2 < len(c) and c[j2]:
+                        j2 += 1
+                    wins.append((_t0 + timedelta(minutes=i2),
+                                 _t0 + timedelta(minutes=j2), 1.0))
+                    i2 = j2
+                else:
+                    i2 += 1
+            wbs2.append(wins)
+        for obj, req, tag in [("max_coverage", "any", "③"),
+                              ("min_max_gap", "any", "④"),
+                              ("min_avg_gap", "any", "⑤")]:
+            r5 = ss.run_selection(_ss2, wbs2, _t0, _t1, step_minutes=1, k_min=1,
+                                  mrt_minutes=180, method="greedy",
+                                  req_mode=req, objective=obj, n_sats_limit=2)
+            check(f"任务{tag}：字段与标签正确",
+                  r5["req_mode"] == "any" and r5["objective"] == obj
+                  and r5["algo"] == "greedy-budget"
+                  and "目标模式" in r5["summary"],
+                  f"obj={r5['objective']} algo={r5['algo']}")
+        cont2 = ss.run_selection(result["sats"], result["windows_by_sat"],
+                                 result["t0"], result["t1"],
+                                 step_minutes=1, k_min=1, mrt_minutes=30,
+                                 method="greedy", req_mode="continuous")
+        check("未满足时摘要含尽力而为说明",
+              "[尽力而为]" in cont2["summary"])
+
     print("========================================")
     print(f"结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

@@ -1046,7 +1046,7 @@ if tab_analysis.open:
             st.dataframe(df_windows, hide_index=True, width="stretch")
 
 
-        with st.expander("选星决策（虚拟星座）：基于本次覆盖结果挑最少卫星满足需求", expanded=False):
+        with st.expander("选星决策（虚拟星座）：基于本次覆盖结果挑最少卫星满足需求", expanded=st.session_state.get("sel_result") is not None):
             st.caption("需求：每 MRT 分钟内至少有 K 颗被选星覆盖；单次最短窗口可选（0=不限）。"
                        "默认贪心 + 整数规划对照，一致即放心交付。")
             s1, s2, s3, s4 = st.columns(4)

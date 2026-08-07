@@ -270,3 +270,4 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 
 
 - [x] 图默认全关（2026-08-07）：save_plots / save_gantt 默认 False（GUI + CLI 均不生成）；需要演示图时在 config.toml 设 save_plots=true；保留绘图函数与开关
+- [x] 选星体验与测试矩阵（2026-08-07）：选星折叠区保持展开；吉林58/遥感164 × 4 地区 × MRT 30~360 测试；待拍板：MRT 默认 180、选星→虚拟星座收藏夹、TLE 文件上传入口

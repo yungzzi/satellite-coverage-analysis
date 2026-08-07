@@ -196,7 +196,7 @@ def greedy_select(sat_cov, k_min, mrt_minutes, step_minutes):
 
 # ==================== 3. 算法二：整数规划（精确最优） ====================
 
-def ilp_select(sat_cov, k_min, mrt_minutes, step_minutes, time_limit=180):
+def ilp_select(sat_cov, k_min, mrt_minutes, step_minutes, time_limit=180, exclude=None):
     """整数规划精确选星（依赖 pulp + CBC）。
 
     数学形式（白话版见文件头注释）：
@@ -225,6 +225,8 @@ def ilp_select(sat_cov, k_min, mrt_minutes, step_minutes, time_limit=180):
     y = [pulp.LpVariable(f"y{i}", 0, 1, cat=pulp.LpBinary) for i in range(m)]
     prob += pulp.lpSum(x)
     M = n_sat
+    for _ex in (exclude or []):
+        prob += pulp.lpSum(x[j] for j in _ex) <= len(_ex) - 1
     for i in range(m):
         cov_sum = pulp.lpSum(x[j] for j in range(n_sat) if sat_cov[j][i])
         prob += cov_sum - k_min * y[i] >= 0
@@ -259,14 +261,145 @@ def _sat_detail(sats, windows_by_sat, selected, step_minutes, period_minutes):
     return rows
 
 
+def select_max_coverage(sat_cov, n_limit, k_min, step_minutes, t0, t1):
+    """目标模式②：给定 N 颗，贪心最大化组合覆盖率。
+
+    每轮从候选里挑“使覆盖时间片增加最多”的一颗（最大边际收益），
+    直到选满 N 颗或无法再增加覆盖。返回 (selected, counts)。
+    说明：覆盖率为“被覆盖时间片占比”，与“需求是否达标”是两种口径。
+    """
+    n_sat = len(sat_cov)
+    m = len(sat_cov[0]) if n_sat else 0
+    n_limit = max(0, min(int(n_limit), n_sat))
+    if m == 0 or n_limit == 0:
+        return [], np.zeros(m, dtype=int)
+    indices = [np.flatnonzero(sat_cov[j]) for j in range(n_sat)]
+    usable = [j for j in range(n_sat) if indices[j].size > 0]
+    counts = np.zeros(m, dtype=int)
+    selected = []
+    selected_set = set()
+    covered_total = 0
+    for _ in range(n_limit):
+        best_j, best_gain = -1, 0
+        for j in usable:
+            if j in selected_set:
+                continue
+            ids = indices[j]
+            gain = int((counts[ids] == k_min - 1).sum())
+            if gain > best_gain:
+                best_gain, best_j = gain, j
+                if best_gain == m - covered_total:
+                    break
+        if best_j < 0 or best_gain <= 0:
+            break
+        selected.append(best_j)
+        selected_set.add(best_j)
+        ids = indices[best_j]
+        counts[ids] += 1
+        covered_total += best_gain
+    # 已达 100% 覆盖但名额未满时，按单星覆盖片数降序补足（满足“给定 N 颗”的冗余需求）
+    if len(selected) < n_limit:
+        rest = [j for j in usable if j not in selected_set]
+        rest.sort(key=lambda j: -int(indices[j].size))
+        for j in rest:
+            if len(selected) >= n_limit:
+                break
+            selected.append(j)
+            selected_set.add(j)
+            _ids = indices[j]
+            counts[_ids] += 1
+    return selected, counts
+
+
+def _state_rows(sats, sat_cov, counts, sel_set, dt_list):
+    """组合状态表：每个时间片的覆盖数 + 覆盖卫星名单。"""
+    rows = []
+    for i, dt in enumerate(dt_list):
+        names = [sats[j].name for j in sorted(sel_set) if sat_cov[j][i]]
+        rows.append({
+            "时间(UTC)": dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "覆盖数": int(counts[i]),
+            "覆盖卫星": "、".join(names),
+        })
+    return rows
+
+
+def enumerate_optimal_solutions(sat_cov, sats, k_min, mrt_minutes, step_minutes,
+                                max_solutions=10, time_limit=60):
+    """列出全部最优方案（目标=最少颗数满足需求）。
+
+    策略：
+    1) 存在 >= K 颗“全程星”（单颗即 100% 覆盖）时，全部最优 = 任选 K 颗全程星的组合
+       （例：杭州 + 遥感系列 K=1 → 4 种；K=2 → 6 种）；
+    2) 否则用整数规划 + “排除已得解”（no-good cut）迭代收集，最多 max_solutions 个。
+    返回 (solutions, note)：
+      solutions: [{"sat_names": [...], "n": k, "coverage_pct": float}, ...]
+    """
+    n_sat = len(sat_cov)
+    m = len(sat_cov[0]) if n_sat else 0
+    if not sats:
+        sats = [type("S", (), {"name": f"SAT-{j}"})() for j in range(n_sat)]
+    _t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    _t1 = _t0 + timedelta(minutes=max(1, m * max(1, step_minutes)))
+
+    def _sol(sel):
+        ev = evaluate_selection(sat_cov, sel, k_min, mrt_minutes, step_minutes, _t0, _t1)
+        return {"sat_names": [sats[j].name for j in sel],
+                "n": len(sel), "coverage_pct": round(ev["coverage_pct"], 2)}
+
+    full_sats = [j for j in range(n_sat) if sat_cov[j].all()]
+    if len(full_sats) >= k_min:
+        import itertools
+        solutions = []
+        for combo in itertools.combinations(full_sats, k_min):
+            solutions.append(_sol(list(combo)))
+            if len(solutions) >= max_solutions:
+                break
+        note = (f"存在 {len(full_sats)} 颗全程星（单颗即 100% 覆盖）；"
+                f"K={k_min} 时全部最优方案 = 任选 {k_min} 颗全程星的组合"
+                f"（共 {len(solutions)} 种）")
+        return solutions, note
+
+    try:
+        import pulp
+    except ImportError:
+        g_sel, _ = greedy_select(sat_cov, k_min, mrt_minutes, step_minutes)
+        return [_sol(g_sel)], "未安装 pulp，仅给出一个贪心方案"
+    if n_sat > 1500:
+        g_sel, _ = greedy_select(sat_cov, k_min, mrt_minutes, step_minutes)
+        return [_sol(g_sel)], "卫星数>1500，最优枚举成本过高，仅给出一个贪心方案"
+
+    banned = []
+    solutions = []
+    for _ in range(max_solutions):
+        sel, _cnt, status, _n2 = ilp_select(sat_cov, k_min, mrt_minutes,
+                                            step_minutes, time_limit=time_limit,
+                                            exclude=banned)
+        if sel is None or status != "Optimal" or not sel:
+            break
+        if solutions and len(sel) != solutions[0]["n"]:
+            break
+        solutions.append(_sol(sel))
+        banned.append(sel)
+    note = (f"整数规划迭代收集到 {len(solutions)} 个最优方案"
+            + ("（可能还有更多）" if len(solutions) >= max_solutions else ""))
+    return solutions, note
+
+
 def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
                   mrt_minutes=30, min_event_minutes=0.0, method="both",
-                  time_limit=180):
+                  time_limit=180, req_mode="continuous", objective="min_sats",
+                  n_sats_limit=None, max_solutions=10):
     """选星总入口：算覆盖矩阵 → 贪心/ILP → 统计 → 对比全池。
 
-    返回 dict（供 GUI/CLI 展示与导出）：
-      selected / selected_names / detail_rows / gaps / state_rows /
-      summary 文本 / 全池对比 / 需求参数等。
+    req_mode: "continuous"=连续覆盖（无空窗，每个时间片都达标）；
+              "revisit"=重访（允许最长 MRT 分钟无覆盖）。
+    objective: "min_sats"=最少颗数满足需求（默认）；
+               "max_coverage"=给定 n_sats_limit 颗最大化组合覆盖率。
+    返回 dict（供 GUI/CLI 展示与导出），含：
+      req_mode / objective / mrt_minutes（用户口径）/ effective_mrt_minutes（实际判定用）
+      full（全池基线）/ feasibility（连续覆盖物理上限）/ optimal_solutions（全部最优方案）
+      selected / selected_names / detail_rows / gaps / state_rows / compare_rows / summary
     """
     dt_list = []
     t = t0
@@ -279,9 +412,15 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     n_sat = len(sats)
     period_minutes = max(1.0, (t1 - t0).total_seconds() / 60.0)
 
+    eff_mrt = 0.0 if req_mode == "continuous" else float(mrt_minutes)
     res = {
         "t0": t0, "t1": t1, "dt_list": dt_list,
-        "k_min": int(k_min), "mrt_minutes": float(mrt_minutes),
+        "k_min": int(k_min),
+        "mrt_minutes": float(mrt_minutes),
+        "effective_mrt_minutes": eff_mrt,
+        "req_mode": req_mode,
+        "objective": objective,
+        "n_sats_limit": int(n_sats_limit) if n_sats_limit else None,
         "step_minutes": int(step_minutes),
         "min_event_minutes": float(min_event_minutes),
         "method": method, "n_sats_total": n_sat,
@@ -289,34 +428,85 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         "windows_by_sat": windows_by_sat,
     }
 
-    # 全池基线（不选星、全部参与能达到的覆盖水平）
-    full = evaluate_selection(sat_cov, list(range(n_sat)), k_min, mrt_minutes,
+    # 全池基线（不选星、全部参与能达到的覆盖水平 = 物理上限）
+    full = evaluate_selection(sat_cov, list(range(n_sat)), k_min, eff_mrt,
                               step_minutes, t0, t1)
     res["full"] = full
+    if req_mode == "continuous" and not full["satisfied"]:
+        res["feasibility"] = {
+            "possible": False,
+            "full_coverage_pct": round(full["coverage_pct"], 2),
+            "full_max_gap_minutes": round(full["mrt_actual_minutes"], 1),
+            "gaps": full["gaps"],
+            "message": ("连续覆盖（全程无空窗）在该卫星池下物理不可行："
+                        "即使全部卫星一起上，最长空窗仍达 "
+                        f"{full['mrt_actual_minutes']:.0f} 分钟，覆盖率仅 "
+                        f"{full['coverage_pct']:.1f}%。"
+                        "这是星座轨道设计问题，不是选星算法问题。"
+                        "可选出路：①候选池加入同步/高轨遥感星（如高分四号、遥感四十一号，"
+                        "对东半球目标 1 颗即可）；②缩小目标区域或缩短时段；"
+                        "③改用“重访（每 X 分钟至少一次）”需求模式。"),
+        }
+    else:
+        res["feasibility"] = {"possible": full["satisfied"]}
 
-    # 贪心（始终可用）
-    g_sel, g_counts = greedy_select(sat_cov, k_min, mrt_minutes, step_minutes)
+    # ---- 目标模式②：给定 N 颗最大化覆盖率（贪心最大边际收益） ----
+    if objective == "max_coverage":
+        n_lim = int(n_sats_limit) if n_sats_limit else min(10, n_sat)
+        sel_mc, counts_mc = select_max_coverage(sat_cov, n_lim, k_min, step_minutes, t0, t1)
+        res["greedy"] = None
+        res["ilp"] = None
+        res["selected"] = sel_mc
+        res["selected_names"] = [sats[j].name for j in sel_mc]
+        res["eval"] = evaluate_selection(sat_cov, sel_mc, k_min, eff_mrt,
+                                         step_minutes, t0, t1)
+        res["algo"] = "greedy-maxcov"
+        res["algo_note"] = (f"目标：给定 {n_lim} 颗最大化组合覆盖率"
+                            f"（贪心最大边际收益；覆盖率=被覆盖时间片占比，"
+                            f"不是“需求达标”）")
+        res["detail_rows"] = _sat_detail(sats, windows_by_sat, sel_mc,
+                                         step_minutes, period_minutes)
+        counts = res["eval"]["counts"]
+        sel_set = set(sel_mc)
+        res["state_rows"] = _state_rows(sats, sat_cov, counts, sel_set, dt_list)
+        res["gaps"] = res["eval"]["gaps"]
+        res["compare_rows"] = [
+            {"口径": "全池（不选星）", "卫星数": n_sat,
+             "覆盖率(%)": round(full["coverage_pct"], 2),
+             "MRT(分)": round(full["mrt_actual_minutes"], 1),
+             "ART(分)": round(full["art_actual_minutes"], 1),
+             "需求满足": "是" if full["satisfied"] else "否"},
+            {"口径": f"选中（{res['algo']}，目标 {n_lim} 颗）", "卫星数": len(sel_mc),
+             "覆盖率(%)": round(res["eval"]["coverage_pct"], 2),
+             "MRT(分)": round(res["eval"]["mrt_actual_minutes"], 1),
+             "ART(分)": round(res["eval"]["art_actual_minutes"], 1),
+             "需求满足": "是" if res["eval"]["satisfied"] else "否"},
+        ]
+        res["optimal_solutions"] = []
+        res["optimal_note"] = "目标模式为“给定 N 颗最大化覆盖率”，不做“最少颗数最优方案”枚举。"
+        res["summary"] = _summary_text(res)
+        return res
+
+    # ---- 目标模式①：最少颗数满足需求 ----
+    g_sel, g_counts = greedy_select(sat_cov, k_min, eff_mrt, step_minutes)
     res["greedy"] = {
         "selected": g_sel,
-        "eval": evaluate_selection(sat_cov, g_sel, k_min, mrt_minutes, step_minutes, t0, t1),
+        "eval": evaluate_selection(sat_cov, g_sel, k_min, eff_mrt, step_minutes, t0, t1),
         "note": "",
     }
-
-    # 整数规划（可选）
     ilp = None
     if method in ("both", "ilp"):
         sel_i, counts_i, status_i, note_i = ilp_select(
-            sat_cov, k_min, mrt_minutes, step_minutes, time_limit=time_limit)
+            sat_cov, k_min, eff_mrt, step_minutes, time_limit=time_limit)
         if sel_i is not None:
             ilp = {
                 "selected": sel_i,
-                "eval": evaluate_selection(sat_cov, sel_i, k_min, mrt_minutes,
+                "eval": evaluate_selection(sat_cov, sel_i, k_min, eff_mrt,
                                           step_minutes, t0, t1),
                 "status": status_i, "note": note_i,
             }
     res["ilp"] = ilp
 
-    # 最终采用：both 时优先 ILP（若可用），否则贪心
     final = None
     if ilp is not None and ilp["eval"]["satisfied"]:
         final = ilp
@@ -332,24 +522,12 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     res["algo"] = final["algo"]
     res["algo_note"] = final.get("note", "")
 
-    # 选中卫星明细
     res["detail_rows"] = _sat_detail(sats, windows_by_sat, final["selected"],
                                      step_minutes, period_minutes)
-    # 组合状态表（每分钟覆盖数 + 覆盖卫星名单）
     counts = final["eval"]["counts"]
     sel_set = set(final["selected"])
-    state_rows = []
-    for i, dt in enumerate(dt_list):
-        names = [sats[j].name for j in sorted(sel_set) if sat_cov[j][i]]
-        state_rows.append({
-            "时间(UTC)": dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "覆盖数": int(counts[i]),
-            "覆盖卫星": "、".join(names),
-        })
-    res["state_rows"] = state_rows
-    # 空窗表
+    res["state_rows"] = _state_rows(sats, sat_cov, counts, sel_set, dt_list)
     res["gaps"] = final["eval"]["gaps"]
-    # 对比表（全池 vs 选中）
     res["compare_rows"] = [
         {"口径": "全池（不选星）", "卫星数": n_sat,
          "覆盖率(%)": round(full["coverage_pct"], 2),
@@ -362,27 +540,46 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
          "ART(分)": round(final["eval"]["art_actual_minutes"], 1),
          "需求满足": "是" if final["eval"]["satisfied"] else "否"},
     ]
+
+    # 全部最优方案（仅最少颗数目标；无全程星时用 ILP no-good cut 收集）
+    opt_sols, opt_note = enumerate_optimal_solutions(
+        sat_cov, sats, k_min, eff_mrt, step_minutes,
+        max_solutions=max_solutions, time_limit=time_limit)
+    res["optimal_solutions"] = opt_sols
+    res["optimal_note"] = opt_note
+
     res["summary"] = _summary_text(res)
     return res
 
 
 def _summary_text(res):
     ev = res["eval"]
+    req_label = ("连续覆盖（无空窗）" if res["req_mode"] == "continuous"
+                 else f"重访：每 {res['mrt_minutes']:.0f} 分钟内至少一次"
+                      f"（允许最长 {res['mrt_minutes']:.0f} 分钟无覆盖）")
+    obj_label = ("最少颗数满足需求" if res["objective"] == "min_sats"
+                 else f"给定 {res.get('n_sats_limit') or 0} 颗最大化覆盖率")
     lines = [
-        f"需求：每 {res['mrt_minutes']:.0f} 分钟内至少 {res['k_min']} 颗星覆盖"
-        f"（K={res['k_min']}，MRT≤{res['mrt_minutes']:.0f} 分钟，步长 {res['step_minutes']} 分钟）",
+        f"需求模式：{req_label}（K={res['k_min']}，步长 {res['step_minutes']} 分钟）",
+        f"目标模式：{obj_label}",
         f"卫星池 {res['n_sats_total']} 颗 → 选中 {len(res['selected'])} 颗（算法：{res['algo']}）",
         f"组合覆盖率 {ev['coverage_pct']:.1f}%，最大空窗 {ev['mrt_actual_minutes']:.1f} 分钟，"
         f"平均空窗 {ev['art_actual_minutes']:.1f} 分钟",
         f"同时可见：平均 {ev['n_sim_mean']:.1f} 颗，最多 {ev['n_sim_max']} 颗",
         "需求满足：是" if ev["satisfied"] else "需求未完全满足：以下空窗段超限",
     ]
+    if not ev["satisfied"] and res.get("feasibility") and not res["feasibility"].get("possible", True):
+        _msg = res["feasibility"].get("message", "")
+        if _msg:
+            lines.append("[物理上限] " + _msg)
     if res.get("algo_note"):
         lines.append(res["algo_note"])
+    if res.get("optimal_note"):
+        lines.append("[全部最优方案] " + res["optimal_note"])
     return "\n".join(lines)
 
 
-# ==================== 5. CLI ====================
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="选星决策：从卫星池里挑最少卫星满足覆盖需求")
@@ -402,6 +599,14 @@ def main(argv=None):
     ap.add_argument("--mrt", type=float, default=30.0, help="最大重访间隔（分钟）")
     ap.add_argument("--min-event", type=float, default=0.0, help="单次窗口最短时长（分钟，0=不限）")
     ap.add_argument("--method", choices=["greedy", "ilp", "both"], default="both")
+    ap.add_argument("--req-mode", choices=["continuous", "revisit"], default="continuous",
+                    help="需求模式：continuous=连续覆盖（无空窗）；revisit=重访（MRT≤X 分钟）")
+    ap.add_argument("--objective", choices=["min_sats", "max_coverage"], default="min_sats",
+                    help="目标模式：min_sats=最少颗数满足需求；max_coverage=给定 N 颗最大化覆盖率")
+    ap.add_argument("--n-sats", type=int, default=None,
+                    help="max_coverage 模式的给定颗数 N")
+    ap.add_argument("--list-optimal", action="store_true",
+                    help="在命令行打印全部最优方案")
     ap.add_argument("--out", default=str(PROJECT_ROOT / "output"), help="输出目录")
     args = ap.parse_args(argv)
 
@@ -440,10 +645,20 @@ def main(argv=None):
     res = run_selection(sats, windows_by_sat, t0, t1,
                         step_minutes=args.step, k_min=args.k_min,
                         mrt_minutes=args.mrt, min_event_minutes=args.min_event,
-                        method=args.method)
+                        method=args.method, req_mode=args.req_mode,
+                        objective=args.objective, n_sats_limit=args.n_sats,
+                        max_solutions=10)
     print(res["summary"])
     print()
     print("推荐卫星：", "、".join(res["selected_names"]) or "（无）")
+    if args.list_optimal and res.get("optimal_solutions"):
+        print()
+        print("全部最优方案：")
+        for _k, _sol in enumerate(res["optimal_solutions"], 1):
+            print(f"  方案{_k}（{len(_sol['sat_names'])} 颗，覆盖率 {_sol['coverage_pct']}%）："
+                  f"{'、'.join(_sol['sat_names'])}")
+        if res.get("optimal_note"):
+            print("  注：" + res["optimal_note"])
     if res["gaps"]:
         print("空窗：")
         for g in res["gaps"]:
@@ -454,14 +669,21 @@ def main(argv=None):
 
 
 def export_selection_xlsx(res, path, region_name="", extra_meta=None):
-    """把选星结果导出为 Excel：说明 / 推荐卫星 / 组合状态 / 空窗表 / 对比。"""
+    """把选星结果导出为 Excel：说明 / 推荐卫星 / 组合状态 / 空窗表 / 对比 / 全部最优方案。"""
     import pandas as pd
+    req_label = ("连续覆盖（无空窗）" if res["req_mode"] == "continuous"
+                 else f"重访（MRT≤{res['mrt_minutes']:.0f} 分钟）")
+    obj_label = ("最少颗数满足需求" if res["objective"] == "min_sats"
+                 else f"给定 {res.get('n_sats_limit') or 0} 颗最大化覆盖率")
     meta = {
         "分析地区": region_name or "",
         "分析时段(UTC)": f"{res['t0']:%Y-%m-%d %H:%M:%S} ~ {res['t1']:%Y-%m-%d %H:%M:%S}",
         "时间步长(分钟)": res["step_minutes"],
+        "需求模式": req_label,
+        "目标模式": obj_label,
         "需求-K(最少同时可见)": res["k_min"],
-        "需求-MRT(最大重访间隔,分)": res["mrt_minutes"],
+        "需求-MRT(最大重访间隔,分)": ("0（连续覆盖）" if res["req_mode"] == "continuous"
+                                       else res["mrt_minutes"]),
         "单次最短窗口(分)": res["min_event_minutes"],
         "算法": res["algo"] + (f"（{res['algo_note']}）" if res.get("algo_note") else ""),
         "卫星池规模": res["n_sats_total"],
@@ -474,6 +696,7 @@ def export_selection_xlsx(res, path, region_name="", extra_meta=None):
     }
     if extra_meta:
         meta.update(extra_meta)
+    opt_df = pd.DataFrame(res.get("optimal_solutions") or [])
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         pd.DataFrame([{"项目": k, "内容": v} for k, v in meta.items()]).to_excel(
             writer, sheet_name="说明", index=False)
@@ -481,5 +704,15 @@ def export_selection_xlsx(res, path, region_name="", extra_meta=None):
         pd.DataFrame(res["state_rows"]).to_excel(writer, sheet_name="组合状态", index=False)
         pd.DataFrame(res["gaps"]).to_excel(writer, sheet_name="空窗表", index=False)
         pd.DataFrame(res["compare_rows"]).to_excel(writer, sheet_name="对比", index=False)
+        if opt_df.empty:
+            pd.DataFrame([{"说明": res.get("optimal_note", "无多个最优方案")}]).to_excel(
+                writer, sheet_name="全部最优方案", index=False)
+        else:
+            _o = opt_df.copy()
+            _o["卫星清单"] = _o["sat_names"].apply(lambda x: "、".join(x))
+            _o = _o[["n", "coverage_pct", "卫星清单"]]
+            _o.columns = ["卫星数", "覆盖率(%)", "卫星清单"]
+            _o.to_excel(writer, sheet_name="全部最优方案", index=False)
+
 if __name__ == "__main__":
     sys.exit(main())

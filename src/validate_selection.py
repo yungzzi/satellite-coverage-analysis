@@ -79,7 +79,7 @@ def main():
         sel = ss.run_selection(result["sats"], result["windows_by_sat"],
                                result["t0"], result["t1"],
                                step_minutes=1, k_min=1, mrt_minutes=180,
-                               method="both", time_limit=120)
+                               method="both", time_limit=120, req_mode="revisit")
         g = sel["greedy"]; i = sel["ilp"]
         check("贪心满足需求", g["eval"]["satisfied"],
               f"MRT={g['eval']['mrt_actual_minutes']:.0f}分")
@@ -93,7 +93,7 @@ def main():
         hard = ss.run_selection(result["sats"], result["windows_by_sat"],
                                 result["t0"], result["t1"],
                                 step_minutes=1, k_min=1, mrt_minutes=30,
-                                method="both", time_limit=60)
+                                method="both", time_limit=60, req_mode="revisit")
         check("不硬凑：如实报未满足", not hard["eval"]["satisfied"],
               f"MRT={hard['eval']['mrt_actual_minutes']:.0f}分")
         check("空窗表非空", len(hard["gaps"]) > 0)
@@ -102,6 +102,57 @@ def main():
         out = os.path.join(tempfile.gettempdir(), "sel_validate.xlsx")
         ss.export_selection_xlsx(sel, out, region_name="杭州5km")
         check("Excel 非空", os.path.getsize(out) > 0, f"{os.path.getsize(out)} B")
+        import openpyxl
+        _wb = openpyxl.load_workbook(out, read_only=True)
+        _sheets = _wb.sheetnames
+        check("Excel 含全部最优方案表", "全部最优方案" in _sheets, str(_sheets))
+        check("Excel 说明表含需求模式", any(
+            "需求模式" in str(c.value) for row in _wb["说明"].iter_rows() for c in row if c.value))
+        _wb.close()
+
+    print("== 5. 需求双模式 + 目标模式② + 全部最优方案 ==")
+    if result:
+        # 连续覆盖（吉林一号纯低轨 → 物理不可行，如实报告上限）
+        cont = ss.run_selection(result["sats"], result["windows_by_sat"],
+                                result["t0"], result["t1"],
+                                step_minutes=1, k_min=1, mrt_minutes=30,
+                                method="greedy", req_mode="continuous")
+        check("连续模式：物理不可行如实报告",
+              cont["req_mode"] == "continuous" and not cont["eval"]["satisfied"]
+              and cont.get("feasibility") is not None
+              and not cont["feasibility"]["possible"],
+              f"possible={cont.get('feasibility', {}).get('possible')}")
+        check("连续模式：给出物理上限数字",
+              cont.get("feasibility", {}).get("full_max_gap_minutes", 0) > 0,
+              str(cont.get("feasibility", {}).get("full_max_gap_minutes")))
+        # 重访模式兼容（原有语义）
+        rev = ss.run_selection(result["sats"], result["windows_by_sat"],
+                               result["t0"], result["t1"],
+                               step_minutes=1, k_min=1, mrt_minutes=180,
+                               method="greedy", req_mode="revisit")
+        check("重访模式：字段与判定正常",
+              rev["req_mode"] == "revisit" and rev["effective_mrt_minutes"] == 180.0
+              and rev["eval"]["satisfied"])
+        # 目标模式②：给定 N 颗最大化覆盖率
+        mc = ss.run_selection(result["sats"], result["windows_by_sat"],
+                              result["t0"], result["t1"],
+                              step_minutes=1, k_min=1, mrt_minutes=30,
+                              method="greedy", req_mode="continuous",
+                              objective="max_coverage", n_sats_limit=5)
+        check("目标模式②：选中数≤N 且覆盖率合理",
+              mc["objective"] == "max_coverage"
+              and 0 < len(mc["selected"]) <= 5
+              and 0 < mc["eval"]["coverage_pct"] <= cont["full"]["coverage_pct"] + 1e-9,
+              f"选 {len(mc['selected'])} 颗，覆盖率 {mc['eval']['coverage_pct']:.2f}%")
+        # 全部最优方案（合成 4 颗全程星）
+        import numpy as np
+        _m = 10
+        _sc = [np.ones(_m, dtype=bool) for _ in range(4)]
+        _ss = [type("S", (), {"name": f"FULL-{j}"})() for j in range(4)]
+        _s1, _n1 = ss.enumerate_optimal_solutions(_sc, _ss, 1, 0, 1)
+        _s2, _n2 = ss.enumerate_optimal_solutions(_sc, _ss, 2, 0, 1)
+        check("全部最优方案 K=1 → 4 种", len(_s1) == 4, str(len(_s1)))
+        check("全部最优方案 K=2 → 6 种", len(_s2) == 6, str(len(_s2)))
 
     print("========================================")
     print(f"结果：{PASS} 项通过，{FAIL} 项失败")

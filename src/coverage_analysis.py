@@ -70,7 +70,7 @@ CONFIG = {
     # 天链（TIANLIAN）是地球同步中继卫星，不直接成像，通信链路分析放到后续版本。
     "satellite_keywords": ["YAOGAN"],
     "start_utc": "2026-08-03 00:00:00",          # 分析开始时间（UTC）
-    "end_utc": "2026-08-04 00:00:00",            # 分析结束时间（UTC）
+    "end_utc": "2026-08-03 08:00:00",            # 分析结束时间（UTC）
     "step_minutes": 1,                            # 粗筛时间步长（分钟）
     "fov_half_angle_deg": 30.0,                   # 视场半角（度）：传感器最大能"歪着头"看多少
     "min_elevation_deg": 10.0,                    # 最小仰角（度）：太低受大气影响，不算有效覆盖

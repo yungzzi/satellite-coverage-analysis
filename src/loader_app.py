@@ -931,7 +931,7 @@ if tab_analysis.open:
         cov_t0 = d1.datetime_input("开始时间 (UTC)", value=datetime(2026, 8, 3, 0, 0,
                                                                     tzinfo=timezone.utc),
                                    key="cov_t0")
-        cov_t1 = d2.datetime_input("结束时间 (UTC)", value=datetime(2026, 8, 4, 0, 0,
+        cov_t1 = d2.datetime_input("结束时间 (UTC)", value=datetime(2026, 8, 3, 8, 0,
                                                                     tzinfo=timezone.utc),
                                    key="cov_t1")
         cov_sats = st.multiselect("卫星来源（收藏夹）", cov_names, key="cov_cols")
@@ -1105,6 +1105,10 @@ if tab_analysis.open:
                 if not sel_res["eval"]["satisfied"]:
                     st.warning("需求无法完全满足：即使所有卫星一起上仍有超长空窗（见空窗表）。"
                                "建议放宽 MRT、减小 K，或更换/延长时段。")
+                if (sel_res["eval"]["satisfied"] and len(sel_res["selected"]) == 1
+                        and sel_res["eval"]["mrt_actual_minutes"] == 0):
+                    st.info(f"说明：{sel_res['selected_names'][0]} 对目标区域全天 0 空窗覆盖，"
+                            "1 颗即满足需求（常见于同步/高轨卫星）；如需冗余可调高 K。")
                 with st.expander("推荐卫星（选中清单，按覆盖时长排名）", expanded=True):
                     st.dataframe(pd.DataFrame(sel_res["detail_rows"]), hide_index=True,
                                  width="stretch")

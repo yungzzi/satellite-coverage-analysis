@@ -232,8 +232,8 @@ with st.sidebar:
         st.stop()
     st.caption("提示：浏览器不允许网页自己关闭标签页；退出后页面会变成白屏提示，手动关即可。")
 
-tab_search, tab_collections, tab_constellations, tab_download, tab_analysis, tab_selection = st.tabs(
-    ["① 搜索与收藏", "② 收藏夹管理", "③ 星座导入", "④ 下载与自检", "⑤ 覆盖分析", "⑥ 选星决策"],
+tab_search, tab_collections, tab_constellations, tab_download, tab_analysis = st.tabs(
+    ["① 搜索与收藏", "② 收藏夹管理", "③ 星座导入", "④ 下载与自检", "⑤ 覆盖分析与选星决策"],
     key="main_tabs", on_change="rerun")
 
 
@@ -1004,7 +1004,11 @@ if tab_analysis.open:
                     st.session_state["cov_result"] = {
                         "dfs": dfs, "cfg": cfg, "n_sats": len(sats),
                         "n_win": len(all_windows),
+                        "windows_by_sat": windows_by_sat,
+                        "sats": sats,
+                        "t0": dt_list[0], "t1": dt_list[-1],
                     }
+                    st.session_state.pop("sel_result", None)
 
     res = st.session_state.get("cov_result")
     if res:
@@ -1058,164 +1062,79 @@ if tab_analysis.open:
                     (sl.PROJECT_ROOT / "output" / "gantt.png").exists():
                 g2.image(str(sl.PROJECT_ROOT / "output" / "gantt.png"), caption="覆盖甘特图")
 
-# ==================== ⑥ 选星决策（虚拟星座） ====================
 
-if tab_selection.open:
-    st.subheader("选星决策（虚拟星座）")
-    st.caption("输入与覆盖分析一致（同一套参数），另加“需求”：每 MRT 分钟内至少有 K 颗被选星覆盖。"
-               "算法：贪心（秒级）+ 整数规划（精确最优，内置 CBC）对照，输出推荐卫星清单。")
-    all_cols3 = sl.load_all_collections()
-    sel_names = [_collection_label(x) for x in all_cols3]
-
-    c1, c2 = st.columns(2)
-    with c1:
-        sel_mode = st.radio("目标区域", ["点+半径", "地区多边形"], key="sel_mode",
-                            horizontal=True)
-        sel_grid = 0.2
-        if sel_mode == "点+半径":
-            la, lo, ra = st.columns(3)
-            sel_lat = la.number_input("纬度", value=30.25, step=0.01, key="sel_lat")
-            sel_lon = lo.number_input("经度", value=120.15, step=0.01, key="sel_lon")
-            sel_rad = ra.number_input("半径(km)", value=5.0, min_value=0.1, step=0.5,
-                                      key="sel_rad")
-        else:
-            geo_dir = sl.PROJECT_ROOT / "data" / "geo"
-            geo_files = {p.stem: str(p) for p in sorted(geo_dir.glob("*.json"))}
-            sel_geo = st.selectbox("预设地区", list(geo_files), key="sel_geo")
-            sel_grid = float(st.number_input("网格间距(°)", value=0.2, min_value=0.05,
-                                             step=0.05, key="sel_grid"))
-        d1, d2 = st.columns(2)
-        sel_t0 = d1.datetime_input("开始时间 (UTC)", value=datetime(2026, 8, 3, 0, 0,
-                                                                    tzinfo=timezone.utc),
-                                   key="sel_t0")
-        sel_t1 = d2.datetime_input("结束时间 (UTC)", value=datetime(2026, 8, 4, 0, 0,
-                                                                    tzinfo=timezone.utc),
-                                   key="sel_t1")
-        sel_cols = st.multiselect("卫星来源（收藏夹）", sel_names, key="sel_cols")
-    with c2:
-        p1, p2 = st.columns(2)
-        sel_fov = p1.number_input("视场半角(°)", value=30.0, min_value=1.0, max_value=89.0,
-                                  step=1.0, key="sel_fov")
-        sel_elev = p2.number_input("最小仰角(°)", value=10.0, min_value=0.0, max_value=85.0,
-                                   step=1.0, key="sel_elev")
-        p3, p4 = st.columns(2)
-        sel_step = p3.number_input("时间步长(分钟)", value=1, min_value=1, step=1,
-                                   key="sel_step")
-        sel_refine = p4.number_input("边界精化(秒)", value=10, min_value=0, step=5,
-                                     key="sel_refine")
-        q1, q2 = st.columns(2)
-        sel_k = q1.number_input("K（最少同时可见）", value=1, min_value=1, step=1, key="sel_k")
-        sel_mrt = q2.number_input("MRT（最大重访间隔,分钟）", value=30.0, min_value=1.0,
-                                  step=1.0, key="sel_mrt")
-        sel_min_ev = st.number_input("单次最短窗口(分钟, 0=不限)", value=0.0, min_value=0.0,
-                                     step=1.0, key="sel_min_ev")
-        sel_method = st.selectbox("算法", ["两者对照（推荐）", "贪心（快）", "整数规划（精确）"],
-                                  key="sel_method")
-
-    if st.button("开始选星", key="btn_sel_run", type="primary"):
-        real_cols = [_strip_collection_label(n) for n in sel_cols]
-        if not real_cols:
-            st.warning("请至少选择一个收藏夹作为卫星来源。")
-        elif sel_t1 <= sel_t0:
-            st.warning("结束时间需晚于开始时间。")
-        else:
-            bar = st.progress(0.0, text="解析卫星（走缓存，不重复下载）……")
-            def cb(done, total, msg):
-                bar.progress(min(done / total, 1.0), text=msg)
-            recs = sl.resolve_collections_to_records(real_cols, progress=cb)
-            if not recs:
-                st.warning("没有解析到卫星（可能缓存缺失且数据源不可用），请先到③页解析。")
-            else:
-                ts = sl.load.timescale(builtin=True)
-                t, dt_list = cov.make_time_array(
-                    ts, sel_t0.strftime("%Y-%m-%d %H:%M:%S"),
-                    sel_t1.strftime("%Y-%m-%d %H:%M:%S"), int(sel_step))
-                cfg = {
-                    "region_name": "",
-                    "region_mode": "circle" if sel_mode == "点+半径" else "polygon",
-                    "tle_file": "GUI 收藏夹解析（合并 TLE）",
-                    "fov_half_angle_deg": float(sel_fov),
-                    "min_elevation_deg": float(sel_elev),
-                    "step_minutes": int(sel_step),
-                    "refine_step_seconds": int(sel_refine),
-                    "grid_spacing_deg": sel_grid,
-                    "save_gantt": False,
-                    "max_gantt_rows": 15,
-                }
-                if sel_mode == "点+半径":
-                    region = {"mode": "circle", "lat": float(sel_lat),
-                              "lon": float(sel_lon), "radius_km": float(sel_rad)}
-                    cfg["target"] = {"lat": float(sel_lat), "lon": float(sel_lon),
-                                     "radius_km": float(sel_rad)}
-                    cfg["region_name"] = f"圆心({sel_lat:.4f},{sel_lon:.4f}) 半径{sel_rad}km"
-                else:
-                    polygon = cov.load_region_polygon(geo_files[sel_geo])
-                    glats, glons = cov.make_grid_points(polygon, sel_grid)
-                    region = {"mode": "polygon", "lats": glats, "lons": glons}
-                    cfg["region_name"] = sel_geo
-                sats = sl.records_to_satellites(recs)
-                windows_by_sat = []
-                for i, sat in enumerate(sats):
-                    bar.progress((i + 1) / len(sats),
-                                 text=f"分析 {sat.name}（{i + 1}/{len(sats)}）")
-                    windows_by_sat.append(cov.analyze_one_satellite(sat, t, dt_list, region, cfg))
-                method = {"两者对照（推荐）": "both", "贪心（快）": "greedy",
-                          "整数规划（精确）": "ilp"}[sel_method]
-                bar.progress(1.0, text="选星优化……")
-                res = ss.run_selection(sats, windows_by_sat, dt_list[0], dt_list[-1],
-                                       step_minutes=int(sel_step), k_min=int(sel_k),
-                                       mrt_minutes=float(sel_mrt),
-                                       min_event_minutes=float(sel_min_ev),
-                                       method=method)
-                res["region_name"] = cfg["region_name"]
-                res["fov"] = float(sel_fov)
-                res["elev"] = float(sel_elev)
-                res["refine"] = int(sel_refine)
-                st.session_state["sel_result"] = res
+        with st.expander("选星决策（虚拟星座）：基于本次覆盖结果挑最少卫星满足需求", expanded=False):
+            st.caption("需求：每 MRT 分钟内至少有 K 颗被选星覆盖；单次最短窗口可选（0=不限）。"
+                       "默认贪心 + 整数规划对照，一致即放心交付。")
+            s1, s2, s3, s4 = st.columns(4)
+            sel_k = s1.number_input("K（最少同时可见）", value=1, min_value=1, step=1, key="sel_k")
+            sel_mrt = s2.number_input("MRT（最大重访间隔,分钟）", value=30.0, min_value=1.0,
+                                      step=1.0, key="sel_mrt")
+            sel_min_ev = s3.number_input("单次最短窗口(分钟, 0=不限)", value=0.0, min_value=0.0,
+                                         step=1.0, key="sel_min_ev")
+            sel_method = s4.selectbox("算法", ["两者对照（推荐）", "贪心（快）", "整数规划（精确）"],
+                                      key="sel_method")
+            if st.button("开始选星", key="btn_sel_run", type="primary"):
+                sel_res = ss.run_selection(
+                    res["sats"], res["windows_by_sat"], res["t0"], res["t1"],
+                    step_minutes=res["cfg"].get("step_minutes", 1),
+                    k_min=int(sel_k), mrt_minutes=float(sel_mrt),
+                    min_event_minutes=float(sel_min_ev),
+                    method={"两者对照（推荐）": "both", "贪心（快）": "greedy",
+                            "整数规划（精确）": "ilp"}[sel_method])
+                sel_res["region_name"] = res["cfg"].get("region_name", "")
+                sel_res["fov"] = res["cfg"].get("fov_half_angle_deg", 30.0)
+                sel_res["elev"] = res["cfg"].get("min_elevation_deg", 10.0)
+                sel_res["refine"] = res["cfg"].get("refine_step_seconds", 10)
+                st.session_state["sel_result"] = sel_res
                 st.rerun()
-
-    res = st.session_state.get("sel_result")
-    if res:
-        st.success(f"选星完成：卫星池 {res['n_sats_total']} 颗 → 推荐 {len(res['selected'])} 颗"
-                   f"（算法：{res['algo']}），需求{'满足' if res['eval']['satisfied'] else '未满足'}")
-        if not res["eval"]["satisfied"]:
-            st.warning("需求无法完全满足：即使所有卫星一起上仍有超长空窗（见空窗表）。"
-                       "建议放宽 MRT、减小 K，或更换/延长时段。")
-        with st.expander("推荐卫星（选中清单，按覆盖时长排名）", expanded=True):
-            st.dataframe(pd.DataFrame(res["detail_rows"]), hide_index=True, width="stretch")
-        with st.expander("全池 vs 选中对比"):
-            st.dataframe(pd.DataFrame(res["compare_rows"]), hide_index=True, width="stretch")
-        with st.expander("组合覆盖曲线（每分钟被选星覆盖数）"):
-            df_state = pd.DataFrame(res["state_rows"])
-            df_state["时间(UTC)"] = pd.to_datetime(df_state["时间(UTC)"])
-            st.line_chart(df_state.set_index("时间(UTC)")["覆盖数"])
-        with st.expander("空窗表（连续无覆盖/不足 K 颗的时间段）"):
-            if res["gaps"]:
-                st.dataframe(pd.DataFrame(res["gaps"]), hide_index=True, width="stretch")
-            else:
-                st.info("无空窗：需求已完全满足。")
-        with st.expander("算法与需求摘要"):
-            st.text(res["summary"])
-        x1, x2 = st.columns(2)
-        if x1.button("导出 Excel", key="btn_sel_excel"):
-            out_dir = sl.PROJECT_ROOT / "output"
-            out_dir.mkdir(exist_ok=True)
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_path = str(out_dir / f"selection_{stamp}.xlsx")
-            ss.export_selection_xlsx(res, out_path, region_name=res["region_name"],
-                                     extra_meta={
-                                         "视场半角(°)": res.get("fov", 30.0),
-                                         "最小仰角(°)": res.get("elev", 10.0),
-                                         "边界精化(秒)": res.get("refine", 10),
-                                     })
-            st.session_state["sel_xlsx"] = {"data": Path(out_path).read_bytes(),
-                                            "name": Path(out_path).name,
-                                            "path": out_path}
-            st.rerun()
-        xlsx = st.session_state.get("sel_xlsx")
-        if xlsx:
-            st.download_button(
-                "下载 Excel", data=xlsx["data"], file_name=xlsx["name"],
-                key="btn_sel_dl",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            st.caption(f"已保存：{xlsx['path']}")
+            sel_res = st.session_state.get("sel_result")
+            if sel_res:
+                st.success(f"选星完成：卫星池 {sel_res['n_sats_total']} 颗 → 推荐 "
+                           f"{len(sel_res['selected'])} 颗（算法：{sel_res['algo']}），"
+                           f"需求{'满足' if sel_res['eval']['satisfied'] else '未满足'}")
+                if not sel_res["eval"]["satisfied"]:
+                    st.warning("需求无法完全满足：即使所有卫星一起上仍有超长空窗（见空窗表）。"
+                               "建议放宽 MRT、减小 K，或更换/延长时段。")
+                with st.expander("推荐卫星（选中清单，按覆盖时长排名）", expanded=True):
+                    st.dataframe(pd.DataFrame(sel_res["detail_rows"]), hide_index=True,
+                                 width="stretch")
+                with st.expander("全池 vs 选中对比"):
+                    st.dataframe(pd.DataFrame(sel_res["compare_rows"]), hide_index=True,
+                                 width="stretch")
+                with st.expander("组合覆盖曲线（每分钟被选星覆盖数）"):
+                    df_state = pd.DataFrame(sel_res["state_rows"])
+                    df_state["时间(UTC)"] = pd.to_datetime(df_state["时间(UTC)"])
+                    st.line_chart(df_state.set_index("时间(UTC)")["覆盖数"])
+                with st.expander("空窗表（连续无覆盖/不足 K 颗的时间段）"):
+                    if sel_res["gaps"]:
+                        st.dataframe(pd.DataFrame(sel_res["gaps"]), hide_index=True,
+                                     width="stretch")
+                    else:
+                        st.info("无空窗：需求已完全满足。")
+                with st.expander("算法与需求摘要"):
+                    st.text(sel_res["summary"])
+                x1, x2 = st.columns(2)
+                if x1.button("导出选星 Excel", key="btn_sel_excel"):
+                    out_dir = sl.PROJECT_ROOT / "output"
+                    out_dir.mkdir(exist_ok=True)
+                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    out_path = str(out_dir / f"selection_{stamp}.xlsx")
+                    ss.export_selection_xlsx(sel_res, out_path,
+                                             region_name=sel_res["region_name"],
+                                             extra_meta={
+                                                 "视场半角(°)": sel_res.get("fov", 30.0),
+                                                 "最小仰角(°)": sel_res.get("elev", 10.0),
+                                                 "边界精化(秒)": sel_res.get("refine", 10),
+                                             })
+                    st.session_state["sel_xlsx"] = {"data": Path(out_path).read_bytes(),
+                                                    "name": Path(out_path).name,
+                                                    "path": out_path}
+                    st.rerun()
+                xlsx = st.session_state.get("sel_xlsx")
+                if xlsx:
+                    st.download_button(
+                        "下载选星 Excel", data=xlsx["data"], file_name=xlsx["name"],
+                        key="btn_sel_dl",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.caption(f"已保存：{xlsx['path']}")

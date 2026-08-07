@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 覆盖性分析 MVP（第一版）
 ========================
@@ -547,7 +547,6 @@ def plot_availability(state_df, cfg, out_png):
     plt.close(fig)
 
 
-def plot_gantt(all_windows, df_summary, cfg):
     """甘特图：只画覆盖时长最长的前 N 颗，避免行数过多看不清"""
     top = df_summary.head(cfg["max_gantt_rows"])
     sats = list(top["satellite"])
@@ -637,14 +636,13 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
         f.write(build_summary_text(df_state, df_summary, cfg, meta))
     print("文字摘要已保存：output/report_summary.txt")
 
-    # 可用卫星数曲线（主图）
-    plot_availability(df_state, cfg, "output/availability_curve.png")
-    print("可用卫星数曲线已保存：output/availability_curve.png")
-
-    # 甘特图（默认生成，可关）
-    if cfg.get("save_gantt", True):
-        plot_gantt(all_windows, df_summary, cfg)
-        print("甘特图已保存：output/gantt.png")
+    # 图（可选，默认生成；GUI 已去掉展示，cfg["save_plots"]=False 时不生成）
+    if cfg.get("save_plots", True):
+        plot_availability(df_state, cfg, "output/availability_curve.png")
+        print("可用卫星数曲线已保存：output/availability_curve.png")
+        if cfg.get("save_gantt", True):
+            plot_gantt(all_windows, df_summary, cfg)
+            print("甘特图已保存：output/gantt.png")
 
     # 控制台输出：按总覆盖时长排序，方便看"哪些卫星可用"
     print("\n覆盖时长排名（前 10）：")
@@ -655,6 +653,41 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
 
 
 # ==================== 6. 主流程 ====================
+
+def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=None):
+    """解析卫星 → 逐颗覆盖分析 → 组装结果（GUI 与测试共用的同一入口）。
+
+    2026-08-07 新增：把⑤页"开始覆盖分析"的运行逻辑抽成纯函数，
+    界面按钮和回归测试调用的是同一个函数，避免"测试通过但界面报错"。
+    参数：
+      recs        已解析的卫星记录（satellite_loader 输出）
+      region      目标区域 dict（circle / polygon）
+      cfg         覆盖参数（含 region_name / step_minutes 等）
+      start_str / end_str  时段（UTC，"%Y-%m-%d %H:%M:%S"）
+      progress    可选回调 progress(已完成比例 0~1, 说明文字)
+    返回 cov_result 字典（dfs / windows_by_sat / sats / t0 / t1），无任何窗口时返回 None。
+    """
+    import satellite_loader as sl  # 延迟导入，避免模块顶层互相依赖
+    ts = sl.load.timescale(builtin=True)
+    t, dt_list = make_time_array(ts, start_str, end_str, int(cfg.get("step_minutes", 1)))
+    sats = sl.records_to_satellites(recs)
+    all_windows = []
+    windows_by_sat = []
+    for i, sat in enumerate(sats):
+        if progress:
+            progress((i + 1) / len(sats), f"分析 {sat.name}（{i + 1}/{len(sats)}）")
+        windows = analyze_one_satellite(sat, t, dt_list, region, cfg)
+        windows_by_sat.append(windows)
+        all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
+    if not all_windows:
+        return None
+    dfs = build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats))
+    return {
+        "dfs": dfs, "cfg": cfg, "n_sats": len(sats), "n_win": len(all_windows),
+        "windows_by_sat": windows_by_sat, "sats": sats,
+        "t0": dt_list[0], "t1": dt_list[-1],
+    }
+
 
 def main():
     # 命令行参数优先，缺省用 CONFIG 里的默认值

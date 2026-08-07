@@ -53,6 +53,7 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 - [x] 选星决策模块（2026-08-06）：src/satellite_selection.py 贪心+整数规划（pulp/CBC）+统计报告；⑥选星页（复用⑤参数+需求 MRT/K）；测试基准 data/test_data/jilin1_all.tle（58 颗），贪心与 ILP 均 9 颗且 ILP 证明最优
 - [x] 缓存截断修复（2026-08-06）：download_text 加 TLE 完整性校验（行数 3 的倍数+格式），截断文件不入缓存；下载失败降级用旧缓存并警告；恢复 active.tle 至 14789 颗；待 CelesTrak 冷却后③页强制更新补齐最新星
 - [x] ⑤/⑥ 合并为一页（2026-08-07）：'覆盖分析与选星决策'单页签，覆盖结果下方直接选星（复用每颗星窗口，不再重复计算）
+- [x] GUI 去掉可用卫星数曲线与甘特图 + 验证链路补强（2026-08-07）：coverage_analysis.py 加 save_plots 开关（默认 True）；⑤页逻辑抽为 analyze_collection_pipeline（GUI 与测试共用）；新增 validate_selection.py 回归自检（11 项）
 
 ## 8. git 约定
 - 仅本地仓库，不配置远程、不推送云端。

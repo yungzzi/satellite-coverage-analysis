@@ -943,7 +943,6 @@ if tab_analysis.open:
                                    key="cov_step")
         cov_refine = p4.number_input("边界精化(秒)", value=10, min_value=0, step=5,
                                      key="cov_refine")
-        cov_gantt = st.checkbox("生成甘特图", value=True, key="cov_gantt")
         st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。"
                    "结果会同时保存到 output/ 目录。")
 
@@ -974,7 +973,8 @@ if tab_analysis.open:
                     "step_minutes": int(cov_step),
                     "refine_step_seconds": int(cov_refine),
                     "grid_spacing_deg": grid_spacing,
-                    "save_gantt": bool(cov_gantt),
+                    "save_gantt": False,
+                    "save_plots": False,
                     "max_gantt_rows": 15,
                 }
                 if cov_mode == "点+半径":
@@ -988,28 +988,16 @@ if tab_analysis.open:
                     grid_lats, grid_lons = cov.make_grid_points(polygon, grid_spacing)
                     region = {"mode": "polygon", "lats": grid_lats, "lons": grid_lons}
                     cfg["region_name"] = cov_geo
-                sats = sl.records_to_satellites(recs)
-                all_windows = []
-                windows_by_sat = []
-                for i, sat in enumerate(sats):
-                    bar.progress((i + 1) / len(sats),
-                                 text=f"分析 {sat.name}（{i + 1}/{len(sats)}）")
-                    windows = cov.analyze_one_satellite(sat, t, dt_list, region, cfg)
-                    windows_by_sat.append(windows)
-                    all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
-                bar.progress(1.0, text="整理输出……")
-                if not all_windows:
+                cov_result = cov.analyze_collection_pipeline(
+                    recs, region, cfg,
+                    cov_t0.strftime("%Y-%m-%d %H:%M:%S"),
+                    cov_t1.strftime("%Y-%m-%d %H:%M:%S"),
+                    progress=lambda frac, msg: bar.progress(min(frac, 1.0), text=msg))
+                if cov_result is None:
                     st.warning("该时段内没有卫星覆盖目标区域（无窗口）。可尝试：更长时段、"
                                "更大的目标区域，或更大的视场角。")
                 else:
-                    dfs = cov.build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats))
-                    st.session_state["cov_result"] = {
-                        "dfs": dfs, "cfg": cfg, "n_sats": len(sats),
-                        "n_win": len(all_windows),
-                        "windows_by_sat": windows_by_sat,
-                        "sats": sats,
-                        "t0": dt_list[0], "t1": dt_list[-1],
-                    }
+                    st.session_state["cov_result"] = cov_result
                     st.session_state.pop("sel_result", None)
 
     res = st.session_state.get("cov_result")
@@ -1056,13 +1044,6 @@ if tab_analysis.open:
             st.dataframe(df_state, hide_index=True, width="stretch")
         with st.expander("窗口明细（卫星视角，开始/结束/时长）"):
             st.dataframe(df_windows, hide_index=True, width="stretch")
-        if (sl.PROJECT_ROOT / "output" / "availability_curve.png").exists():
-            g1, g2 = st.columns(2)
-            g1.image(str(sl.PROJECT_ROOT / "output" / "availability_curve.png"),
-                     caption="可用卫星数曲线")
-            if res["cfg"].get("save_gantt") and \
-                    (sl.PROJECT_ROOT / "output" / "gantt.png").exists():
-                g2.image(str(sl.PROJECT_ROOT / "output" / "gantt.png"), caption="覆盖甘特图")
 
 
         with st.expander("选星决策（虚拟星座）：基于本次覆盖结果挑最少卫星满足需求", expanded=False):

@@ -76,7 +76,8 @@ CONFIG = {
     "min_elevation_deg": 10.0,                    # 最小仰角（度）：太低受大气影响，不算有效覆盖
     "grid_spacing_deg": 0.2,                      # 网格间距（度，约 22 km）
     "max_gantt_rows": 15,                         # 甘特图最多画几颗星（按覆盖时长排名）
-    "save_gantt": True,                           # 甘特图默认生成；改 False 可关闭
+    "save_gantt": False,                          # 甘特图默认不生成；需要时改 True
+    "save_plots": False,                          # 两张图默认都不生成；需要演示图时改 True
     "refine_step_seconds": 10,                    # 两段式：窗口边界精化步长（秒），0=不精化
     "refine_margin_minutes": 3,                   # 精化时向窗口两侧多扫的分钟数
 }
@@ -120,6 +121,8 @@ def apply_config_file(cfg, path):
     # 网格与输出
     if "grid_spacing_deg" in data:
         cfg["grid_spacing_deg"] = float(data["grid_spacing_deg"])
+    if "save_plots" in data:
+        cfg["save_plots"] = bool(data["save_plots"])
     if "save_gantt" in data:
         cfg["save_gantt"] = bool(data["save_gantt"])
     if "max_gantt_rows" in data:
@@ -547,6 +550,7 @@ def plot_availability(state_df, cfg, out_png):
     plt.close(fig)
 
 
+def plot_gantt(all_windows, df_summary, cfg):
     """甘特图：只画覆盖时长最长的前 N 颗，避免行数过多看不清"""
     top = df_summary.head(cfg["max_gantt_rows"])
     sats = list(top["satellite"])
@@ -636,11 +640,11 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
         f.write(build_summary_text(df_state, df_summary, cfg, meta))
     print("文字摘要已保存：output/report_summary.txt")
 
-    # 图（可选，默认生成；GUI 已去掉展示，cfg["save_plots"]=False 时不生成）
-    if cfg.get("save_plots", True):
+    # 图（默认关闭；需要时在 config.toml 设 save_plots=true 才生成）
+    if cfg.get("save_plots", False):
         plot_availability(df_state, cfg, "output/availability_curve.png")
         print("可用卫星数曲线已保存：output/availability_curve.png")
-        if cfg.get("save_gantt", True):
+        if cfg.get("save_gantt", False):
             plot_gantt(all_windows, df_summary, cfg)
             print("甘特图已保存：output/gantt.png")
 

@@ -134,7 +134,7 @@ def _collection_label(x: dict) -> str:
     if x.get("kind") == "constellation":
         return f"📡 {x['name']}（星座）"
     if x.get("kind") == "virtual_constellation":
-        return f"⭐ {x['name']}（虚拟星座）"
+        return f"⭐ {x['name']}（虚拟星座，来自选星）"
     return f"{x['name']}（我的）"
 
 
@@ -502,7 +502,7 @@ if tab_collections.open:
                            format_func=lambda i: labels[i], key="col_sel")
         c = all_c[idx]
         tag = ("（📡 星座收藏夹）" if c.get("kind") == "constellation"
-               else "（⭐ 虚拟星座）" if c.get("kind") == "virtual_constellation" else "")
+               else "（⭐ 虚拟星座，来自选星）" if c.get("kind") == "virtual_constellation" else "")
         st.markdown(f"**{c['name']}**{tag} —— {c.get('description') or '（无备注）'}")
         if c.get("builtin"):
             st.caption("内置夹只读，不能直接修改；想要自己的版本，请新建收藏夹后手动添加同样的规则或编号。")
@@ -1161,7 +1161,7 @@ if tab_analysis.open:
                     if sl.create_collection(vc_name, description=desc,
                                             kind="virtual_constellation"):
                         sl.add_entry(vc_name, "norad_list", " ".join(str(i) for i in ids))
-                        flash(f"已保存虚拟星座「{vc_name}」（{len(ids)} 颗，⭐ 标识），"
+                        flash(f"已保存虚拟星座「{vc_name}」（{len(ids)} 颗，⭐ 来自选星标识），"
                               f"可在②收藏夹管理查看。", kind="success")
                     else:
                         flash(f"同名收藏夹已存在：「{vc_name}」", kind="warning")

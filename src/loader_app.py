@@ -133,6 +133,8 @@ def _collection_label(x: dict) -> str:
         return f"{x['name']}（内置，只读）"
     if x.get("kind") == "constellation":
         return f"📡 {x['name']}（星座）"
+    if x.get("kind") == "virtual_constellation":
+        return f"⭐ {x['name']}（虚拟星座）"
     return f"{x['name']}（我的）"
 
 
@@ -499,7 +501,8 @@ if tab_collections.open:
         idx = st.selectbox("选择收藏夹", range(len(all_c)),
                            format_func=lambda i: labels[i], key="col_sel")
         c = all_c[idx]
-        tag = "（📡 星座收藏夹）" if c.get("kind") == "constellation" else ""
+        tag = ("（📡 星座收藏夹）" if c.get("kind") == "constellation"
+               else "（⭐ 虚拟星座）" if c.get("kind") == "virtual_constellation" else "")
         st.markdown(f"**{c['name']}**{tag} —— {c.get('description') or '（无备注）'}")
         if c.get("builtin"):
             st.caption("内置夹只读，不能直接修改；想要自己的版本，请新建收藏夹后手动添加同样的规则或编号。")
@@ -932,6 +935,22 @@ if tab_analysis.open:
                                                                     tzinfo=timezone.utc),
                                    key="cov_t1")
         cov_sats = st.multiselect("卫星来源（收藏夹）", cov_names, key="cov_cols")
+        up = st.file_uploader("上传 TLE 文件（可选，作为卫星来源）", type=["tle", "txt"],
+                              key="cov_tle_up")
+        if up is not None:
+            ukey = f"{up.name}|{up.size}"
+            if st.session_state.get("cov_tle_up_done") != ukey:
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                dest = sl.USER_FILES_DIR / f"upload_{stamp}_{up.name}"
+                dest.write_bytes(up.getvalue())
+                col_name = f"上传TLE-{Path(up.name).stem}-{datetime.now():%H%M%S}"
+                if sl.create_collection(col_name, description=f"上传的 TLE 文件：{up.name}", kind=""):
+                    sl.add_entry(col_name, "file", str(dest))
+                    st.session_state["cov_tle_up_done"] = ukey
+                    st.session_state["cov_cols"] = [_collection_label({"name": col_name, "kind": ""})]
+                    st.rerun()
+                else:
+                    st.warning(f"同名收藏夹已存在：{col_name}，请改名后再上传。")
     with c2:
         p1, p2 = st.columns(2)
         cov_fov = p1.number_input("视场半角(°)", value=30.0, min_value=1.0, max_value=89.0,
@@ -1047,16 +1066,23 @@ if tab_analysis.open:
 
 
         with st.expander("选星决策（虚拟星座）：基于本次覆盖结果挑最少卫星满足需求", expanded=st.session_state.get("sel_result") is not None):
-            st.caption("需求：每 MRT 分钟内至少有 K 颗被选星覆盖；单次最短窗口可选（0=不限）。"
-                       "默认贪心 + 整数规划对照，一致即放心交付。")
+            st.caption("需求：任意时刻往前 MRT 分钟内至少有 K 颗被选星覆盖（K=1 即至少一颗）。"
+                       "预设：宽松=360、标准=180、严格=60 分钟；默认贪心 + 整数规划对照。")
             s1, s2, s3, s4 = st.columns(4)
             sel_k = s1.number_input("K（最少同时可见）", value=1, min_value=1, step=1, key="sel_k")
-            sel_mrt = s2.number_input("MRT（最大重访间隔,分钟）", value=30.0, min_value=1.0,
-                                      step=1.0, key="sel_mrt")
+            sel_preset = s2.selectbox(
+                "需求预设", ["标准（MRT=180 分钟）", "宽松（MRT=360 分钟）",
+                             "严格（MRT=60 分钟）", "自定义"], key="sel_preset")
             sel_min_ev = s3.number_input("单次最短窗口(分钟, 0=不限)", value=0.0, min_value=0.0,
                                          step=1.0, key="sel_min_ev")
             sel_method = s4.selectbox("算法", ["两者对照（推荐）", "贪心（快）", "整数规划（精确）"],
                                       key="sel_method")
+            if sel_preset == "自定义":
+                sel_mrt = st.number_input("MRT（最大重访间隔,分钟）", value=180.0, min_value=1.0,
+                                          step=5.0, key="sel_mrt_custom")
+            else:
+                sel_mrt = {"标准（MRT=180 分钟）": 180.0, "宽松（MRT=360 分钟）": 360.0,
+                           "严格（MRT=60 分钟）": 60.0}[sel_preset]
             if st.button("开始选星", key="btn_sel_run", type="primary"):
                 sel_res = ss.run_selection(
                     res["sats"], res["windows_by_sat"], res["t0"], res["t1"],
@@ -1121,3 +1147,22 @@ if tab_analysis.open:
                         key="btn_sel_dl",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     st.caption(f"已保存：{xlsx['path']}")
+                st.divider()
+                vc_name = st.text_input(
+                    "虚拟星座名称（保存为收藏夹，带 ⭐ 标识）",
+                    value=f"虚拟星座-{datetime.now():%Y%m%d-%H%M%S}",
+                    key="sel_vc_name")
+                if st.button("保存为收藏夹（虚拟星座）", key="btn_sel_save"):
+                    ids = [sel_res["sats"][j].norad_id for j in sel_res["selected"]]
+                    desc = (f"选星虚拟星座：{sel_res.get('region_name', '')} "
+                            f"{sel_res['t0']:%Y-%m-%d %H:%M}~{sel_res['t1']:%H:%M} UTC "
+                            f"K={sel_res['k_min']} MRT={sel_res['mrt_minutes']:.0f} 分 "
+                            f"（{sel_res['algo']}，{len(ids)} 颗）")
+                    if sl.create_collection(vc_name, description=desc,
+                                            kind="virtual_constellation"):
+                        sl.add_entry(vc_name, "norad_list", " ".join(str(i) for i in ids))
+                        flash(f"已保存虚拟星座「{vc_name}」（{len(ids)} 颗，⭐ 标识），"
+                              f"可在②收藏夹管理查看。", kind="success")
+                    else:
+                        flash(f"同名收藏夹已存在：「{vc_name}」", kind="warning")
+                    st.rerun()

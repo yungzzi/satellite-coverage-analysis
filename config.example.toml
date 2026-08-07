@@ -28,5 +28,6 @@ min_elevation_deg = 10.0      # 最小仰角（度）
 grid_spacing_deg = 0.2
 
 # ---------- 输出 ----------
-save_gantt = true             # 甘特图默认生成，false 可关
+save_plots = false            # 图（可用卫星数曲线+甘特图）默认不生成；需要演示图时改 true
+save_gantt = false            # 甘特图（仅在 save_plots=true 时生效）
 max_gantt_rows = 15           # 甘特图最多画几颗星

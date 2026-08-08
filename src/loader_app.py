@@ -921,7 +921,9 @@ if tab_analysis.open:
                             horizontal=True)
         grid_spacing = 0.2
         if cov_mode == "点+半径":
-            _locs = sl.load_locations()
+            if "cov_loc_list" not in st.session_state:
+                st.session_state["cov_loc_list"] = sl.load_locations()
+            _locs = st.session_state["cov_loc_list"]
             _loc_label = lambda x: (f"{x['name']} ({x['lat']:.4f}, {x['lon']:.4f})"
                                     + ("（内置）" if x.get("source") == "builtin" else "（用户）"))
             _loc_names = ["（手动输入）"] + [_loc_label(x) for x in _locs]
@@ -945,6 +947,7 @@ if tab_analysis.open:
                     dc1, dc2 = st.columns(2)
                     if dc1.button("确认删除该地点", key="btn_cov_loc_del_yes"):
                         sl.delete_user_location(_loc["name"])
+                        st.session_state["cov_loc_list"] = sl.load_locations()
                         st.session_state.pop("cov_loc_del", None)
                         st.session_state.pop("cov_loc_applied", None)
                         flash(f"已删除常用地点：{_loc['name']}", kind="success")
@@ -963,11 +966,11 @@ if tab_analysis.open:
                                         for b in _locs if b.get("source") == "builtin")
                     sl.save_user_location(new_loc_name.strip(), float(cov_lat),
                                           float(cov_lon), float(cov_rad))
+                    st.session_state["cov_loc_list"] = sl.load_locations()
                     st.session_state.pop("cov_loc_applied", None)
                     flash(f"已保存常用地点：{new_loc_name.strip()}"
                           + ("（与内置同名，下拉中以“（用户）”标记区分）" if _same_builtin else ""),
                           kind="success")
-                    st.rerun()
                 else:
                     flash("请先输入地点名称再保存。", kind="warning")
         else:

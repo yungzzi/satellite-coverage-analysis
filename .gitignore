@@ -27,6 +27,7 @@ config.toml
 
 # 卫星数据加载器（阶段1）产生的用户数据（不入库）
 data/user_catalog.toml
+data/user_catalog.bak.toml
 data/tle_cache/
 data/user_files/
 

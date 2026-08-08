@@ -2,10 +2,11 @@
 """
 loader_app.py —— 卫星覆盖分析工作台图形界面（Streamlit）
 
-只做"卫星数据导入"这一部分的 GUI，三个页签：
-  ① 搜索与收藏：按名字/所属国/发射年份/高度搜索，勾选后加入收藏夹
-  ② 收藏夹管理：自动规则（名字规则）+ 手动卫星（编号清单可单颗删除/追加/归纳规则）/ 导入文件
-  ③ 下载与自检：多夹合并解析（下载 TLE 缓存）+ 一键自检
+只做"卫星数据导入"这一部分的 GUI，五个页签：
+  ① 搜索与收藏：按名字/编号/所属国/发射年份/高度搜索，勾选后加入收藏夹（只存编号清单）
+  ② 收藏夹管理：固定快照（编号清单 / 导入文件），旧式规则条目只读兼容
+  ③ 星座导入：整组解析 → 勾选预览 → 确认存编号快照
+  ④ 下载与自检：多夹合并解析（下载 TLE 缓存）+ 一键自检
 
 设计原则（与 CLI 一致）：
 - 核心逻辑全在 satellite_loader.py，本文件只是"壳"；
@@ -249,6 +250,11 @@ if tab_search.open:
     c_s1, c_s2 = st.columns([3, 1])
     c_s1.subheader("搜索卫星")
     c_s2.link_button("打开 CelesTrak", "https://celestrak.org")
+    st.caption("数据来源：CelesTrak（美国太空军公开编目的免费镜像，celestrak.org）。"
+               "需要更全的国产遥感星数据时，可到 "
+               "[SpaceMapper 遥感星座目录](https://spacemapper.cn/zh-cn/info/satellite/constellation/list/remotesensing.html) "
+               "挑选下载（需注册/付费，属用户自己的账号），下载的 TLE 文件可在②页导入或⑤页上传；"
+               "软件不保存任何账号 token。")
     c1, c2 = st.columns([2, 1])
     keyword = c1.text_input("名字关键字", key="kw",
                             placeholder="如 YAOGAN / GF-1 / STARLINK")
@@ -412,7 +418,7 @@ if tab_search.open:
                                   key="search_multi")
         st.caption(f"结果共 {len(df)} 条，筛选后 {len(view)} 条，当前已选 {len(selected)} 颗。")
         if len(df) > 500:
-            st.caption("结果较多（>500 条），建议用④星座导入一键收藏，或直接存为名字规则，避免逐颗勾选。")
+            st.caption("结果较多（>500 条），建议用③星座导入（整组预览确认后入夹），避免逐颗勾选。")
 
         sel_ids = []
         for opt in selected:
@@ -430,22 +436,9 @@ if tab_search.open:
             key="target_col") if user_cols else None
         new_name = st.text_input("快速新建收藏夹（留空则用上面的）", key="newcol",
                                  placeholder="如 我的遥感")
-        mode = st.radio("保存方式",
-                        ["名字规则（活，自动纳入新星；包含关键字匹配的全部卫星，与勾选无关）",
-                         "编号清单（固定，只保存勾选的星）"],
-                        key="save_mode")
-        search_kind = st.session_state.get("search_kind", "name")
-        if search_kind != "name":
-            st.caption("本次是「按编号 / 国际编号」搜索结果，只能保存为“编号清单”；"
-                       "想要“名字规则”请用名字关键字重新搜索。")
-        if mode.startswith("名字规则") and selected:
-            st.caption("注意：名字规则会包含关键字匹配的全部卫星，当前勾选不会单独生效；"
-                       "想只要勾选的星，请选“编号清单”。")
-        if strict and mode.startswith("名字规则"):
-            st.caption("提示：名字规则解析时仍按“名字包含关键字”取星（严格匹配只影响勾选），"
-                       "可能再次混入同名其他系列（如 GAOFEN 会带回吉林一号高分）；"
-                       "要锁定当前严格筛选出的这批星，请改用“编号清单”保存。")
-        if st.button("加入收藏夹", key="btn_add"):
+        st.caption("保存方式固定为**编号清单**（只存勾选的星，固定快照）；"
+                   "想按整族自动纳入新星，请用③星座导入。")
+        if st.button("加入收藏夹（存为编号清单）", key="btn_add"):
             target = (next((x["name"] for x in user_cols
                              if _collection_label(x) == col_target), None)
                       if col_target else None)
@@ -455,26 +448,15 @@ if tab_search.open:
                 target = new_name.strip()
             if not target:
                 st.error("请先选择或新建一个收藏夹。")
-            elif mode.startswith("名字规则"):
-                if st.session_state.get("search_kind", "name") != "name":
-                    st.error("按编号 / 国际编号搜索的结果不能保存为名字规则，请改用“编号清单”保存。")
-                else:
-                    _snapshot()
-                    if sl.add_entry(target, "name_filter", keyword.strip()):
-                        flash(f"已把名字规则「{keyword}」加入「{target}」")
-                    else:
-                        flash("该收藏夹里已经有相同的名字规则，未重复添加。", kind="warning")
-                    st.rerun()
+            elif not sel_ids:
+                st.error("请先用多选框选择至少一颗星（或点“全选当前筛选结果”）。")
             else:
-                if not sel_ids:
-                    st.error("请先用多选框选择至少一颗星（或点“全选当前筛选结果”）。")
+                _snapshot()
+                if sl.add_entry(target, "norad_list", " ".join(map(str, sel_ids))):
+                    flash(f"已把 {len(sel_ids)} 颗星（编号清单）加入「{target}」")
                 else:
-                    _snapshot()
-                    if sl.add_entry(target, "norad_list", " ".join(map(str, sel_ids))):
-                        flash(f"已把 {len(sel_ids)} 颗星（编号清单）加入「{target}」")
-                    else:
-                        flash("该收藏夹里已经有相同的编号清单，未重复添加。", kind="warning")
-                    st.rerun()
+                    flash("该收藏夹里已经有相同的编号清单，未重复添加。", kind="warning")
+                st.rerun()
         if st.button("直接解析所选（不入收藏夹）", key="btn_resolve_sel"):
             if not sel_ids:
                 st.error("请先选择至少一颗星（或点“全选当前筛选结果”）。")
@@ -499,9 +481,9 @@ if tab_collections.open:
     u1.button("撤销上一步", key="btn_undo", on_click=_do_undo, icon=":material/undo:")
     u2.button("重做下一步", key="btn_redo", on_click=_do_redo, icon=":material/redo:")
     u3.caption("撤销/重做只对本次打开软件期间的收藏夹操作有效，关闭页面后历史清空。")
-    st.caption("一个收藏夹分两部分：**自动规则**（名字规则，活）和 **手动导入**（固定清单，快照）。"
-               "“归纳成自动规则”= 把固定编号清单转成名字关键字规则，之后新发射的同名星会自动纳入；"
-               "固定清单是快照，不会自动进新星。解析下载时自动合并、按编号去重。")
+    st.caption("收藏夹只保存**固定快照**：编号清单（norad_list）或导入文件（file）；"
+               "旧式“名字规则 / 星座分组”条目仅作只读兼容，不再新建。"
+               "解析下载时自动合并、按编号去重。")
     all_c = sl.load_all_collections()
     if not all_c:
         st.info("暂无收藏夹。")
@@ -514,44 +496,34 @@ if tab_collections.open:
                else "（⭐ 虚拟星座，来自选星）" if c.get("kind") == "virtual_constellation" else "")
         st.markdown(f"**{c['name']}**{tag} —— {c.get('description') or '（无备注）'}")
         if c.get("builtin"):
-            st.caption("内置夹只读，不能直接修改；想要自己的版本，请新建收藏夹后手动添加同样的规则或编号。")
+            st.caption("内置夹只读，不能直接修改；想要自己的版本，请新建收藏夹后手动添加同样的编号或导入文件。")
 
-        # ---------- 分区 1：自动规则（名字规则） ----------
-        st.markdown("### ① 自动规则（名字规则）")
-        st.caption("解析时自动匹配名字含关键字的全部在轨卫星；新发射的同名卫星会自动纳入，不用手动更新。")
-        rule_entries = [e for e in c["entries"] if e["type"] == "name_filter"]
+        # ---------- 分区 1：旧式规则条目（只读兼容） ----------
+        st.markdown("### ① 旧式规则条目（只读兼容）")
+        st.caption("旧版“名字规则 / 星座分组”条目只读兼容，不再新建；"
+                   "新收藏夹一律保存编号清单或导入文件。")
+        rule_entries = [e for e in c["entries"] if e["type"] in ("name_filter", "celestrak_group")]
         if not rule_entries:
-            st.caption("（暂无自动规则）")
+            st.caption("（无旧式规则条目）")
         for i, e in enumerate(c["entries"]):
-            if e["type"] != "name_filter":
+            if e["type"] not in ("name_filter", "celestrak_group"):
                 continue
+            label = (f"星座分组：**{e['value']}**" if e["type"] == "celestrak_group"
+                     else f"名字规则：**{e['value']}**")
             r1, r2 = st.columns([5, 1])
-            r1.markdown(f"名字规则：**{e['value']}**")
+            r1.markdown(label)
             if not c.get("builtin") and r2.button("删除", key=f"del_rule_{c['name']}_{i}"):
                 _snapshot()
                 sl.remove_entry(c["name"], i)
-                flash(f"已删除名字规则「{e['value']}」")
+                flash(f"已删除旧式规则条目「{e['value']}」")
                 st.rerun()
-        if not c.get("builtin"):
-            a1, a2 = st.columns([4, 1])
-            new_rule = a1.text_input("新增名字规则（关键字，如 YAOGAN）", key=f"new_rule_{c['name']}")
-            if a2.button("添加规则", key=f"btn_new_rule_{c['name']}"):
-                if not new_rule.strip():
-                    st.warning("请先输入关键字。")
-                else:
-                    _snapshot()
-                    ok = sl.add_entry(c["name"], "name_filter", new_rule.strip())
-                    flash(f"已添加名字规则「{new_rule.strip()}」" if ok
-                          else "已有相同的名字规则，未重复添加。",
-                          kind="success" if ok else "warning")
-                    st.rerun()
 
         st.divider()
 
         # ---------- 分区 2：手动卫星（固定清单） ----------
         st.markdown("### ② 手动导入（固定清单）")
         st.caption("手动勾选或输入编号保存的星，固定不变（新发射的星不会自动进来）；"
-                   "可单颗删除、追加编号，或把整批归纳成自动规则。")
+                   "可单颗删除、追加编号。")
         list_entries = [e for e in c["entries"] if e["type"] == "norad_list"]
         file_entries = [e for e in c["entries"] if e["type"] == "file"]
         if not list_entries and not file_entries:
@@ -619,20 +591,6 @@ if tab_collections.open:
                             flash(f"已向「{c['name']}」追加 {len(ids)} 颗星（重复编号自动去重）")
                             st.rerun()
 
-                    # 归纳成自动规则：这批星有公共名字前缀时给出建议
-                    names = [r["name"] for r in by_id.values() if r.get("name")]
-                    prefix = sl.longest_common_prefix(names) if len(names) >= 2 else ""
-                    if len(prefix) >= 3:
-                        k1, k2 = st.columns([5, 1])
-                        k1.markdown(f"这批星的名字都带 **{prefix}** —— 可转成自动规则（以后自动纳入所有同名新星）：")
-                        if k2.button(f"转为自动规则「{prefix}」", key=f"btn_to_rule_{c['name']}"):
-                            _snapshot()
-                            ok = sl.add_entry(c["name"], "name_filter", prefix)
-                            flash(f"已添加名字规则「{prefix}」" if ok
-                                  else "已有相同名字规则，未重复添加。",
-                                  kind="success" if ok else "warning")
-                            st.rerun()
-
             # 导入文件条目：只读展示，可整条移除
             for fi, e in enumerate(file_entries):
                 try:
@@ -679,7 +637,7 @@ if tab_collections.open:
                                        "可到④页“下载与自检”强制更新全集后重试。")
                         st.success(f"本夹共 {len(rows_meta)} 颗卫星（数据来自本地缓存，秒开）")
                         st.caption("如需联网刷新 TLE/档案，请到④页“下载与自检”强制更新。")
-                        st.caption("需要保存成 TLE 文件请到 ③下载与自检 页“解析下载”。")
+                        st.caption("需要保存成 TLE 文件请到④页“下载与自检”解析下载。")
                         n_incomplete = sum(1 for x in rows_meta if not x.get("meta_complete"))
                         if n_incomplete:
                             st.caption(f"其中 {n_incomplete} 颗星的所属/发射日期等档案未联网补全"
@@ -770,7 +728,7 @@ if tab_collections.open:
                     st.rerun()
 
 
-# ==================== ③ 下载与自检 ====================
+# ==================== ④ 下载与自检 ====================
 
 if tab_download.open:
     st.subheader("下载解析（合并多个收藏夹 → 生成 TLE 文件）")
@@ -864,7 +822,7 @@ if tab_download.open:
             "2. 编目搜索（联网）——确认能搜到卫星档案（名字/国家/轨道参数）；\n"
             "3. 缓存行为——确认第二次查询不再重复下载；\n"
             "4. 收藏夹增删改移——用临时测试夹验证改名/删除/移动（自动清理，不碰你的收藏夹）；\n"
-            "5. 收藏夹解析——名字规则 / 编号清单 / 导入文件三种方式都能解析成卫星；\n"
+            "5. 收藏夹解析——编号清单 / 导入文件两种快照都能解析，旧式名字规则条目兼容读取；\n"
             "6. 多夹合并去重——确认重复的星只算一次；\n"
             "7. 星座导入与搜索增强——星座整组下载、名字规则黑名单过滤（星链不再被截断）、拼写纠错提示。\n\n"
             "**什么时候建议自检**：\n"
@@ -887,14 +845,16 @@ if tab_download.open:
                 st.error(f"{name}　{detail}")
 
 
-# ==================== ④ 星座导入 ====================
+# ==================== ③ 星座导入 ====================
 
 if tab_constellations.open:
     st.subheader("星座 / 常用卫星导入")
-    st.caption("按用途选一个星座（或常用单星，会标注“单星”），一键加入收藏夹（自动建夹），"
-               "之后到④页“下载与自检”解析下载整组 TLE；"
-               "所有没有现成 GROUP 分组的遥感家族（不止 YAOGAN）都建议走名字规则——"
-               "新发射的同名星会自动纳入，无需手动更新。")
+    st.caption("按用途选一个星座（或常用单星，会标注“单星”）：点“预览成员”解析出当前成员，"
+               "勾选要保留的星后确认，程序会把选择结果存为**编号快照**（固定，不会自动进新星）；"
+               "以后想纳入新发射的星，重新导入确认即可覆盖更新。"
+               "数据主源为 CelesTrak（美国太空军公开编目的免费镜像）；需要更全的国产遥感星数据，"
+               "推荐到 [SpaceMapper 遥感星座目录](https://spacemapper.cn/zh-cn/info/satellite/constellation/list/remotesensing.html) "
+               "挑选下载（需注册/付费，属用户自己的账号），下载的 TLE 文件可到②页导入或⑤页上传。")
     cons = sl.load_constellations()
     if not cons:
         st.info("暂无星座目录（data/constellations.toml 缺失或为空）。")
@@ -912,9 +872,9 @@ if tab_constellations.open:
         st.caption("数据来源：" + ("CelesTrak 整组下载（GROUP=" + src["value"] + "）"
                                    if src["type"] == "celestrak_group"
                                    else "名字规则（关键字 " + src["value"] + "）"))
-        b1, b2 = st.columns(2)
-        if b1.button("预览成员数", key="btn_cons_preview"):
-            with st.spinner("正在下载整组 TLE（首次稍慢，之后走缓存）……"):
+        b1, _ = st.columns(2)
+        if b1.button("预览成员", key="btn_cons_preview"):
+            with st.spinner("正在解析整组成员（首次稍慢，之后走缓存）……"):
                 recs = sl.resolve_collection(
                     {"entries": [{"type": src["type"], "value": src["value"]}]},
                     offline=False)
@@ -922,22 +882,40 @@ if tab_constellations.open:
                 st.warning("未取到该星座数据：缓存被清空且数据源下载被拒（限流）时会出现；请稍后重试。")
             st.session_state["cons_preview"] = {"name": c["name"], "recs": recs}
             st.rerun()
-        if b2.button("加入收藏夹（自动建夹）", key="btn_cons_add"):
-            _snapshot()
-            if sl.find_collection(sl.load_user_collections(), c["name"]) is None:
-                sl.create_collection(c["name"], kind="constellation")
-            ok = sl.add_entry(c["name"], src["type"], src["value"])
-            flash(f"已把「{c['name']}」加入收藏夹（📡 星座收藏夹）" if ok
-                  else "该收藏夹里已有相同条目，未重复添加。",
-                  kind="success" if ok else "warning")
-            st.rerun()
         prev = st.session_state.get("cons_preview")
         if prev and prev.get("name") == c["name"]:
             recs = prev["recs"]
-            st.success(f"「{c['name']}」解析到 {len(recs)} 颗卫星（按 NORAD 编号去重）")
-            st.dataframe(pd.DataFrame(
-                [{"卫星名": r["name"], "NORAD 编号": r["norad_id"]} for r in recs[:100]]),
-                hide_index=True)
+            st.success(f"「{c['name']}」解析到 {len(recs)} 颗卫星（按 NORAD 编号去重）；"
+                       "取消勾选可剔除个别星，确认后存为编号快照。")
+            df_pick = pd.DataFrame(
+                [{"保留": True, "卫星名": r["name"], "NORAD 编号": r["norad_id"]} for r in recs])
+            edited = st.data_editor(
+                df_pick, key=f"cons_pick_{c['name']}", hide_index=True,
+                disabled=["卫星名", "NORAD 编号"], width="stretch",
+                column_config={"保留": st.column_config.CheckboxColumn("保留")})
+            n_pick = int(edited["保留"].sum()) if edited is not None else 0
+            e1, e2 = st.columns([2, 1])
+            if e1.button(f"确认加入收藏夹（存 {n_pick} 颗编号快照）", key="btn_cons_confirm",
+                         disabled=n_pick == 0):
+                ids = [int(x) for x in edited.loc[edited["保留"], "NORAD 编号"].tolist()]
+                _snapshot()
+                if sl.find_collection(sl.load_user_collections(), c["name"]) is None:
+                    sl.create_collection(c["name"], kind="constellation")
+                cur = sl.find_collection(sl.load_user_collections(), c["name"])
+                if cur is None:
+                    flash("收藏夹创建失败，请重试。", kind="error")
+                else:
+                    for idx in reversed([i for i, e in enumerate(cur["entries"])
+                                         if e["type"] == "norad_list"]):
+                        sl.remove_entry(c["name"], idx)
+                    ok = sl.add_entry(c["name"], "norad_list", " ".join(map(str, ids)))
+                    st.session_state.pop("cons_preview", None)
+                    flash(f"已把「{c['name']}」的 {len(ids)} 颗星存为编号快照（📡 星座收藏夹）" if ok
+                          else "写入失败，请重试。", kind="success" if ok else "error")
+                    st.rerun()
+            if e2.button("取消", key="btn_cons_cancel"):
+                st.session_state.pop("cons_preview", None)
+                st.rerun()
 
 
 # ==================== ⑤ 覆盖分析 ====================

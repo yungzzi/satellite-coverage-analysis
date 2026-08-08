@@ -718,7 +718,12 @@ if tab_collections.open:
                         st.warning("请先勾选确认。")
         with m2:
             st.caption("导入本地文件（TLE 或编号清单），程序会复制到 data/user_files/ 统一管理：")
-            f_up = st.file_uploader("选择文件（.txt / .tle）", type=["txt", "tle"], key="file_up")
+            f_up = st.file_uploader(
+                "选择文件（.txt / .tle）", type=["txt", "tle"], key="file_up",
+                help="TLE：标准两行轨道根数，每颗星 3 行（名称行 + 两行数字），可多颗；"
+                     "编号清单：每行一个 NORAD 编号。获取途径：CelesTrak（celestrak.org）、"
+                     "spacemapper.cn、Space-Track（需注册），或③页'下载与自检'。"
+                     "建议用分析日期前 2 天内的 TLE。")
             if f_up is not None and st.button("导入并加入当前收藏夹", key="btn_import"):
                 if c.get("builtin"):
                     st.error("内置夹只读，请新建收藏夹后再导入。")
@@ -953,11 +958,16 @@ if tab_analysis.open:
             new_loc_name = sv1.text_input("保存当前坐标为常用地点（留空不保存）", key="cov_loc_new")
             if sv2.button("保存地点", key="btn_cov_loc_save"):
                 if new_loc_name.strip():
-                    sl.save_user_location(new_loc_name.strip(), float(cov_lat),
-                                          float(cov_lon), float(cov_rad))
-                    st.session_state.pop("cov_loc_applied", None)
-                    flash(f"已保存常用地点：{new_loc_name.strip()}", kind="success")
-                    st.rerun()
+                    if any(b["name"] == new_loc_name.strip()
+                           for b in _locs if b.get("source") == "builtin"):
+                        flash("该名称与内置地点相同，请换个名称（内置地点只读，不会被覆盖）。",
+                              kind="warning")
+                    else:
+                        sl.save_user_location(new_loc_name.strip(), float(cov_lat),
+                                              float(cov_lon), float(cov_rad))
+                        st.session_state.pop("cov_loc_applied", None)
+                        flash(f"已保存常用地点：{new_loc_name.strip()}", kind="success")
+                        st.rerun()
                 else:
                     flash("请先输入地点名称再保存。", kind="warning")
         else:
@@ -975,8 +985,18 @@ if tab_analysis.open:
                                                                     tzinfo=timezone.utc),
                                    key="cov_t1")
         cov_sats = st.multiselect("卫星来源（收藏夹）", cov_names, key="cov_cols")
-        up = st.file_uploader("上传 TLE 文件（可选，作为卫星来源）", type=["tle", "txt"],
-                              key="cov_tle_up")
+        up = st.file_uploader(
+            "上传 TLE 文件（可选，作为卫星来源）", type=["tle", "txt"], key="cov_tle_up",
+            help="标准两行轨道根数（TLE）文件：每颗星 3 行（名称行 + 两行数字），可含多颗星，"
+                 "纯文本 .txt/.tle。获取途径：CelesTrak（celestrak.org，免费无需注册）、"
+                 "Space-Track（需注册）、spacemapper.cn，或本工具③页'下载与自检'从 CelesTrak 下载。"
+                 "建议使用分析日期前 2 天内更新的 TLE，过期 TLE 外推误差会变大。")
+        with st.expander("TLE 文件格式示例（点击展开）"):
+            st.code("YAOGAN-41\n"
+                    "1 58582U 23197A   26216.04232449 -.00000351  00000+0  00000+0 0  9993\n"
+                    "2 58582   3.0457 313.8823 0014312 202.7838 294.2930  1.00266763  9805")
+            st.caption("每颗星 3 行：第 1 行名称（可中文），第 2~3 行为两行轨道根数；"
+                       "多颗星按此格式依次排列，一个文件可包含全部卫星。")
         if up is not None:
             ukey = f"{up.name}|{up.size}"
             if st.session_state.get("cov_tle_up_done") != ukey:
@@ -1092,7 +1112,7 @@ if tab_analysis.open:
                                             "path": out_path}
         xlsx = st.session_state["cov_xlsx"]
         st.download_button(
-            "下载 Excel", data=xlsx["data"], file_name=xlsx["name"],
+            "下载覆盖 Excel", data=xlsx["data"], file_name=xlsx["name"],
             key="btn_cov_dl",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         st.caption(f"已保存：{xlsx['path']}")

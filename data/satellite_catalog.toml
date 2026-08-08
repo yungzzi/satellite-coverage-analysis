@@ -30,3 +30,10 @@ description = "长光吉林一号全部可得卫星（快照 2026-08-06，含未
 entries = [
   { type = "file", value = "data/test_data/jilin1_all.tle" },
 ]
+
+[[collections]]
+name = "中国遥感全量（测试）"
+description = "中国遥感卫星全集快照（测试基准 303 颗：遥感/高分/吉林/天绘/四维高景/海洋/珠海/资源/陆地探测/北京/环境/珞珈等，快照 2026-08-08）；数据来自 data/test_data/china_remote_sensing_all.tle"
+entries = [
+  { type = "file", value = "data/test_data/china_remote_sensing_all.tle" },
+]

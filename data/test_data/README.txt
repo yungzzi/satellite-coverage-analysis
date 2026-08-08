@@ -5,3 +5,8 @@
 - 快照时间：2026-08-06（来自当日 CelesTrak active 全集）。
 - TLE 会随时间老化；算法开发用此固定文件即可，正式分析前建议重新生成
   （从最新全集按"名字含 JILIN 或 NORAD 69538~69545"提取，见 Q96/Q99）。
+
+- china_remote_sensing_all.tle：中国遥感卫星全集快照（测试基准，303 颗，快照 2026-08-08，来自 CelesTrak active 全集）。
+  构成：{'BEIJING': 2, 'HAIYANG': 10, 'YAOGAN': 163, 'HUANJING': 2, 'ZIYUAN': 4, 'GAOFEN': 36, 'JILIN': 50, 'SUPERVIEW': 13, 'ZHUHAI': 5, 'LUOJIA': 1, 'TIANHUI': 14, 'LUDI TANCE': 3}。
+  口径：名字以 YAOGAN/GAOFEN/JILIN/HAIYANG/ZIYUAN/TIANHUI/SIWEI/ZHUHAI/LUOJIA/LUDI TANCE/HUANJING/QIANSHENG/BEIJING/SUPERVIEW/XINJIAN/CHONGXIN 开头。
+  注意：仅含公开 TLE 的在轨星；不含未公开编目/已退役星。

@@ -42,8 +42,8 @@ os.chdir(str(sl.PROJECT_ROOT))
 
 
 def flash(msg: str, kind: str = "success"):
-    """把反馈消息存进会话状态，跨 rerun 显示（st.rerun 不会把它清掉）。"""
-    st.session_state["flash"] = {"kind": kind, "msg": msg}
+    """即时右上角 toast 反馈（不依赖 rerun，避免整页刷新）。"""
+    st.toast(msg, icon="✅" if kind == "success" else "⚠️")
 
 
 def show_flash():
@@ -232,7 +232,10 @@ with st.sidebar:
         )
         threading.Timer(1.5, os._exit, args=(0,)).start()
         st.stop()
-    st.caption("提示：浏览器不允许网页自己关闭标签页；退出后页面会变成白屏提示，手动关即可。")
+    st.caption("提示：浏览器不允许网页自行关闭标签页，请用上方「停止并退出程序」按钮正常退出"
+               "（退出后页面白屏，再手动关闭本标签页）。不建议直接点浏览器右上角×关闭网页——"
+               "那样程序仍在后台运行；若误操作，可在浏览器地址栏重新输入 "
+               "http://localhost:8501 打开本界面，再点按钮正常退出。")
 
 tab_search, tab_collections, tab_constellations, tab_download, tab_analysis = st.tabs(
     ["① 搜索与收藏", "② 收藏夹管理", "③ 星座导入", "④ 下载与自检", "⑤ 覆盖分析与选星决策"],
@@ -400,10 +403,8 @@ if tab_search.open:
         b1, b2 = st.columns(2)
         if b1.button("全选当前筛选结果", key="btn_sel_all"):
             st.session_state["search_multi"] = list(options)
-            st.rerun()
         if b2.button("清空选择", key="btn_sel_none"):
             st.session_state["search_multi"] = []
-            st.rerun()
         selected = st.multiselect("选择卫星（配合上方全选/清空按钮）", options,
                                   key="search_multi")
         st.caption(f"结果共 {len(df)} 条，筛选后 {len(view)} 条，当前已选 {len(selected)} 颗。")
@@ -936,7 +937,6 @@ if tab_analysis.open:
                     st.session_state["cov_lon"] = float(_loc["lon"])
                     st.session_state["cov_rad"] = float(_loc.get("radius_km", 5.0))
                     st.session_state["cov_loc_applied"] = cov_loc
-                    st.rerun()
             la, lo, ra = st.columns(3)
             cov_lat = la.number_input("纬度", value=30.25, step=0.01, key="cov_lat")
             cov_lon = lo.number_input("经度", value=120.15, step=0.01, key="cov_lon")
@@ -951,13 +951,10 @@ if tab_analysis.open:
                         st.session_state.pop("cov_loc_del", None)
                         st.session_state.pop("cov_loc_applied", None)
                         flash(f"已删除常用地点：{_loc['name']}", kind="success")
-                        st.rerun()
                     if dc2.button("取消", key="btn_cov_loc_del_no"):
                         st.session_state.pop("cov_loc_del", None)
-                        st.rerun()
                 elif st.button("删除该用户地点", key="btn_cov_loc_del"):
                     st.session_state["cov_loc_del"] = cov_loc
-                    st.rerun()
             sv1, sv2 = st.columns([3, 1])
             new_loc_name = sv1.text_input("保存当前坐标为常用地点（留空不保存）", key="cov_loc_new")
             if sv2.button("保存地点", key="btn_cov_loc_save"):
@@ -1208,7 +1205,6 @@ if tab_analysis.open:
                 sel_res["refine"] = res["cfg"].get("refine_step_seconds", 10)
                 st.session_state["sel_result"] = sel_res
                 st.session_state.pop("sel_xlsx", None)
-                st.rerun()
             sel_res = st.session_state.get("sel_result")
             if sel_res:
                 req_lbl = {"continuous": "连续覆盖（无空窗）",
@@ -1328,4 +1324,3 @@ if tab_analysis.open:
                               f"可在②收藏夹管理查看。", kind="success")
                     else:
                         flash(f"同名收藏夹已存在：「{vc_name}」", kind="warning")
-                    st.rerun()

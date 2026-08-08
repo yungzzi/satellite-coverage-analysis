@@ -721,8 +721,9 @@ if tab_collections.open:
             f_up = st.file_uploader(
                 "选择文件（.txt / .tle）", type=["txt", "tle"], key="file_up",
                 help="TLE：标准两行轨道根数，每颗星 3 行（名称行 + 两行数字），可多颗；"
-                     "编号清单：每行一个 NORAD 编号。获取途径：CelesTrak（celestrak.org）、"
-                     "spacemapper.cn、Space-Track（需注册），或③页'下载与自检'。"
+                     "编号清单：每行一个 NORAD 编号。推荐流程：①页搜索卫星 → 加入收藏夹 → "
+                     "④页'下载与自检'自动下载；也可从 CelesTrak（celestrak.org）、"
+                     "spacemapper.cn、Space-Track（需注册）获取文件后手动导入。"
                      "建议用分析日期前 2 天内的 TLE。")
             if f_up is not None and st.button("导入并加入当前收藏夹", key="btn_import"):
                 if c.get("builtin"):
@@ -988,8 +989,9 @@ if tab_analysis.open:
         up = st.file_uploader(
             "上传 TLE 文件（可选，作为卫星来源）", type=["tle", "txt"], key="cov_tle_up",
             help="标准两行轨道根数（TLE）文件：每颗星 3 行（名称行 + 两行数字），可含多颗星，"
-                 "纯文本 .txt/.tle。获取途径：CelesTrak（celestrak.org，免费无需注册）、"
-                 "Space-Track（需注册）、spacemapper.cn，或本工具③页'下载与自检'从 CelesTrak 下载。"
+                 "纯文本 .txt/.tle。推荐流程：①页搜索卫星 → 加入收藏夹 → ④页'下载与自检'"
+                 "（自动下载 TLE 缓存）→ 本页分析；也可从 CelesTrak（celestrak.org，免费无需注册）、"
+                 "spacemapper.cn、Space-Track（需注册）获取 TLE 文件后手动上传。"
                  "建议使用分析日期前 2 天内更新的 TLE，过期 TLE 外推误差会变大。")
         with st.expander("TLE 文件格式示例（点击展开）"):
             st.code("YAOGAN-41\n"

@@ -916,10 +916,13 @@ if tab_analysis.open:
         grid_spacing = 0.2
         if cov_mode == "点+半径":
             _locs = sl.load_locations()
-            _loc_names = ["（手动输入）"] + [x["name"] for x in _locs]
+            _loc_label = lambda x: (f"{x['name']} ({x['lat']:.4f}, {x['lon']:.4f})"
+                                    + ("（内置）" if x.get("source") == "builtin" else "（用户）"))
+            _loc_names = ["（手动输入）"] + [_loc_label(x) for x in _locs]
             cov_loc = st.selectbox("常用地点（内置+用户）", _loc_names, key="cov_loc")
+            _loc = None
             if cov_loc != "（手动输入）":
-                _loc = next((x for x in _locs if x["name"] == cov_loc), None)
+                _loc = next((x for x in _locs if _loc_label(x) == cov_loc), None)
                 if _loc and st.session_state.get("cov_loc_applied") != cov_loc:
                     st.session_state["cov_lat"] = float(_loc["lat"])
                     st.session_state["cov_lon"] = float(_loc["lon"])
@@ -931,6 +934,21 @@ if tab_analysis.open:
             cov_lon = lo.number_input("经度", value=120.15, step=0.01, key="cov_lon")
             cov_rad = ra.number_input("半径(km)", value=5.0, min_value=0.1, step=0.5,
                                       key="cov_rad")
+            if _loc is not None and _loc.get("source") != "builtin":
+                if st.session_state.get("cov_loc_del") == cov_loc:
+                    dc1, dc2 = st.columns(2)
+                    if dc1.button("确认删除该地点", key="btn_cov_loc_del_yes"):
+                        sl.delete_user_location(_loc["name"])
+                        st.session_state.pop("cov_loc_del", None)
+                        st.session_state.pop("cov_loc_applied", None)
+                        flash(f"已删除常用地点：{_loc['name']}", kind="success")
+                        st.rerun()
+                    if dc2.button("取消", key="btn_cov_loc_del_no"):
+                        st.session_state.pop("cov_loc_del", None)
+                        st.rerun()
+                elif st.button("删除该用户地点", key="btn_cov_loc_del"):
+                    st.session_state["cov_loc_del"] = cov_loc
+                    st.rerun()
             sv1, sv2 = st.columns([3, 1])
             new_loc_name = sv1.text_input("保存当前坐标为常用地点（留空不保存）", key="cov_loc_new")
             if sv2.button("保存地点", key="btn_cov_loc_save"):
@@ -1040,6 +1058,7 @@ if tab_analysis.open:
                 else:
                     st.session_state["cov_result"] = cov_result
                     st.session_state.pop("sel_result", None)
+                    st.session_state.pop("cov_xlsx", None)
 
     res = st.session_state.get("cov_result")
     if res:
@@ -1048,8 +1067,7 @@ if tab_analysis.open:
         st.success(f"分析完成：卫星池 {res['n_sats']} 颗（全部导入）参与分析，"
                    f"{len(df_summary)} 颗有覆盖，共 {res['n_win']} 个窗口"
                    f"（目标：{res['cfg']['region_name']}）")
-        x1, x2 = st.columns([1, 3])
-        if x1.button("导出 Excel", key="btn_cov_excel"):
+        if "cov_xlsx" not in st.session_state:
             meta = {
                 "region_name": res["cfg"].get("region_name", ""),
                 "region_mode": res["cfg"].get("region_mode", "circle"),
@@ -1072,20 +1090,23 @@ if tab_analysis.open:
             st.session_state["cov_xlsx"] = {"data": Path(out_path).read_bytes(),
                                             "name": Path(out_path).name,
                                             "path": out_path}
-            st.rerun()
-        xlsx = st.session_state.get("cov_xlsx")
-        if xlsx:
-            st.download_button(
-                "下载 Excel", data=xlsx["data"], file_name=xlsx["name"],
-                key="btn_cov_dl",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            st.caption(f"已保存：{xlsx['path']}")
+        xlsx = st.session_state["cov_xlsx"]
+        st.download_button(
+            "下载 Excel", data=xlsx["data"], file_name=xlsx["name"],
+            key="btn_cov_dl",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.caption(f"已保存：{xlsx['path']}")
         with st.expander("卫星汇总（每颗星覆盖时长/覆盖率，按时长排名）"):
             st.dataframe(df_summary, hide_index=True, width="stretch")
         with st.expander("整体状态表（每分钟几颗星在覆盖）"):
             st.dataframe(df_state, hide_index=True, width="stretch")
         with st.expander("窗口明细（卫星视角，开始/结束/时长）"):
             st.dataframe(df_windows, hide_index=True, width="stretch")
+        with st.expander("空窗表（连续无覆盖时间段）"):
+            if not df_gaps.empty:
+                st.dataframe(df_gaps, hide_index=True, width="stretch")
+            else:
+                st.info("无空窗：全时段持续有覆盖。")
 
 
         with st.expander("选星决策（虚拟星座）：基于本次覆盖结果挑最少卫星满足需求", expanded=st.session_state.get("sel_result") is not None):
@@ -1162,6 +1183,7 @@ if tab_analysis.open:
                 sel_res["elev"] = res["cfg"].get("min_elevation_deg", 10.0)
                 sel_res["refine"] = res["cfg"].get("refine_step_seconds", 10)
                 st.session_state["sel_result"] = sel_res
+                st.session_state.pop("sel_xlsx", None)
                 st.rerun()
             sel_res = st.session_state.get("sel_result")
             if sel_res:
@@ -1198,6 +1220,12 @@ if tab_analysis.open:
                         st.warning("需求无法完全满足：即使所有卫星一起上仍有超长空窗（见空窗表）。"
                                    "建议放宽 MRT、减小 K，或更换/延长时段。")
                         st.info("该组合已用最少卫星把空窗压到该池子能做到的最小（尽力而为）。")
+                    elif sel_res["req_mode"] == "coverage_pct":
+                        _full_cov = sel_res.get("full", {}).get("coverage_pct", 0.0)
+                        _thr = sel_res.get("coverage_threshold_pct") or 100.0
+                        st.error(f"覆盖率要求未达到：该卫星池最高也只有 {_full_cov:.1f}% 覆盖率"
+                                 f"（阈值 {_thr:.0f}%）。")
+                        st.info("该组合已用最少卫星达到该池子能做到的最大覆盖率（尽力而为）。")
                 if (sel_res["eval"]["satisfied"] and sel_res["req_mode"] == "continuous"
                         and len(sel_res["selected"]) == 1):
                     st.info(f"说明：{sel_res['selected_names'][0]} 对目标区域全程 0 空窗覆盖，"
@@ -1237,8 +1265,7 @@ if tab_analysis.open:
                             st.caption(sel_res["optimal_note"])
                 with st.expander("算法与需求摘要"):
                     st.text(sel_res["summary"])
-                x1, x2 = st.columns(2)
-                if x1.button("导出选星 Excel", key="btn_sel_excel"):
+                if "sel_xlsx" not in st.session_state:
                     out_dir = sl.PROJECT_ROOT / "output"
                     out_dir.mkdir(exist_ok=True)
                     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1253,14 +1280,12 @@ if tab_analysis.open:
                     st.session_state["sel_xlsx"] = {"data": Path(out_path).read_bytes(),
                                                     "name": Path(out_path).name,
                                                     "path": out_path}
-                    st.rerun()
-                xlsx = st.session_state.get("sel_xlsx")
-                if xlsx:
-                    st.download_button(
-                        "下载选星 Excel", data=xlsx["data"], file_name=xlsx["name"],
-                        key="btn_sel_dl",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    st.caption(f"已保存：{xlsx['path']}")
+                xlsx = st.session_state["sel_xlsx"]
+                st.download_button(
+                    "下载选星 Excel", data=xlsx["data"], file_name=xlsx["name"],
+                    key="btn_sel_dl",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.caption(f"已保存：{xlsx['path']}")
                 st.divider()
                 vc_name = st.text_input(
                     "虚拟星座名称（保存为收藏夹，带 ⭐ 标识）",

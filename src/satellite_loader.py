@@ -662,13 +662,14 @@ def load_all_collections() -> List[dict]:
 def load_locations() -> List[dict]:
     """合并内置 + 用户常用地点，返回 [{"name","lat","lon","radius_km"}]。"""
     out = []
-    for p in (BUILTIN_LOCATIONS, USER_LOCATIONS):
+    for p, source in ((BUILTIN_LOCATIONS, "builtin"), (USER_LOCATIONS, "user")):
         if tomllib is None or not p.exists():
             continue
         try:
             with open(p, "rb") as f:
                 data = tomllib.load(f)
-            out.extend(data.get("locations", []))
+            for loc in data.get("locations", []):
+                out.append({**loc, "source": source})
         except Exception:
             continue
     return out

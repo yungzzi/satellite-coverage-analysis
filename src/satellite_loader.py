@@ -6,10 +6,10 @@ satellite_loader.py —— 卫星数据加载器（阶段 1，独立模块）
 1. 搜索：从 CelesTrak 免费接口（无需 token）按 名字 / NORAD 编号 / 常用指标 搜索卫星。
    本地有一份"编目缓存"（satcat.csv），可离线按 国家 / 发射年份 / 高度 过滤。
 2. 收藏夹：内置目录（只读，随软件发布）+ 用户收藏（单文件 data/user_catalog.toml）。
-   支持 新建 / 改名 / 删除（交互时提示一次）/ 移动条目；夹内条目三种类型：
-     name_filter —— 名字规则（"活的"，更新时自动纳入新星）
+   支持 新建 / 改名 / 删除（交互时提示一次）/ 移动条目；夹内条目只两类固定快照（Q132）：
      norad_list  —— 手动挑选的星 / 编号清单（"固定快照"，新星不自动进来）
      file        —— 导入的 TLE / 编号文件（程序复制到 data/user_files/ 统一管理）
+   旧式 name_filter（名字规则）/ celestrak_group（星座分组）条目仅兼容读取，不再新建。
 3. 下载与缓存：下载的文件存 data/tle_cache/，超时才重新下载，不重复请求。
 4. 解析：把 TLE 解析成"包装类" Satellite（内部装 skyfield 的 EarthSatellite，
    对外提供 name / norad_id / sensor 字段，并把 .at() 等调用透传给轨道对象）。
@@ -641,7 +641,7 @@ def save_user_collections(collections: List[dict]):
     """保存用户收藏到 data/user_catalog.toml（先写临时文件再替换）。"""
     _ensure_dirs()
     text = ("# 用户收藏夹（程序自动维护，无需手动编辑）\n"
-            "# 条目类型：name_filter=名字规则 / norad_list=编号清单 / file=导入文件\n\n"
+            "# 条目类型（固定快照）：norad_list=编号清单 / file=导入文件；旧式规则仅兼容\n\n"
             + _dump_collections(collections))
     fd, tmp_name = tempfile.mkstemp(dir=str(USER_CATALOG.parent), suffix=".tmp")
     try:
@@ -1396,34 +1396,31 @@ def _menu_search():
     show = rows[:20]
     print_search_results(show)
 
-    print("\n  如何保存？（a=存成名字规则[自动纳入新星] / 输入编号如 1,3-5 / 0=取消）")
+    print("\n  如何保存？（输入编号如 1,3-5 / 0=取消；只存编号清单快照）")
     s = input("> ").strip().lower()
     if s == "0":
         return
     collection = _select_or_create_collection()
     if collection is None:
         return
-    if s == "a":
-        add_entry(collection, "name_filter", keyword)
-    else:
-        # 解析 "1,3-5,8" 这类选择，转成 NORAD 编号清单（固定快照）
-        idx = set()
-        for part in s.split(","):
-            part = part.strip()
-            if "-" in part:
-                a, b = part.split("-", 1)
-                if a.isdigit() and b.isdigit():
-                    idx.update(range(max(1, int(a)), min(len(rows), int(b)) + 1))
-            elif part.isdigit():
-                n = int(part)
-                if 1 <= n <= len(rows):
-                    idx.add(n)
-        ids = [str(rows[i - 1]["norad_id"]) for i in sorted(idx)
-               if rows[i - 1].get("norad_id") is not None]
-        if not ids:
-            print("  [失败] 没有选中任何有效的卫星编号。")
-            return
-        add_entry(collection, "norad_list", " ".join(ids))
+    # 解析 "1,3-5,8" 这类选择，转成 NORAD 编号清单（固定快照）
+    idx = set()
+    for part in s.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, b = part.split("-", 1)
+            if a.isdigit() and b.isdigit():
+                idx.update(range(max(1, int(a)), min(len(rows), int(b)) + 1))
+        elif part.isdigit():
+            n = int(part)
+            if 1 <= n <= len(rows):
+                idx.add(n)
+    ids = [str(rows[i - 1]["norad_id"]) for i in sorted(idx)
+           if rows[i - 1].get("norad_id") is not None]
+    if not ids:
+        print("  [失败] 没有选中任何有效的卫星编号。")
+        return
+    add_entry(collection, "norad_list", " ".join(ids))
 
 
 def _menu_manage():
@@ -1476,7 +1473,7 @@ def _menu_open_collection(c: dict):
             print("  （空收藏夹）")
         for i, e in enumerate(c["entries"], 1):
             print(f"  {i}. {_entry_label(e)}")
-        print("  1. 添加条目（名字规则 / 编号清单 / 文件）")
+        print("  1. 添加条目（编号清单 / 文件）")
         print("  2. 移除条目")
         print("  3. 移动条目到另一个收藏夹")
         print("  4. 解析本夹（下载 TLE 并统计数量）")
@@ -1488,13 +1485,9 @@ def _menu_open_collection(c: dict):
             if c.get("builtin"):
                 print("  内置夹只读，请先复制到我的收藏再修改。")
                 continue
-            print("  条目类型：1=名字规则  2=编号清单  3=导入文件")
-            t = _ask_number("> ", 1, 3)
+            print("  条目类型：1=编号清单  2=导入文件")
+            t = _ask_number("> ", 1, 2)
             if t == 1:
-                v = _ask_text("  名字关键字（如 YAOGAN）> ")
-                if v:
-                    add_entry(c["name"], "name_filter", v)
-            elif t == 2:
                 v = _ask_text("  编号清单（空格或逗号分隔，如 25544 28699）> ")
                 if v:
                     add_entry(c["name"], "norad_list", v)
@@ -1596,8 +1589,8 @@ def main():
     parser.add_argument("--delete", metavar="名称", help="删除用户收藏夹")
     parser.add_argument("--import-file", metavar="路径", help="导入 TLE/编号文件（配合 --collection）")
     parser.add_argument("--collection", metavar="名称", help="配合 --import-file 指定目标收藏夹")
-    parser.add_argument("--add-entry", metavar="类型", choices=["name_filter", "norad_list"],
-                        help="往 --collection 加条目（配合 --value）")
+    parser.add_argument("--add-entry", metavar="类型", choices=["norad_list"],
+                        help="往 --collection 加编号清单条目（配合 --value）")
     parser.add_argument("--value", metavar="值", help="配合 --add-entry 的条目值")
     parser.add_argument("--resolve", metavar="名称", help="解析收藏夹并打印卫星数量")
     parser.add_argument("--offline", action="store_true", help="离线模式：只用缓存，不联网")

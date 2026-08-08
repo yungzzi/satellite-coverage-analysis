@@ -915,11 +915,33 @@ if tab_analysis.open:
                             horizontal=True)
         grid_spacing = 0.2
         if cov_mode == "点+半径":
+            _locs = sl.load_locations()
+            _loc_names = ["（手动输入）"] + [x["name"] for x in _locs]
+            cov_loc = st.selectbox("常用地点（内置+用户）", _loc_names, key="cov_loc")
+            if cov_loc != "（手动输入）":
+                _loc = next((x for x in _locs if x["name"] == cov_loc), None)
+                if _loc and st.session_state.get("cov_loc_applied") != cov_loc:
+                    st.session_state["cov_lat"] = float(_loc["lat"])
+                    st.session_state["cov_lon"] = float(_loc["lon"])
+                    st.session_state["cov_rad"] = float(_loc.get("radius_km", 5.0))
+                    st.session_state["cov_loc_applied"] = cov_loc
+                    st.rerun()
             la, lo, ra = st.columns(3)
             cov_lat = la.number_input("纬度", value=30.25, step=0.01, key="cov_lat")
             cov_lon = lo.number_input("经度", value=120.15, step=0.01, key="cov_lon")
             cov_rad = ra.number_input("半径(km)", value=5.0, min_value=0.1, step=0.5,
                                       key="cov_rad")
+            sv1, sv2 = st.columns([3, 1])
+            new_loc_name = sv1.text_input("保存当前坐标为常用地点（留空不保存）", key="cov_loc_new")
+            if sv2.button("保存地点", key="btn_cov_loc_save"):
+                if new_loc_name.strip():
+                    sl.save_user_location(new_loc_name.strip(), float(cov_lat),
+                                          float(cov_lon), float(cov_rad))
+                    st.session_state.pop("cov_loc_applied", None)
+                    flash(f"已保存常用地点：{new_loc_name.strip()}", kind="success")
+                    st.rerun()
+                else:
+                    flash("请先输入地点名称再保存。", kind="warning")
         else:
             geo_dir = sl.PROJECT_ROOT / "data" / "geo"
             geo_files = {p.stem: str(p) for p in sorted(geo_dir.glob("*.json"))}

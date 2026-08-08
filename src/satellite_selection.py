@@ -749,6 +749,8 @@ def main(argv=None):
     ap.add_argument("--lat", type=float, default=30.25)
     ap.add_argument("--lon", type=float, default=120.15)
     ap.add_argument("--radius", type=float, default=5.0)
+    ap.add_argument("--location", default=None,
+                    help="常用地点名称（内置+用户），覆盖 --lat/--lon/--radius")
     ap.add_argument("--geojson", default=None, help="地区 GeoJSON 路径（polygon 模式）")
     ap.add_argument("--start", required=True, help="开始时间 UTC，如 2026-08-03 00:00:00")
     ap.add_argument("--end", required=True, help="结束时间 UTC")
@@ -777,6 +779,14 @@ def main(argv=None):
 
     import coverage_analysis as cov
     import satellite_loader as sl
+    if args.location:
+        loc = next((x for x in sl.load_locations() if x["name"] == args.location), None)
+        if loc is None:
+            print(f"未找到常用地点：{args.location}（见 data/locations.toml）")
+            return 1
+        args.lat = float(loc["lat"]); args.lon = float(loc["lon"])
+        args.radius = float(loc.get("radius_km", 5.0))
+        print(f"使用常用地点：{loc['name']} ({args.lat}, {args.lon}) 半径{args.radius}km")
 
     ts = sl.load.timescale(builtin=True)
     t, dt_list = cov.make_time_array(ts, args.start, args.end, args.step)

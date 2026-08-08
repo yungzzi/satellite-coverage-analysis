@@ -33,3 +33,6 @@ data/user_files/
 # 系统文件
 Thumbs.db
 .DS_Store
+
+# 用户常用地点（程序维护，不入库）
+data/user_locations.toml

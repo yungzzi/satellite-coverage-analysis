@@ -48,6 +48,8 @@ USER_FILES_DIR = DATA_DIR / "user_files"    # 用户导入文件的副本（程�
 BUILTIN_CATALOG = DATA_DIR / "satellite_catalog.toml"   # 内置目录（入库）
 CONSTELLATIONS_CATALOG = DATA_DIR / "constellations.toml"  # 星座目录（入库，④页用）
 USER_CATALOG = DATA_DIR / "user_catalog.toml"           # 用户收藏（不入库）
+BUILTIN_LOCATIONS = DATA_DIR / "locations.toml"         # 内置常用地点（入库，只读）
+USER_LOCATIONS = DATA_DIR / "user_locations.toml"       # 用户常用地点（不入库，程序维护）
 
 # CelesTrak 免费接口（URL 即接口，无需 token）
 CELESTRAK_GP = "https://celestrak.org/NORAD/elements/gp.php"
@@ -654,6 +656,65 @@ def save_user_collections(collections: List[dict]):
 def load_all_collections() -> List[dict]:
     """内置 + 用户 合并（内置在前，标 builtin=True）。"""
     return load_builtin_collections() + load_user_collections()
+
+
+
+def load_locations() -> List[dict]:
+    """合并内置 + 用户常用地点，返回 [{"name","lat","lon","radius_km"}]。"""
+    out = []
+    for p in (BUILTIN_LOCATIONS, USER_LOCATIONS):
+        if tomllib is None or not p.exists():
+            continue
+        try:
+            with open(p, "rb") as f:
+                data = tomllib.load(f)
+            out.extend(data.get("locations", []))
+        except Exception:
+            continue
+    return out
+
+
+def _write_user_locations(locations: List[dict]):
+    """原子写 data/user_locations.toml（先写临时文件再替换）。"""
+    _ensure_dirs()
+    text = "# 用户常用地点（程序自动维护，无需手动编辑）\n\n"
+    for loc in locations:
+        text += (f'[[locations]]\nname = "{loc["name"]}"\n'
+                 f'lat = {loc["lat"]}\nlon = {loc["lon"]}\n'
+                 f'radius_km = {loc.get("radius_km", 5.0)}\n\n')
+    fd, tmp_name = tempfile.mkstemp(dir=str(USER_LOCATIONS.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp_name, USER_LOCATIONS)
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+
+
+def save_user_location(name: str, lat: float, lon: float, radius_km: float = 5.0):
+    """保存/更新用户常用地点（同名覆盖）。"""
+    locs = []
+    if USER_LOCATIONS.exists():
+        with open(USER_LOCATIONS, "rb") as f:
+            locs = tomllib.load(f).get("locations", [])
+    locs = [x for x in locs if x.get("name") != name]
+    locs.append({"name": name, "lat": float(lat), "lon": float(lon),
+                 "radius_km": float(radius_km)})
+    _write_user_locations(locs)
+
+
+def delete_user_location(name: str) -> bool:
+    """删除用户常用地点（内置地点不可删）。返回是否删除成功。"""
+    if not USER_LOCATIONS.exists():
+        return False
+    with open(USER_LOCATIONS, "rb") as f:
+        locs = tomllib.load(f).get("locations", [])
+    new_locs = [x for x in locs if x.get("name") != name]
+    if len(new_locs) == len(locs):
+        return False
+    _write_user_locations(new_locs)
+    return True
 
 
 def load_constellations() -> List[dict]:

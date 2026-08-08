@@ -701,6 +701,7 @@ def main():
     parser.add_argument("--lat", type=float, help="circle 模式：圆心纬度")
     parser.add_argument("--lon", type=float, help="circle 模式：圆心经度")
     parser.add_argument("--radius", type=float, help="circle 模式：半径（km）")
+    parser.add_argument("--location", help="常用地点名称（内置+用户），覆盖 --lat/--lon/--radius")
     parser.add_argument("--geojson", help="polygon 模式：地区 GeoJSON 路径")
     parser.add_argument("--start", help="分析开始时间 UTC（YYYY-MM-DD HH:MM:SS）")
     parser.add_argument("--end", help="分析结束时间 UTC")
@@ -736,6 +737,15 @@ def main():
         cfg["fov_half_angle_deg"] = args.fov
     if args.min_elevation is not None:
         cfg["min_elevation_deg"] = args.min_elevation
+    if args.location:
+        import satellite_loader as sl
+        loc = next((x for x in sl.load_locations() if x["name"] == args.location), None)
+        if loc is None:
+            print(f"未找到常用地点：{args.location}（见 data/locations.toml）")
+            return
+        cfg["target"] = dict(cfg["target"], lat=float(loc["lat"]), lon=float(loc["lon"]),
+                             radius_km=float(loc.get("radius_km", 5.0)))
+        print(f"使用常用地点：{loc['name']} ({loc['lat']}, {loc['lon']}) 半径{loc.get('radius_km', 5.0)}km")
 
     # builtin=True：不联网下载时间数据，保证离线可运行
     ts = load.timescale(builtin=True)

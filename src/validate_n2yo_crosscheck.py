@@ -96,6 +96,31 @@ def main():
                 })
         print(f"[{nl.strip()}] ({norad}) 匹配 {n_match} / N2YO {len(n2)} / 我们可见 {len(visible)}")
 
+        # ---- 包含性检查：覆盖窗口（仰角≥10°+视场30°）必须 ⊆ 某个 N2YO 过境 ----
+        import coverage_analysis as ca
+        region = {"mode": "circle", "lat": LAT, "lon": LON, "radius_km": 5.0}
+        cfg = {"fov_half_angle_deg": 30.0, "min_elevation_deg": 10.0,
+               "step_minutes": 1, "refine_step_seconds": 10, "grid_spacing_deg": 0.2}
+        _t, _dt = ca.make_time_array(
+            ts, t0.strftime("%Y-%m-%d %H:%M:%S"),
+            (t0 + timedelta(days=args.days)).strftime("%Y-%m-%d %H:%M:%S"), 1)
+        cov_wins = ca.analyze_one_satellite(sat, _t, _dt, region, cfg)
+        # 只检查 N2YO 提供过境数据的时间段（页面可能从次日开始列过境）
+        data_start = n2[0]["start_utc"] if n2 else t0
+        data_end = n2[-1]["end_utc"] if n2 else t0
+        bad, skipped = [], 0
+        for w in cov_wins:
+            if w[1] < data_start or w[0] > data_end:
+                skipped += 1
+                continue
+            if not any(p["start_utc"] <= w[0] and w[1] <= p["end_utc"] for p in n2):
+                bad.append(w)
+        print(f"  [包含性] 覆盖窗口 {len(cov_wins)} 个：N2YO 数据范围内 {len(cov_wins) - skipped} 个"
+              f"，全部落在过境内：{'是' if not bad else '否（违规 ' + str(len(bad)) + ' 个）'}"
+              f"{f'；另有 {skipped} 个超出 N2YO 数据范围未检查' if skipped else ''}")
+        for w in bad[:3]:
+            print(f"    违规窗口 {w[0]:%m-%d %H:%M:%S}~{w[1]:%H:%M:%S}")
+
     out_dir = PROJ / "output" / "validation"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "n2yo_crosscheck_summary.csv"

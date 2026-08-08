@@ -1,0 +1,241 @@
+# 内置常用地点（只读，随软件发布）；用户自定义地点在 data/user_locations.toml（不入库）
+
+[[locations]]
+name = "北京"
+lat = 39.9
+lon = 116.4
+radius_km = 5.0
+
+[[locations]]
+name = "上海"
+lat = 31.23
+lon = 121.47
+radius_km = 5.0
+
+[[locations]]
+name = "天津"
+lat = 39.13
+lon = 117.2
+radius_km = 5.0
+
+[[locations]]
+name = "重庆"
+lat = 29.56
+lon = 106.55
+radius_km = 5.0
+
+[[locations]]
+name = "哈尔滨"
+lat = 45.8
+lon = 126.53
+radius_km = 5.0
+
+[[locations]]
+name = "长春"
+lat = 43.88
+lon = 125.32
+radius_km = 5.0
+
+[[locations]]
+name = "沈阳"
+lat = 41.8
+lon = 123.43
+radius_km = 5.0
+
+[[locations]]
+name = "呼和浩特"
+lat = 40.84
+lon = 111.75
+radius_km = 5.0
+
+[[locations]]
+name = "乌鲁木齐"
+lat = 43.83
+lon = 87.62
+radius_km = 5.0
+
+[[locations]]
+name = "拉萨"
+lat = 29.65
+lon = 91.14
+radius_km = 5.0
+
+[[locations]]
+name = "西宁"
+lat = 36.62
+lon = 101.78
+radius_km = 5.0
+
+[[locations]]
+name = "兰州"
+lat = 36.06
+lon = 103.83
+radius_km = 5.0
+
+[[locations]]
+name = "银川"
+lat = 38.49
+lon = 106.23
+radius_km = 5.0
+
+[[locations]]
+name = "西安"
+lat = 34.34
+lon = 108.94
+radius_km = 5.0
+
+[[locations]]
+name = "太原"
+lat = 37.87
+lon = 112.55
+radius_km = 5.0
+
+[[locations]]
+name = "石家庄"
+lat = 38.04
+lon = 114.51
+radius_km = 5.0
+
+[[locations]]
+name = "济南"
+lat = 36.65
+lon = 117.12
+radius_km = 5.0
+
+[[locations]]
+name = "青岛"
+lat = 36.07
+lon = 120.38
+radius_km = 5.0
+
+[[locations]]
+name = "郑州"
+lat = 34.75
+lon = 113.63
+radius_km = 5.0
+
+[[locations]]
+name = "合肥"
+lat = 31.82
+lon = 117.23
+radius_km = 5.0
+
+[[locations]]
+name = "南京"
+lat = 32.06
+lon = 118.8
+radius_km = 5.0
+
+[[locations]]
+name = "苏州"
+lat = 31.3
+lon = 120.58
+radius_km = 5.0
+
+[[locations]]
+name = "杭州"
+lat = 30.25
+lon = 120.15
+radius_km = 5.0
+
+[[locations]]
+name = "宁波"
+lat = 29.87
+lon = 121.54
+radius_km = 5.0
+
+[[locations]]
+name = "福州"
+lat = 26.07
+lon = 119.3
+radius_km = 5.0
+
+[[locations]]
+name = "厦门"
+lat = 24.48
+lon = 118.09
+radius_km = 5.0
+
+[[locations]]
+name = "南昌"
+lat = 28.68
+lon = 115.86
+radius_km = 5.0
+
+[[locations]]
+name = "广州"
+lat = 23.13
+lon = 113.27
+radius_km = 5.0
+
+[[locations]]
+name = "深圳"
+lat = 22.54
+lon = 114.06
+radius_km = 5.0
+
+[[locations]]
+name = "南宁"
+lat = 22.82
+lon = 108.32
+radius_km = 5.0
+
+[[locations]]
+name = "海口"
+lat = 20.04
+lon = 110.32
+radius_km = 5.0
+
+[[locations]]
+name = "三亚"
+lat = 18.25
+lon = 109.51
+radius_km = 5.0
+
+[[locations]]
+name = "武汉"
+lat = 30.59
+lon = 114.31
+radius_km = 5.0
+
+[[locations]]
+name = "长沙"
+lat = 28.23
+lon = 112.94
+radius_km = 5.0
+
+[[locations]]
+name = "成都"
+lat = 30.57
+lon = 104.07
+radius_km = 5.0
+
+[[locations]]
+name = "昆明"
+lat = 25.04
+lon = 102.71
+radius_km = 5.0
+
+[[locations]]
+name = "贵阳"
+lat = 26.65
+lon = 106.63
+radius_km = 5.0
+
+[[locations]]
+name = "香港"
+lat = 22.32
+lon = 114.17
+radius_km = 5.0
+
+[[locations]]
+name = "澳门"
+lat = 22.2
+lon = 113.55
+radius_km = 5.0
+
+[[locations]]
+name = "台北"
+lat = 25.03
+lon = 121.57
+radius_km = 5.0

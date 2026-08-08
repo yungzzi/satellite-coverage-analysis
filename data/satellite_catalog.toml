@@ -10,14 +10,14 @@
 # ============================================================
 
 [[collections]]
-name = "中国遥感系列（示例）"
+name = "中国遥感系列（内置）"
 description = "遥感卫星家族（名字规则，自动纳入新星；数据来自 CelesTrak 编目）"
 entries = [
   { type = "name_filter", value = "YAOGAN" },
 ]
 
 [[collections]]
-name = "国际知名星座（示例）"
+name = "国际知名星座（内置）"
 description = "演示 CelesTrak 星座分组：一键导入整星座"
 entries = [
   { type = "name_filter", value = "STARLINK" },
@@ -25,14 +25,14 @@ entries = [
 ]
 
 [[collections]]
-name = "吉林一号全量（测试 58 颗）"
+name = "吉林一号全量（内置·测试基准）"
 description = "长光吉林一号全部可得卫星（快照 2026-08-06，含未命名星）；数据来自 data/test_data/jilin1_all.tle"
 entries = [
   { type = "file", value = "data/test_data/jilin1_all.tle" },
 ]
 
 [[collections]]
-name = "中国遥感全量（测试）"
+name = "中国遥感全量（内置·测试基准）"
 description = "中国遥感卫星全集快照（测试基准 303 颗：遥感/高分/吉林/天绘/四维高景/海洋/珠海/资源/陆地探测/北京/环境/珞珈等，快照 2026-08-08）；数据来自 data/test_data/china_remote_sensing_all.tle"
 entries = [
   { type = "file", value = "data/test_data/china_remote_sensing_all.tle" },

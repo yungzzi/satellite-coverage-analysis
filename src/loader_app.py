@@ -23,7 +23,7 @@ import shutil
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -42,7 +42,8 @@ os.chdir(str(sl.PROJECT_ROOT))
 
 
 def flash(msg: str, kind: str = "success"):
-    """即时右上角 toast 反馈（不依赖 rerun，避免整页刷新）。"""
+    """即时右上角 toast + 存入会话状态（rerun 后顶部也会显示一次）。"""
+    st.session_state["flash"] = {"kind": kind, "msg": msg}
     st.toast(msg, icon="✅" if kind == "success" else "⚠️")
 
 
@@ -233,7 +234,7 @@ with st.sidebar:
         threading.Timer(1.5, os._exit, args=(0,)).start()
         st.stop()
     st.caption("提示：浏览器不允许网页自行关闭标签页，请用上方「停止并退出程序」按钮正常退出"
-               "（退出后页面白屏，再手动关闭本标签页）。不建议直接点浏览器右上角×关闭网页——"
+               "（若退出后页面白屏，再手动关闭本标签页）。不建议直接点浏览器右上角×关闭网页——"
                "那样程序仍在后台运行；若误操作，可在浏览器地址栏重新输入 "
                "http://localhost:8501 打开本界面，再点按钮正常退出。")
 
@@ -245,7 +246,9 @@ tab_search, tab_collections, tab_constellations, tab_download, tab_analysis = st
 # ==================== ① 搜索与收藏 ====================
 
 if tab_search.open:
-    st.subheader("搜索卫星（CelesTrak，免费、无 token）")
+    c_s1, c_s2 = st.columns([3, 1])
+c_s1.subheader("搜索卫星")
+c_s2.link_button("打开 CelesTrak", "https://celestrak.org")
     c1, c2 = st.columns([2, 1])
     keyword = c1.text_input("名字关键字", key="kw",
                             placeholder="如 YAOGAN / GF-1 / STARLINK")
@@ -421,9 +424,10 @@ if tab_search.open:
                 sel_ids.append(rid)
 
         st.markdown("**保存或直接使用**")
-        user_names = [x["name"] for x in sl.load_user_collections()]
+        user_cols = sl.load_user_collections()
         col_target = st.selectbox(
-            "存入收藏夹", user_names, key="target_col") if user_names else None
+            "存入收藏夹", [_collection_label(x) for x in user_cols],
+            key="target_col") if user_cols else None
         new_name = st.text_input("快速新建收藏夹（留空则用上面的）", key="newcol",
                                  placeholder="如 我的遥感")
         mode = st.radio("保存方式",
@@ -442,7 +446,9 @@ if tab_search.open:
                        "可能再次混入同名其他系列（如 GAOFEN 会带回吉林一号高分）；"
                        "要锁定当前严格筛选出的这批星，请改用“编号清单”保存。")
         if st.button("加入收藏夹", key="btn_add"):
-            target = col_target
+            target = (next((x["name"] for x in user_cols
+                             if _collection_label(x) == col_target), None)
+                      if col_target else None)
             if new_name.strip():
                 _snapshot()
                 sl.create_collection(new_name.strip())
@@ -478,6 +484,7 @@ if tab_search.open:
                                          "value": " ".join(map(str, sel_ids))}]}
                     recs = sl.resolve_collection(temp, offline=False)
                 st.success(f"已解析 {len(recs)} 颗卫星（不入收藏夹，TLE 已缓存）")
+                st.caption("缓存位置：data/tle_cache/（全集 active.tle 或 norad/<编号>.tle）")
                 if recs:
                     st.dataframe(pd.DataFrame(
                         [{"卫星名": r["name"], "NORAD 编号": r["norad_id"]} for r in recs[:200]]),
@@ -492,8 +499,9 @@ if tab_collections.open:
     u1.button("撤销上一步", key="btn_undo", on_click=_do_undo, icon=":material/undo:")
     u2.button("重做下一步", key="btn_redo", on_click=_do_redo, icon=":material/redo:")
     u3.caption("撤销/重做只对本次打开软件期间的收藏夹操作有效，关闭页面后历史清空。")
-    st.caption("一个收藏夹分两部分：**自动规则**（名字规则，活）和 **手动卫星**（固定清单）；"
-               "解析下载时自动合并、按编号去重。")
+    st.caption("一个收藏夹分两部分：**自动规则**（名字规则，活）和 **手动导入**（固定清单，快照）。"
+               "“归纳成自动规则”= 把固定编号清单转成名字关键字规则，之后新发射的同名星会自动纳入；"
+               "固定清单是快照，不会自动进新星。解析下载时自动合并、按编号去重。")
     all_c = sl.load_all_collections()
     if not all_c:
         st.info("暂无收藏夹。")
@@ -541,7 +549,7 @@ if tab_collections.open:
         st.divider()
 
         # ---------- 分区 2：手动卫星（固定清单） ----------
-        st.markdown("### ② 手动卫星（固定清单）")
+        st.markdown("### ② 手动导入（固定清单）")
         st.caption("手动勾选或输入编号保存的星，固定不变（新发射的星不会自动进来）；"
                    "可单颗删除、追加编号，或把整批归纳成自动规则。")
         list_entries = [e for e in c["entries"] if e["type"] == "norad_list"]
@@ -660,14 +668,17 @@ if tab_collections.open:
                         else:
                             bar.progress(0.0, text=msg)
                     try:
-                        rows_meta = sl.resolve_collection_with_meta(c, progress=cb)
+                        rows_meta = sl.resolve_collection_with_meta(c, progress=cb, offline=True)
                     except Exception as ex:
                         st.error(f"解析失败：{ex}")
                     else:
                         if not rows_meta:
-                            st.warning("未能获取卫星数据：缓存被清空且数据源下载被拒（限流/网络异常）时会出现；"
-                                       "请稍后重试，或到③页重新解析。")
-                        st.success(f"本夹共 {len(rows_meta)} 颗卫星")
+                            st.warning("未能获取卫星数据。可能原因：①编号不在在轨全集"
+                                       "（退役/保密/新发射）——离线时跳过联网；"
+                                       "②缓存被清空且数据源下载被拒（限流/网络异常）。"
+                                       "可到④页“下载与自检”强制更新全集后重试。")
+                        st.success(f"本夹共 {len(rows_meta)} 颗卫星（数据来自本地缓存，秒开）")
+                        st.caption("如需联网刷新 TLE/档案，请到④页“下载与自检”强制更新。")
                         st.caption("需要保存成 TLE 文件请到 ③下载与自检 页“解析下载”。")
                         n_incomplete = sum(1 for x in rows_meta if not x.get("meta_complete"))
                         if n_incomplete:
@@ -717,6 +728,22 @@ if tab_collections.open:
                         st.rerun()
                     else:
                         st.warning("请先勾选确认。")
+        if not c.get("builtin"):
+            st.markdown("### 复制到其他收藏夹")
+            cp_targets = [x for x in sl.load_user_collections() if x["name"] != c["name"]]
+            if cp_targets:
+                cp_label = st.selectbox("目标收藏夹", [_collection_label(x) for x in cp_targets],
+                                        key="cp_target")
+                if st.button("复制当前夹全部条目到目标夹（重复跳过）", key="btn_cp"):
+                    _snapshot()
+                    tname = next(x["name"] for x in cp_targets if _collection_label(x) == cp_label)
+                    copied = sum(1 for e in c["entries"]
+                                 if sl.add_entry(tname, e["type"], e["value"]))
+                    flash(f"已复制 {copied} 条到「{tname}」（重复条目跳过）",
+                          kind="success" if copied else "warning")
+                    st.rerun()
+            else:
+                st.caption("（暂无其他用户收藏夹可复制）")
         with m2:
             st.caption("导入本地文件（TLE 或编号清单），程序会复制到 data/user_files/ 统一管理：")
             f_up = st.file_uploader(
@@ -784,6 +811,11 @@ if tab_download.open:
 
     st.markdown("---")
     st.subheader("缓存管理（data/tle_cache/）")
+    _act = sl.CACHE_DIR / "active.tle"
+    if _act.exists():
+        _mt = datetime.fromtimestamp(_act.stat().st_mtime)
+        st.caption(f"全集 TLE（active.tle）最后获取：{_mt:%Y-%m-%d %H:%M:%S}"
+                   f"（约 {(time.time() - _act.stat().st_mtime) / 3600:.1f} 小时前）")
     cache_rows = []
     for p in sorted(sl.CACHE_DIR.rglob("*")):
         if p.is_file():
@@ -860,8 +892,9 @@ if tab_download.open:
 if tab_constellations.open:
     st.subheader("星座 / 常用卫星导入")
     st.caption("按用途选一个星座（或常用单星，会标注“单星”），一键加入收藏夹（自动建夹），"
-               "之后到③页解析下载整组 TLE；遥感家族没有现成 GROUP 分组的走名字规则，"
-               "新发射的同名星会自动纳入。")
+               "之后到④页“下载与自检”解析下载整组 TLE；"
+               "所有没有现成 GROUP 分组的遥感家族（不止 YAOGAN）都建议走名字规则——"
+               "新发射的同名星会自动纳入，无需手动更新。")
     cons = sl.load_constellations()
     if not cons:
         st.info("暂无星座目录（data/constellations.toml 缺失或为空）。")
@@ -978,11 +1011,9 @@ if tab_analysis.open:
                                        step=0.05, key="cov_grid")
             grid_spacing = float(cov_grid)
         d1, d2 = st.columns(2)
-        cov_t0 = d1.datetime_input("开始时间 (UTC)", value=datetime(2026, 8, 3, 0, 0,
-                                                                    tzinfo=timezone.utc),
-                                   key="cov_t0")
-        cov_t1 = d2.datetime_input("结束时间 (UTC)", value=datetime(2026, 8, 3, 8, 0,
-                                                                    tzinfo=timezone.utc),
+        _today0 = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        cov_t0 = d1.datetime_input("开始时间 (UTC)", value=_today0, key="cov_t0")
+        cov_t1 = d2.datetime_input("结束时间 (UTC)", value=_today0 + timedelta(hours=8),
                                    key="cov_t1")
         cov_sats = st.multiselect("卫星来源（收藏夹）", cov_names, key="cov_cols")
         up = st.file_uploader(

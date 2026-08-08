@@ -247,8 +247,8 @@ tab_search, tab_collections, tab_constellations, tab_download, tab_analysis = st
 
 if tab_search.open:
     c_s1, c_s2 = st.columns([3, 1])
-c_s1.subheader("搜索卫星")
-c_s2.link_button("打开 CelesTrak", "https://celestrak.org")
+    c_s1.subheader("搜索卫星")
+    c_s2.link_button("打开 CelesTrak", "https://celestrak.org")
     c1, c2 = st.columns([2, 1])
     keyword = c1.text_input("名字关键字", key="kw",
                             placeholder="如 YAOGAN / GF-1 / STARLINK")

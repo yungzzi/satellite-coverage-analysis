@@ -959,16 +959,15 @@ if tab_analysis.open:
             new_loc_name = sv1.text_input("保存当前坐标为常用地点（留空不保存）", key="cov_loc_new")
             if sv2.button("保存地点", key="btn_cov_loc_save"):
                 if new_loc_name.strip():
-                    if any(b["name"] == new_loc_name.strip()
-                           for b in _locs if b.get("source") == "builtin"):
-                        flash("该名称与内置地点相同，请换个名称（内置地点只读，不会被覆盖）。",
-                              kind="warning")
-                    else:
-                        sl.save_user_location(new_loc_name.strip(), float(cov_lat),
-                                              float(cov_lon), float(cov_rad))
-                        st.session_state.pop("cov_loc_applied", None)
-                        flash(f"已保存常用地点：{new_loc_name.strip()}", kind="success")
-                        st.rerun()
+                    _same_builtin = any(b["name"] == new_loc_name.strip()
+                                        for b in _locs if b.get("source") == "builtin")
+                    sl.save_user_location(new_loc_name.strip(), float(cov_lat),
+                                          float(cov_lon), float(cov_rad))
+                    st.session_state.pop("cov_loc_applied", None)
+                    flash(f"已保存常用地点：{new_loc_name.strip()}"
+                          + ("（与内置同名，下拉中以“（用户）”标记区分）" if _same_builtin else ""),
+                          kind="success")
+                    st.rerun()
                 else:
                     flash("请先输入地点名称再保存。", kind="warning")
         else:

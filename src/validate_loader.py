@@ -7,7 +7,7 @@ validate_loader.py —— satellite_loader.py 的自检脚本（阶段 1）
   2. 编目下载 / 搜索（联网，需能访问 celestrak.org）
   3. 缓存行为（不重复下载）
   4. 收藏夹增删改移（用临时文件，不污染真实用户收藏）
-  5. 收藏夹解析（名字规则 / 编号清单 / 文件，去重）
+  5. 收藏夹解析（编号清单 / 文件快照，旧式名字规则兼容）
   6. 离线模式（有缓存时可用）
 
 运行：.venv\\Scripts\\python src\\validate_loader.py
@@ -110,7 +110,7 @@ def test_collections_crud():
         check("新建夹", sl.create_collection("测试夹A") and tmp.exists(), "")
         check("重复名被拒绝", sl.create_collection("测试夹A") is False, "")
         check("新建第二个夹", sl.create_collection("测试夹B"), "")
-        check("加名字规则", sl.add_entry("测试夹A", "name_filter", "YAOGAN"), "")
+        check("加旧式名字规则（兼容）", sl.add_entry("测试夹A", "name_filter", "YAOGAN"), "")
         check("加编号清单", sl.add_entry("测试夹A", "norad_list", "25544 31490"), "")
         user = sl.load_user_collections()
         a = sl.find_collection(user, "测试夹A")
@@ -134,7 +134,7 @@ def test_collections_crud():
 
 
 def test_resolve():
-    print("\n== 5. 收藏夹解析（名字规则 / 编号 / 文件） ==")
+    print("\n== 5. 收藏夹解析（编号清单 / 文件，旧式规则兼容） ==")
     tmp = Path(tempfile.mkdtemp(prefix="sl_test_")) / "user_catalog.toml"
     old = sl.USER_CATALOG
     sl.USER_CATALOG = tmp
@@ -144,7 +144,7 @@ def test_resolve():
         col = sl.find_collection(sl.load_user_collections(), "解析测试")
         recs = sl.resolve_collection(col, offline=False)
         norads = [r["norad_id"] for r in recs]
-        check("名字规则解析数量", len(recs) >= 150, f"共 {len(recs)} 颗")
+        check("旧式名字规则解析数量", len(recs) >= 150, f"共 {len(recs)} 颗")
         check("NORAD 编号去重", len(set(norads)) == len(norads), "")
         check("记录含 TLE", all(r.get("line1") and r.get("line2") for r in recs[:50]), "")
         saved = sl.save_resolved_tle("解析测试", recs)

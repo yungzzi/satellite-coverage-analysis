@@ -252,16 +252,18 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 ## 12. 输入层设计（阶段1已定，待阶段2集成）
 - 交互：命令行菜单（搜索→勾选→入收藏→解析下载）；以后 GUI 只替换交互层。
 - 数据源：CelesTrak 免费接口（records.php 元数据 + gp.php TLE），无需 token；缓存于 tle_cache/。
-- 收藏夹：内置目录（只读）+ 用户收藏（单文件，可建/删/改名/移动）；条目三类：
-  name_filter（活规则）/ norad_list（固定快照）/ file（导入文件，程序复制管理）。
-- 新星座：用户搜索→入收藏即生效，无需开发者更新软件。
+- 收藏夹：内置目录（只读）+ 用户收藏（单文件，可建/删/改名/移动）；条目只两类固定快照：
+  norad_list（编号清单）/ file（导入文件，程序复制管理）。旧式 name_filter / celestrak_group
+  仅兼容读取，不再新建（Q132）。
+- 新星座：①页搜索勾选→存编号清单；③页星座导入=整组解析→勾选预览→确认存编号快照；
+  想纳入新发射的星就重新导入确认（覆盖更新），无需开发者更新软件。
 - 阶段2（未开始）：把 coverage_analysis.py 的 load_satellites 换成 satellite_loader，
   并做回归验证（基准：164/165 颗、317 窗口、155 覆盖星）。
 - [x] 输入层：点+半径（5 km 圆）目标 + 任意地区 GeoJSON + CLI 参数（--mode/--lat/--lon/--radius/--geojson/--start/--end）
 - [x] 配置文件：TOML 模板 + --config + config.toml 自动加载（命令行参数 > config.toml > 默认值）
 - [ ] 传感器参数按星分配（类型表+规则）与 TLE 自动下载（设计讨论中，未实现）
-- [ ] 星座数据导入：CelesTrak GROUP 分组（starlink/oneweb/gps-ops/beidou…）已调研，
-      拟加"星座分组"条目类型 + 内置星座菜单（Q71，待拍板）
+- [x] 星座数据导入（③页）：CelesTrak GROUP 分组 + 名字规则定义于 constellations.toml，
+      导入时整组解析→勾选预览→确认存编号快照（Q71/Q132）
 - [ ] 选星/虚拟星座：组合优化/智能算法选星（Q99 设计：贪心 + ILP，文献后置，测试基准 data/test_data/jilin1_all.tle）
 - [ ] 几千颗星性能验证
 - [ ] TLE 自动更新
@@ -285,3 +287,4 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 - [x] 保存地点不整页刷新（会话缓存 + 同步列表）（2026-08-08）
 - [x] 刷新体验优化：flash 即时 toast、去 7 处冗余 rerun、停止按钮提示（2026-08-08）
 - [x] 批量体验改进（2026-08-08）：CelesTrak 链接、收藏夹标识、②页性能(offline 秒开)、复制收藏夹、内置夹命名统一、默认时间动态当天、flash 双通道
+- [x] 收藏夹统一为编号快照 + 内置夹精简（2026-08-09，Q132）：旧用户收藏夹全部清理（备份 data/user_catalog.bak.toml，不入库）；内置夹仅留 4 个测试基准（吉林一号全量 58 / 高分 GAOFEN 严格 36 / 遥感 YAOGAN 163 / 中国遥感全量 303，全部固定快照、无规则）；①页保存只存编号清单；②页删除"新增名字规则/归纳成自动规则"（旧规则条目只读兼容）；③星座导入两段式（解析→勾选预览→确认存快照，重复导入=覆盖更新）；①/③页加数据来源说明与 SpaceMapper 补充渠道（软件不碰 token）；文件导入建夹/更新测试 14/14；validate_loader 43/43、validate_selection 30/30、validate_china_remote 全过、AppTest 0 异常

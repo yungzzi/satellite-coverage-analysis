@@ -207,6 +207,59 @@ def main():
         check("未满足时摘要含尽力而为说明",
               "[尽力而为]" in cont2["summary"])
 
+    print("== 7. PSCLP：覆盖率阈值 + 最少颗数 ==")
+    if result:
+        from datetime import datetime, timedelta, timezone
+        import numpy as np
+        _m3 = 12
+        _sc3 = [
+            np.array([1,1,1,1,1,1,0,0,0,0,0,0], bool),
+            np.array([0,0,0,0,1,1,1,1,1,1,0,0], bool),
+            np.array([0,0,0,0,0,0,0,1,1,1,1,1], bool),
+            np.array([1,1,1,0,0,0,0,0,0,0,0,0], bool),
+            np.array([0,0,0,0,0,0,1,1,1,1,1,1], bool),
+            np.array([0,0,0,0,0,0,0,0,0,0,0,1], bool),
+        ]
+        _ss3 = [type("S", (), {"name": f"P{j}"})() for j in range(len(_sc3))]
+        _t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        _t1 = _t0 + timedelta(minutes=_m3)
+        s50, c50 = ss.greedy_select_coverage(_sc3, 1, 50.0, 1)
+        s100, c100 = ss.greedy_select_coverage(_sc3, 1, 100.0, 1)
+        check("PSCLP P=50% 用星少于等于 P=100%", len(s50) <= len(s100),
+              f"{len(s50)} vs {len(s100)}")
+        check("PSCLP P=50% 覆盖率达标", (c50 >= 1).mean() * 100 >= 50.0 - 1e-9,
+              f"{(c50 >= 1).mean() * 100:.1f}%")
+        check("PSCLP P=100% 覆盖率达标", (c100 >= 1).mean() * 100 >= 99.9,
+              f"{(c100 >= 1).mean() * 100:.1f}%")
+        wbs3 = []
+        for c in _sc3:
+            wins = []
+            i2 = 0
+            while i2 < len(c):
+                if c[i2]:
+                    j2 = i2
+                    while j2 < len(c) and c[j2]:
+                        j2 += 1
+                    wins.append((_t0 + timedelta(minutes=i2),
+                                 _t0 + timedelta(minutes=j2), 1.0))
+                    i2 = j2
+                else:
+                    i2 += 1
+            wbs3.append(wins)
+        rp = ss.run_selection(_ss3, wbs3, _t0, _t1, step_minutes=1, k_min=1,
+                              mrt_minutes=180, method="greedy",
+                              req_mode="coverage_pct", coverage_pct=50.0)
+        check("PSCLP run_selection 字段正确",
+              rp["req_mode"] == "coverage_pct" and rp["coverage_threshold_pct"] == 50.0
+              and rp["eval"]["satisfied"])
+        rp2 = ss.run_selection(result["sats"], result["windows_by_sat"],
+                               result["t0"], result["t1"],
+                               step_minutes=1, k_min=1, mrt_minutes=180,
+                               method="greedy", req_mode="coverage_pct", coverage_pct=100.0)
+        check("PSCLP P=100% 纯低轨如实不满足",
+              not rp2["eval"]["satisfied"]
+              and "PSCLP" in rp2["summary"])
+
     print("========================================")
     print(f"结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

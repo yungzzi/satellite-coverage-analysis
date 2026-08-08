@@ -95,7 +95,8 @@ def _counts_of(sat_cov, selected):
     return counts
 
 
-def evaluate_selection(sat_cov, selected, k_min, mrt_minutes, step_minutes, t0, t1):
+def evaluate_selection(sat_cov, selected, k_min, mrt_minutes, step_minutes, t0, t1,
+                       coverage_threshold_pct=None):
     """对一组被选卫星做统计评估。
 
     返回 dict：覆盖数数组、空窗表、MRT/ART、覆盖率、同时可见数、是否满足需求。
@@ -126,6 +127,10 @@ def evaluate_selection(sat_cov, selected, k_min, mrt_minutes, step_minutes, t0, 
     mrt_actual = max((g["duration_minutes"] for g in gaps), default=0.0)
     art_actual = float(np.mean([g["duration_minutes"] for g in gaps])) if gaps else 0.0
     coverage_pct = float(covered.mean() * 100.0) if m else 0.0
+    if coverage_threshold_pct is not None:
+        _satisfied = m > 0 and coverage_pct >= coverage_threshold_pct
+    else:
+        _satisfied = m > 0 and coverage_pct > 0 and mrt_actual <= mrt_minutes
     return {
         "counts": counts,
         "covered": covered,
@@ -135,7 +140,7 @@ def evaluate_selection(sat_cov, selected, k_min, mrt_minutes, step_minutes, t0, 
         "coverage_pct": coverage_pct,
         "n_sim_mean": float(counts.mean()) if m else 0.0,
         "n_sim_max": int(counts.max()) if m else 0,
-        "satisfied": m > 0 and coverage_pct > 0 and mrt_actual <= mrt_minutes,
+        "satisfied": _satisfied,
     }
 
 
@@ -259,6 +264,42 @@ def _sat_detail(sats, windows_by_sat, selected, step_minutes, period_minutes):
             "覆盖率(%)": round(total_s / 60.0 / period_minutes * 100.0, 2) if period_minutes else 0.0,
         })
     return rows
+
+
+def greedy_select_coverage(sat_cov, k_min, coverage_pct, step_minutes):
+    """PSCLP：最少颗数使覆盖率 ≥ coverage_pct%（贪心最大边际收益）。
+
+    每轮选“使覆盖时间片增加最多”的星，直到组合覆盖率 ≥ 阈值或无法再增加。
+    返回 (selected, counts)。
+    """
+    n_sat = len(sat_cov)
+    m = len(sat_cov[0]) if n_sat else 0
+    if m == 0:
+        return [], np.zeros(0, dtype=int)
+    target = m * max(0.0, min(float(coverage_pct), 100.0)) / 100.0
+    indices = [np.flatnonzero(sat_cov[j]) for j in range(n_sat)]
+    usable = [j for j in range(n_sat) if indices[j].size > 0]
+    counts = np.zeros(m, dtype=int)
+    selected = []
+    selected_set = set()
+    covered_total = 0
+    while covered_total < target:
+        best_j, best_gain = -1, 0
+        for j in usable:
+            if j in selected_set:
+                continue
+            ids = indices[j]
+            gain = int((counts[ids] == k_min - 1).sum())
+            if gain > best_gain:
+                best_gain, best_j = gain, j
+        if best_j < 0 or best_gain <= 0:
+            break
+        selected.append(best_j)
+        selected_set.add(best_j)
+        ids = indices[best_j]
+        counts[ids] += 1
+        covered_total += best_gain
+    return selected, counts
 
 
 def select_max_coverage(sat_cov, n_limit, k_min, step_minutes, t0, t1):
@@ -469,7 +510,7 @@ def enumerate_optimal_solutions(sat_cov, sats, k_min, mrt_minutes, step_minutes,
 def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
                   mrt_minutes=30, min_event_minutes=0.0, method="both",
                   time_limit=180, req_mode="continuous", objective="min_sats",
-                  n_sats_limit=None, max_solutions=10):
+                  n_sats_limit=None, max_solutions=10, coverage_pct=100.0):
     """选星总入口：算覆盖矩阵 → 贪心/ILP → 统计 → 对比全池。
 
     req_mode: "continuous"=连续覆盖（无空窗，每个时间片都达标）；
@@ -492,7 +533,8 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     n_sat = len(sats)
     period_minutes = max(1.0, (t1 - t0).total_seconds() / 60.0)
 
-    eff_mrt = 0.0 if req_mode in ("continuous", "any") else float(mrt_minutes)
+    eff_mrt = 0.0 if req_mode in ("continuous", "any", "coverage_pct") else float(mrt_minutes)
+    cov_thr = (float(coverage_pct) if req_mode == "coverage_pct" else None)
     res = {
         "t0": t0, "t1": t1, "dt_list": dt_list,
         "k_min": int(k_min),
@@ -506,11 +548,12 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         "method": method, "n_sats_total": n_sat,
         "sats": sats, "sat_cov": sat_cov,
         "windows_by_sat": windows_by_sat,
+        "coverage_threshold_pct": cov_thr,
     }
 
     # 全池基线（不选星、全部参与能达到的覆盖水平 = 物理上限）
     full = evaluate_selection(sat_cov, list(range(n_sat)), k_min, eff_mrt,
-                              step_minutes, t0, t1)
+                              step_minutes, t0, t1, coverage_threshold_pct=cov_thr)
     res["full"] = full
     if req_mode == "continuous" and not full["satisfied"]:
         res["feasibility"] = {
@@ -548,7 +591,8 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         res["selected"] = sel_mc
         res["selected_names"] = [sats[j].name for j in sel_mc]
         res["eval"] = evaluate_selection(sat_cov, sel_mc, k_min, eff_mrt,
-                                         step_minutes, t0, t1)
+                                         step_minutes, t0, t1,
+                                         coverage_threshold_pct=cov_thr)
         res["algo"] = "greedy-budget"
         res["algo_note"] = algo_note
         res["detail_rows"] = _sat_detail(sats, windows_by_sat, sel_mc,
@@ -575,27 +619,36 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         return res
 
     # ---- 目标模式①：最少颗数满足需求 ----
-    g_sel, g_counts = greedy_select(sat_cov, k_min, eff_mrt, step_minutes)
+    if req_mode == "coverage_pct":
+        g_sel, g_counts = greedy_select_coverage(sat_cov, k_min, float(coverage_pct), step_minutes)
+    else:
+        g_sel, g_counts = greedy_select(sat_cov, k_min, eff_mrt, step_minutes)
     res["greedy"] = {
         "selected": g_sel,
-        "eval": evaluate_selection(sat_cov, g_sel, k_min, eff_mrt, step_minutes, t0, t1),
+        "eval": evaluate_selection(sat_cov, g_sel, k_min, eff_mrt, step_minutes, t0, t1,
+                                     coverage_threshold_pct=cov_thr),
         "note": "",
     }
     ilp = None
-    if method in ("both", "ilp"):
+    if method in ("both", "ilp") and req_mode != "coverage_pct":
         sel_i, counts_i, status_i, note_i = ilp_select(
             sat_cov, k_min, eff_mrt, step_minutes, time_limit=time_limit)
         if sel_i is not None:
             ilp = {
                 "selected": sel_i,
                 "eval": evaluate_selection(sat_cov, sel_i, k_min, eff_mrt,
-                                          step_minutes, t0, t1),
+                                          step_minutes, t0, t1,
+                                          coverage_threshold_pct=cov_thr),
                 "status": status_i, "note": note_i,
             }
     res["ilp"] = ilp
 
     final = None
-    if ilp is not None and ilp["eval"]["satisfied"]:
+    if req_mode == "coverage_pct":
+        final = res["greedy"]
+        final["algo"] = "greedy"
+        final["note"] = "覆盖率阈值任务（PSCLP）当前用贪心（最大边际收益）；整数规划版本待实现。"
+    elif ilp is not None and ilp["eval"]["satisfied"]:
         final = ilp
         final["algo"] = "ilp"
     else:
@@ -629,11 +682,15 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     ]
 
     # 全部最优方案（仅最少颗数目标；无全程星时用 ILP no-good cut 收集）
-    opt_sols, opt_note = enumerate_optimal_solutions(
-        sat_cov, sats, k_min, eff_mrt, step_minutes,
-        max_solutions=max_solutions, time_limit=time_limit)
-    res["optimal_solutions"] = opt_sols
-    res["optimal_note"] = opt_note
+    if req_mode == "coverage_pct":
+        res["optimal_solutions"] = []
+        res["optimal_note"] = "覆盖率阈值任务当前不做最优方案枚举。"
+    else:
+        _opt_sols, _opt_note = enumerate_optimal_solutions(
+            sat_cov, sats, k_min, eff_mrt, step_minutes,
+            max_solutions=max_solutions, time_limit=time_limit)
+        res["optimal_solutions"] = _opt_sols
+        res["optimal_note"] = _opt_note
 
     res["summary"] = _summary_text(res)
     return res
@@ -646,6 +703,8 @@ def _summary_text(res):
     elif res["req_mode"] == "revisit":
         req_label = (f"重访：每 {res['mrt_minutes']:.0f} 分钟内至少一次"
                      f"（允许最长 {res['mrt_minutes']:.0f} 分钟无覆盖）")
+    elif res["req_mode"] == "coverage_pct":
+        req_label = f"覆盖率 ≥{res.get('coverage_threshold_pct') or 100:.0f}%（PSCLP）"
     else:
         req_label = "不限（只看指标）"
     obj_map = {
@@ -666,7 +725,7 @@ def _summary_text(res):
     if res["req_mode"] == "any":
         lines.append("达标判定：不适用（本任务只看覆盖率/空窗指标）")
     else:
-        lines.append("需求满足：是" if ev["satisfied"] else "需求未完全满足：以下空窗段超限")
+        lines.append("需求满足：是" if ev["satisfied"] else "需求未完全满足（见物理上限/空窗）")
     if not ev["satisfied"] and res.get("feasibility") and not res["feasibility"].get("possible", True):
         _msg = res["feasibility"].get("message", "")
         if _msg:
@@ -701,8 +760,10 @@ def main(argv=None):
     ap.add_argument("--mrt", type=float, default=30.0, help="最大重访间隔（分钟）")
     ap.add_argument("--min-event", type=float, default=0.0, help="单次窗口最短时长（分钟，0=不限）")
     ap.add_argument("--method", choices=["greedy", "ilp", "both"], default="both")
-    ap.add_argument("--req-mode", choices=["continuous", "revisit", "any"], default="continuous",
-                    help="需求模式：continuous=连续覆盖；revisit=重访；any=不限（只看指标）")
+    ap.add_argument("--req-mode", choices=["continuous", "revisit", "any", "coverage_pct"], default="continuous",
+                    help="需求模式：continuous=连续覆盖；revisit=重访；coverage_pct=覆盖率阈值；any=不限")
+    ap.add_argument("--coverage-pct", type=float, default=100.0,
+                    help="coverage_pct 模式的覆盖率阈值（%）")
     ap.add_argument("--objective", choices=["min_sats", "max_coverage", "min_max_gap", "min_avg_gap"],
                     default="min_sats",
                     help="目标模式：min_sats=最少颗数；max_coverage=给定 N 颗最大化覆盖率；"
@@ -751,7 +812,7 @@ def main(argv=None):
                         mrt_minutes=args.mrt, min_event_minutes=args.min_event,
                         method=args.method, req_mode=args.req_mode,
                         objective=args.objective, n_sats_limit=args.n_sats,
-                        max_solutions=10)
+                        max_solutions=10, coverage_pct=args.coverage_pct)
     print(res["summary"])
     print()
     print("推荐卫星：", "、".join(res["selected_names"]) or "（无）")
@@ -779,6 +840,8 @@ def export_selection_xlsx(res, path, region_name="", extra_meta=None):
         req_label = "连续覆盖（无空窗）"
     elif res["req_mode"] == "revisit":
         req_label = f"重访（MRT≤{res['mrt_minutes']:.0f} 分钟）"
+    elif res["req_mode"] == "coverage_pct":
+        req_label = f"覆盖率 ≥{res.get('coverage_threshold_pct') or 100:.0f}%（PSCLP）"
     else:
         req_label = "不限（只看指标）"
     obj_map = {
@@ -796,7 +859,7 @@ def export_selection_xlsx(res, path, region_name="", extra_meta=None):
         "目标模式": obj_label,
         "需求-K(最少同时可见)": res["k_min"],
         "需求-MRT(最大重访间隔,分)": ("0（连续覆盖）" if res["req_mode"] == "continuous"
-                                       else ("不限" if res["req_mode"] == "any"
+                                       else ("不适用" if res["req_mode"] in ("any", "coverage_pct")
                                              else res["mrt_minutes"])),
         "单次最短窗口(分)": res["min_event_minutes"],
         "算法": res["algo"] + (f"（{res['algo_note']}）" if res.get("algo_note") else ""),

@@ -1023,8 +1023,9 @@ if tab_analysis.open:
     if res:
         dfs = res["dfs"]
         df_windows, df_summary, df_state, df_gaps = dfs
-        st.success(f"分析完成：{res['n_sats']} 颗卫星参与，{len(df_summary)} 颗有覆盖，"
-                   f"共 {res['n_win']} 个窗口（目标：{res['cfg']['region_name']}）")
+        st.success(f"分析完成：卫星池 {res['n_sats']} 颗（全部导入）参与分析，"
+                   f"{len(df_summary)} 颗有覆盖，共 {res['n_win']} 个窗口"
+                   f"（目标：{res['cfg']['region_name']}）")
         x1, x2 = st.columns([1, 3])
         if x1.button("导出 Excel", key="btn_cov_excel"):
             meta = {
@@ -1066,17 +1067,29 @@ if tab_analysis.open:
 
 
         with st.expander("选星决策（虚拟星座）：基于本次覆盖结果挑最少卫星满足需求", expanded=st.session_state.get("sel_result") is not None):
-            st.caption("选星任务：①连续覆盖=全程无空窗；②重访=允许最长 X 分钟无覆盖；"
-                       "③④⑤=预算固定 N 颗，分别优化覆盖率 / 最大空窗 / 平均空窗。")
+            st.info("说明：覆盖分析与选星均包含所有导入星（卫星池全部参与计算），"
+                       "未覆盖的星不会出现在推荐名单。选星任务的人话问法见下拉下方。")
             t1c, t2c = st.columns([2, 2])
             sel_task = t1c.selectbox(
                 "选星任务",
-                ["① 连续覆盖 · 最少颗数（推荐）",
+                ["① 覆盖率 ≥P% · 最少颗数（P=100 即连续覆盖，推荐）",
                  "② 重访 · 最少颗数",
                  "③ 给定 N 颗 · 覆盖率最大",
-                 "④ 给定 N 颗 · 空窗最小（MMRT）",
+                 "④ 给定 N 颗 · 最长空窗最小（MMRT）",
                  "⑤ 给定 N 颗 · 平均空窗最小（MART）"],
                 key="sel_task")
+            st.caption({
+                "① 覆盖率 ≥P% · 最少颗数（P=100 即连续覆盖，推荐）":
+                    "问：至少覆盖 P% 的时间，最少需要几颗星？（P=100 即全程无空窗）",
+                "② 重访 · 最少颗数":
+                    "问：每 X 分钟至少拍到一次，最少需要几颗星？",
+                "③ 给定 N 颗 · 覆盖率最大":
+                    "问：只有 N 颗星的名额，最多能拍到多少时间？",
+                "④ 给定 N 颗 · 最长空窗最小（MMRT）":
+                    "问：只有 N 颗星的名额，最长空窗能压到多短？（结果可读：能否连续 / 满足重访）",
+                "⑤ 给定 N 颗 · 平均空窗最小（MART）":
+                    "问：只有 N 颗星的名额，平均空窗能压到多短？",
+            }[sel_task])
             sel_k = t2c.number_input("K（最少同时可见）", value=1, min_value=1, step=1, key="sel_k")
             if sel_task.startswith("②"):
                 sel_preset = st.selectbox(
@@ -1094,16 +1107,21 @@ if tab_analysis.open:
                 sel_n = st.number_input("给定卫星数 N", value=10, min_value=1, step=1, key="sel_n")
             else:
                 sel_n = None
+            if sel_task.startswith("①"):
+                sel_p = st.number_input("覆盖率要求 P（%）", value=100.0, min_value=1.0,
+                                        max_value=100.0, step=1.0, key="sel_p")
+            else:
+                sel_p = 100.0
             sel_min_ev = st.number_input("单次最短窗口(分钟, 0=不限)", value=0.0, min_value=0.0,
                                          step=1.0, key="sel_min_ev")
             sel_method = st.selectbox("算法", ["两者对照（推荐）", "贪心（快）", "整数规划（精确）"],
                                       key="sel_method")
             if st.button("开始选星", key="btn_sel_run", type="primary"):
                 task_map = {
-                    "① 连续覆盖 · 最少颗数（推荐）": ("continuous", "min_sats"),
+                    "① 覆盖率 ≥P% · 最少颗数（P=100 即连续覆盖，推荐）": ("coverage_pct", "min_sats"),
                     "② 重访 · 最少颗数": ("revisit", "min_sats"),
                     "③ 给定 N 颗 · 覆盖率最大": ("any", "max_coverage"),
-                    "④ 给定 N 颗 · 空窗最小（MMRT）": ("any", "min_max_gap"),
+                    "④ 给定 N 颗 · 最长空窗最小（MMRT）": ("any", "min_max_gap"),
                     "⑤ 给定 N 颗 · 平均空窗最小（MART）": ("any", "min_avg_gap"),
                 }
                 _req, _obj = task_map[sel_task]
@@ -1115,7 +1133,8 @@ if tab_analysis.open:
                     method={"两者对照（推荐）": "both", "贪心（快）": "greedy",
                             "整数规划（精确）": "ilp"}[sel_method],
                     req_mode=_req, objective=_obj,
-                    n_sats_limit=int(sel_n) if sel_n else None)
+                    n_sats_limit=int(sel_n) if sel_n else None,
+                    coverage_pct=float(sel_p))
                 sel_res["region_name"] = res["cfg"].get("region_name", "")
                 sel_res["fov"] = res["cfg"].get("fov_half_angle_deg", 30.0)
                 sel_res["elev"] = res["cfg"].get("min_elevation_deg", 10.0)
@@ -1126,6 +1145,7 @@ if tab_analysis.open:
             if sel_res:
                 req_lbl = {"continuous": "连续覆盖（无空窗）",
                            "revisit": f"重访 MRT≤{sel_res['mrt_minutes']:.0f} 分",
+                           "coverage_pct": f"覆盖率 ≥{sel_res.get('coverage_threshold_pct') or 100:.0f}%",
                            "any": "不限（只看指标）"}[sel_res["req_mode"]]
                 obj_lbl = {
                     "min_sats": "最少颗数满足需求",
@@ -1163,6 +1183,10 @@ if tab_analysis.open:
                 if sel_res["req_mode"] == "any":
                     st.caption("说明：本任务为预算型（给定 N 颗），只报告覆盖率/空窗指标，"
                                "不做达标判定；覆盖率为“被覆盖时间占比”。")
+                if sel_res["objective"] == "min_max_gap":
+                    st.caption(f"解读：最长空窗 = {sel_res['eval']['mrt_actual_minutes']:.0f} 分钟；"
+                               "若为 0 → 这 N 颗可实现连续覆盖；"
+                               "≤ 你的重访要求 X → 满足“每 X 分钟至少一次”。")
                 with st.expander("推荐卫星（选中清单，按覆盖时长排名）", expanded=True):
                     st.dataframe(pd.DataFrame(sel_res["detail_rows"]), hide_index=True,
                                  width="stretch")

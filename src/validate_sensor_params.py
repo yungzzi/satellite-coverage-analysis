@@ -114,11 +114,28 @@ def main():
     check("幅宽未开启时：swath 不生效，回退视场半角",
           sat_cfg.get("swath_km") is None and info["swath_km"] == 0.0
           and info["fov_half_angle_deg"] == 30.0)
+    sat_cfg, info = cov.resolve_sat_cfg(99999, ov, cfg,
+                                        swath_enabled=True, global_swath_km=60.0)
+    check("全局幅宽开启时：普通卫星用全局幅宽（source=default）",
+          sat_cfg.get("swath_km") == 60.0 and info["fov_half_angle_deg"] is None
+          and info["swath_km"] == 60.0 and info["source"] == "default")
+    sat_cfg, info = cov.resolve_sat_cfg(12345, ov, cfg,
+                                        swath_enabled=True, global_swath_km=60.0)
+    check("逐星行有视场半角时优先于全局幅宽",
+          sat_cfg.get("swath_km") is None and info["fov_half_angle_deg"] == 40.0)
+    ov_empty = [{"norad": 555, "fov_half_angle_deg": None,
+                 "min_elevation_deg": None, "swath_km": None}]
+    sat_cfg, info = cov.resolve_sat_cfg(555, ov_empty, cfg,
+                                        swath_enabled=True, global_swath_km=60.0)
+    check("逐星空行（无角度无幅宽）回退到全局幅宽",
+          sat_cfg.get("swath_km") == 60.0 and info["fov_half_angle_deg"] is None)
     ov_sw = [{"norad": 777, "fov_half_angle_deg": 45.0, "min_elevation_deg": None,
               "swath_km": 100.0}]
     sat_cfg, info = cov.resolve_sat_cfg(777, ov_sw, cfg, swath_enabled=True)
     check("幅宽生效时同一行幅宽优先于视场半角",
           sat_cfg.get("swath_km") == 100.0 and info["fov_half_angle_deg"] is None)
+    check("CONFIG 视场半角默认 10°（视线张角）", cov.CONFIG["fov_half_angle_deg"] == 10.0)
+    check("CONFIG 全局幅宽默认 60 km", cov.CONFIG.get("swath_km_global") == 60.0)
 
     print("== 3. 幅宽换算数学 ==")
     eta = float(cov.swath_to_half_angle_deg(700.0, 185.0))
@@ -177,6 +194,20 @@ def main():
     check("幅宽开关关闭时：swath 行不生效（结果与默认一致）",
           res_sw_off is not None and res_sw_off["n_win"] == res0["n_win"],
           f"{res_sw_off['n_win'] if res_sw_off else 0} vs {res0['n_win']}")
+    res_gsw_off = cov.analyze_collection_pipeline(
+        recs, region(), make_cfg(), "2026-08-03 00:00:00",
+        "2026-08-03 08:00:00", sensor_params=[], swath_enabled=False,
+        global_swath_km=20.0)
+    check("全局幅宽开关关闭时：幅宽 20km 不生效（结果与默认一致）",
+          res_gsw_off is not None and res_gsw_off["n_win"] == res0["n_win"],
+          f"{res_gsw_off['n_win'] if res_gsw_off else 0} vs {res0['n_win']}")
+    res_gsw = cov.analyze_collection_pipeline(
+        recs, region(), make_cfg(), "2026-08-03 00:00:00",
+        "2026-08-03 08:00:00", sensor_params=[], swath_enabled=True,
+        global_swath_km=20.0)
+    check("全局幅宽开启时：全池幅宽 20km 覆盖窗口数不增（远小于 10° 口径，可能无窗口）",
+          (res_gsw is None) or (res_gsw["n_win"] <= res0["n_win"]),
+          f"{res_gsw['n_win'] if res_gsw else 'None(无窗口)'} vs {res0['n_win']}")
     res_sw = cov.analyze_collection_pipeline(
         recs, region(), make_cfg(), "2026-08-03 00:00:00",
         "2026-08-03 08:00:00", sensor_params=ov_sw, swath_enabled=True)

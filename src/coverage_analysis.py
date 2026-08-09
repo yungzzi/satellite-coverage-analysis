@@ -9,7 +9,7 @@
   把地区离散成"网格代表点"。某个时刻，一颗卫星"覆盖"该地区，当且仅当
   地区内【至少一个】网格代表点同时满足两个条件：
     ① 该点在卫星的"覆盖圆"内：点与星下点的地心角 <= 覆盖圆半径角。
-       覆盖圆由传感器视场半角（默认 30°）和轨道高度决定，高度越高圆越大。
+    覆盖圆由传感器视场半角（视线张角，默认 10°，假设值）和轨道高度决定，高度越高圆越大。
     ② 该点看卫星的仰角 >= 最小仰角（默认 10°）。
        仰角太低 = 视线斜穿大气、图像质量差，不算有效覆盖。
   把连续满足的时刻合并成"覆盖窗口"，就是输出表格里的一行。
@@ -72,8 +72,9 @@ CONFIG = {
     "start_utc": "2026-08-03 00:00:00",          # 分析开始时间（UTC）
     "end_utc": "2026-08-03 08:00:00",            # 分析结束时间（UTC）
     "step_minutes": 1,                            # 粗筛时间步长（分钟）
-    "fov_half_angle_deg": 35.0,                   # 视场半角（度）：=最大离轴/侧摆角口径；典型中间值 35°（Q145）
+    "fov_half_angle_deg": 10.0,                   # 视场半角（度）：视线张角/天底圆锥半角（假设值，Q147）
     "min_elevation_deg": 10.0,                    # 最小仰角（度）：太低受大气影响，不算有效覆盖
+    "swath_km_global": 60.0,                      # 全局幅宽（km）：勾选"幅宽生效"时作为普通卫星足印口径（默认不生效）
     "grid_spacing_deg": 0.2,                      # 网格间距（度，约 22 km）
     "max_gantt_rows": 15,                         # 甘特图最多画几颗星（按覆盖时长排名）
     "save_gantt": False,                          # 甘特图默认不生成；需要时改 True
@@ -118,6 +119,8 @@ def apply_config_file(cfg, path):
         cfg["fov_half_angle_deg"] = float(data["fov_half_angle_deg"])
     if "min_elevation_deg" in data:
         cfg["min_elevation_deg"] = float(data["min_elevation_deg"])
+    if "swath_km_global" in data:
+        cfg["swath_km_global"] = float(data["swath_km_global"])
     # 网格与输出
     if "grid_spacing_deg" in data:
         cfg["grid_spacing_deg"] = float(data["grid_spacing_deg"])
@@ -213,8 +216,8 @@ def footprint_max_angle_deg(altitude_km, fov_half_deg):
     地心角 = 星下点与目标点在地心处张开的夹角，0°=正下方，
     约 1° ≈ 111 km（赤道）。覆盖圆 = 以星下点为圆心、这个角为半径的圆。
 
-    物理图景：卫星不是只能拍正下方，传感器可以"歪着头"看，最多歪 fov_half_deg
-    （默认 30°，即视场宽 60°）。以星下点为圆心、看得见的边界为圆，就是覆盖圆。
+    物理图景：把传感器视场看成以天底为轴、半角 η 的圆锥（η = 视场半角 / 视线张角，
+    默认 10°，假设值）；圆锥与地面的交线就是覆盖圆（以星下点为圆心）。
 
     公式推导（球面近似）：
       在"地心 O - 卫星 S - 目标点 P"三点组成的平面三角形里：
@@ -690,28 +693,35 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total, sat_params=None):
     return df_windows, df_summary, df_state, df_gaps
 
 
-def resolve_sat_cfg(norad_id, overrides, global_cfg, swath_enabled=False):
+def resolve_sat_cfg(norad_id, overrides, global_cfg, swath_enabled=False,
+                    global_swath_km=0.0):
     """按 NORAD 精确匹配逐星传感器参数（文件里最后命中者覆盖）。
 
     返回 (sat_cfg, info)：
       sat_cfg = global_cfg 副本 + 该星覆盖值（幅宽仅在 swath_enabled=True 时优先于视场半角；
-               未开启时幅宽只记录、不参与计算，回退用视场半角）；
+               未开启时幅宽只记录、不参与计算，回退用视场半角；没有逐星条目的"普通卫星"
+               在 swath_enabled=True 且 global_swath_km>0 时用全局幅宽作足印口径）；
       info    = {"norad", "source": "override"/"default",
                  "fov_half_angle_deg", "min_elevation_deg", "swath_km"}，
                 供界面/Excel 展示"这颗星实际用的参数"。
     """
     sat_cfg = dict(global_cfg)
+    sat_cfg.pop("swath_km", None)
     hit = None
     for o in overrides or []:
         if o.get("norad") == norad_id:
             hit = o
     if hit is None:
+        if swath_enabled and global_swath_km > 0:
+            sat_cfg["swath_km"] = float(global_swath_km)
+            fov_used = None
+        else:
+            fov_used = global_cfg.get("fov_half_angle_deg")
         info = {"norad": norad_id, "source": "default",
-                "fov_half_angle_deg": global_cfg.get("fov_half_angle_deg"),
+                "fov_half_angle_deg": fov_used,
                 "min_elevation_deg": global_cfg.get("min_elevation_deg"),
-                "swath_km": 0.0}
+                "swath_km": sat_cfg.get("swath_km", 0.0)}
         return sat_cfg, info
-    sat_cfg.pop("swath_km", None)
     sw = hit.get("swath_km") or 0
     if swath_enabled and sw > 0:
         sat_cfg["swath_km"] = float(sw)
@@ -720,7 +730,11 @@ def resolve_sat_cfg(norad_id, overrides, global_cfg, swath_enabled=False):
         sat_cfg["fov_half_angle_deg"] = float(hit["fov_half_angle_deg"])
         fov_used = sat_cfg["fov_half_angle_deg"]
     else:
-        fov_used = sat_cfg.get("fov_half_angle_deg")
+        if swath_enabled and global_swath_km > 0:
+            sat_cfg["swath_km"] = float(global_swath_km)
+            fov_used = None
+        else:
+            fov_used = sat_cfg.get("fov_half_angle_deg")
     if hit.get("min_elevation_deg") is not None:
         sat_cfg["min_elevation_deg"] = float(hit["min_elevation_deg"])
     info = {"norad": norad_id, "source": "override",
@@ -750,7 +764,8 @@ def enrich_summary_sensor(df_summary, sat_params_by_name):
 # ==================== 6. 主流程 ====================
 
 def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=None,
-                                sensor_params=None, swath_enabled=None):
+                                sensor_params=None, swath_enabled=None,
+                                global_swath_km=None):
     """解析卫星 → 逐颗覆盖分析 → 组装结果（GUI 与测试共用的同一入口）。
 
     2026-08-07 新增：把⑤页"开始覆盖分析"的运行逻辑抽成纯函数，
@@ -771,6 +786,8 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
         sensor_params = sl.load_sensor_params()   # 文件不存在则空表 = 全用全局默认
     if swath_enabled is None:
         swath_enabled = sl.load_sensor_swath_enabled()
+    if global_swath_km is None:
+        global_swath_km = float(cfg.get("swath_km_global") or 0.0)
     all_windows = []
     windows_by_sat = []
     sat_params = []
@@ -778,7 +795,8 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
         if progress:
             progress((i + 1) / len(sats), f"分析 {sat.name}（{i + 1}/{len(sats)}）")
         sat_cfg, info = resolve_sat_cfg(sat.norad_id, sensor_params, cfg,
-                                        swath_enabled=swath_enabled)
+                                        swath_enabled=swath_enabled,
+                                        global_swath_km=global_swath_km)
         sat_params.append({"name": sat.name, **info})
         windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg)
         windows_by_sat.append(windows)
@@ -853,8 +871,10 @@ def main():
             print(f"已加载逐星传感器参数表：data/sensor_params.toml"
                   f"（{len(sensor_overrides)} 条覆盖）")
     swath_enabled = sl.load_sensor_swath_enabled(_sp_path)
+    global_swath_km = float(cfg.get("swath_km_global") or 0.0)
     if swath_enabled:
-        print("幅宽生效开关：已开启（同一行幅宽优先于视场半角）。")
+        print(f"幅宽生效开关：已开启（全局幅宽 {global_swath_km:g} km 作为普通卫星"
+              f"足印口径，逐星行幅宽优先）。")
     if args.location:
         loc = next((x for x in sl.load_locations() if x["name"] == args.location), None)
         if loc is None:
@@ -904,7 +924,8 @@ def main():
     for sat in sats:
         norad = int(sat.model.satnum) if getattr(sat, "model", None) else None
         sat_cfg, info = resolve_sat_cfg(norad, sensor_overrides, cfg,
-                                        swath_enabled=swath_enabled)
+                                        swath_enabled=swath_enabled,
+                                        global_swath_km=global_swath_km)
         sat_params.append({"name": sat.name, **info})
         windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg)
         all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)

@@ -1025,7 +1025,7 @@ if tab_analysis.open:
     st.subheader("覆盖分析")
     st.caption("选好收藏夹（卫星来源）后，设置目标区域与时间直接开算；"
                "覆盖判定参数沿用已拍板默认值（视场半角 10°=视线张角假设、最小仰角 10°、"
-               "全局幅宽 60km 默认不生效、1 分钟步长 + 10 秒精化）。")
+               "1 分钟步长 + 10 秒精化；幅宽为逐星可选，默认不生效）。")
     all_cols = sl.load_all_collections()
     cov_names = [_collection_label(x) for x in all_cols]
 
@@ -1132,13 +1132,12 @@ if tab_analysis.open:
         cov_elev = p2.number_input("最小仰角(°)", value=10.0, min_value=0.0, max_value=85.0,
                                    step=1.0, key="cov_elev",
                                    help="经典标准值 10°（过境/覆盖分析常用）；不需要该限制就填 0")
-        cov_swath = p1.number_input("幅宽(km)（普通卫星）", value=60.0, min_value=0.0,
-                                    step=1.0, key="cov_swath",
-                                    help="只对没有逐星参数的普通卫星生效；勾选下方\"幅宽生效\"后才参与计算")
-        cov_sw_en = p2.checkbox("幅宽生效（默认关闭）", value=sl.load_sensor_swath_enabled(),
-                                key="cov_sw_en",
-                                help="开启后：全局幅宽替代全局视场半角（普通卫星），"
-                                     "同时启用参数表中各行的幅宽")
+        cov_sw_en = st.checkbox(
+            "幅宽（逐星）生效（默认关闭）", value=sl.load_sensor_swath_enabled(),
+            key="cov_sw_en",
+            help="只对传感器参数表中填了幅宽的星生效：填了幅宽且开关开启 → 按该星自己的轨道高度"
+                 "换算成等效视场半角计算；未填幅宽的星一律按默认视场半角（10°）计算。"
+                 "高轨/静止卫星没有条带成像概念，会自动回退视场半角。")
         p3, p4 = st.columns(2)
         cov_step = p3.number_input("时间步长(分钟)", value=1, min_value=1, step=1,
                                    key="cov_step")
@@ -1179,7 +1178,8 @@ if tab_analysis.open:
         st.caption("只按 NORAD 精确匹配；未设置的星用上方全局默认（10°/10°）。"
                    "重复编号以表里靠后的为准。同一行若同时填了幅宽和视场半角，"
                    "以幅宽为准（幅宽会按轨道高度换算成等效视场半角）；"
-                   "幅宽是否生效由右上角\"幅宽生效\"开关控制，默认关闭（只记录、不参与计算）。"
+                   "幅宽是否生效由右上角\"幅宽（逐星）生效\"开关控制，默认关闭；"
+                   "未填幅宽的星按默认视场半角计算，高轨/静止星自动回退视场半角。"
                    "保存后下一次\"开始覆盖分析\"生效。")
         _b_save, _b_reset = st.columns(2)
         if _b_save.button("保存参数表", key="btn_sensor_save", type="primary"):
@@ -1200,10 +1200,10 @@ if tab_analysis.open:
                         flash(f"已保存 {len(_rows)} 条；第 {_both_s} 行同时填了幅宽与视场半角，"
                               f"将以幅宽为准。", kind="warning")
                     else:
-                        flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽已生效），"
+                        flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽（逐星）已生效），"
                               f"下一次分析生效。", kind="success")
                 else:
-                    flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽未生效——"
+                    flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽（逐星）未生效——"
                           f"开关保持关闭），下一次分析生效。", kind="success")
         if _b_reset.button("恢复默认模板", key="btn_sensor_reset"):
             if st.session_state.get("sensor_confirm"):
@@ -1334,7 +1334,6 @@ if tab_analysis.open:
                     "tle_file": "GUI 收藏夹解析（合并 TLE）",
                     "fov_half_angle_deg": float(cov_fov),
                     "min_elevation_deg": float(cov_elev),
-                    "swath_km_global": float(cov_swath),
                     "step_minutes": int(cov_step),
                     "refine_step_seconds": int(cov_refine),
                     "grid_spacing_deg": grid_spacing,
@@ -1359,8 +1358,7 @@ if tab_analysis.open:
                     cov_t1.strftime("%Y-%m-%d %H:%M:%S"),
                     progress=lambda frac, msg: bar.progress(min(frac, 1.0), text=msg),
                     sensor_params=sl.load_sensor_params(),
-                    swath_enabled=bool(cov_sw_en),
-                    global_swath_km=float(cov_swath))
+                    swath_enabled=bool(cov_sw_en))
                 if cov_result is None:
                     st.warning("该时段内没有卫星覆盖目标区域（无窗口）。可尝试：更长时段、"
                                "更大的目标区域，或更大的视场角。")
@@ -1378,7 +1376,10 @@ if tab_analysis.open:
                    f"（目标：{res['cfg']['region_name']}）")
         _sp = res.get("sat_params") or []
         _n_ov = sum(1 for p in _sp if p.get("source") == "override")
-        _gdesc = (f"幅宽 {float(cov_swath):g} km" if cov_sw_en
+        _warns = res.get("sensor_warnings") or []
+        for _w in _warns:
+            st.warning(_w)
+        _gdesc = ("幅宽（逐星）生效" if cov_sw_en
                   else f"视场半角 {res['cfg'].get('fov_half_angle_deg', 10.0)}°")
         if _n_ov:
             st.caption(f"逐星传感器参数表生效：{_n_ov} 条覆盖（其余用全局默认 "
@@ -1399,7 +1400,6 @@ if tab_analysis.open:
                 "refine_step_seconds": res["cfg"].get("refine_step_seconds", 10),
                 "fov_half_angle_deg": res["cfg"].get("fov_half_angle_deg", 10.0),
                 "min_elevation_deg": res["cfg"].get("min_elevation_deg", 10.0),
-                "swath_km_global": res["cfg"].get("swath_km_global", 60.0),
                 "grid_spacing_deg": res["cfg"].get("grid_spacing_deg", 0.2),
                 "sensor_override_count": _n_ov,
                 "n_satellites_total": res["n_sats"],

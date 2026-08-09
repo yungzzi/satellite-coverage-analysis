@@ -114,28 +114,12 @@ def main():
     check("幅宽未开启时：swath 不生效，回退视场半角",
           sat_cfg.get("swath_km") is None and info["swath_km"] == 0.0
           and info["fov_half_angle_deg"] == 30.0)
-    sat_cfg, info = cov.resolve_sat_cfg(99999, ov, cfg,
-                                        swath_enabled=True, global_swath_km=60.0)
-    check("全局幅宽开启时：普通卫星用全局幅宽（source=default）",
-          sat_cfg.get("swath_km") == 60.0 and info["fov_half_angle_deg"] is None
-          and info["swath_km"] == 60.0 and info["source"] == "default")
-    sat_cfg, info = cov.resolve_sat_cfg(12345, ov, cfg,
-                                        swath_enabled=True, global_swath_km=60.0)
-    check("逐星行有视场半角时优先于全局幅宽",
-          sat_cfg.get("swath_km") is None and info["fov_half_angle_deg"] == 40.0)
-    ov_empty = [{"norad": 555, "fov_half_angle_deg": None,
-                 "min_elevation_deg": None, "swath_km": None}]
-    sat_cfg, info = cov.resolve_sat_cfg(555, ov_empty, cfg,
-                                        swath_enabled=True, global_swath_km=60.0)
-    check("逐星空行（无角度无幅宽）回退到全局幅宽",
-          sat_cfg.get("swath_km") == 60.0 and info["fov_half_angle_deg"] is None)
     ov_sw = [{"norad": 777, "fov_half_angle_deg": 45.0, "min_elevation_deg": None,
               "swath_km": 100.0}]
     sat_cfg, info = cov.resolve_sat_cfg(777, ov_sw, cfg, swath_enabled=True)
     check("幅宽生效时同一行幅宽优先于视场半角",
           sat_cfg.get("swath_km") == 100.0 and info["fov_half_angle_deg"] is None)
     check("CONFIG 视场半角默认 10°（视线张角）", cov.CONFIG["fov_half_angle_deg"] == 10.0)
-    check("CONFIG 全局幅宽默认 60 km", cov.CONFIG.get("swath_km_global") == 60.0)
 
     print("== 3. 幅宽换算数学 ==")
     eta = float(cov.swath_to_half_angle_deg(700.0, 185.0))
@@ -146,6 +130,16 @@ def main():
     print("== 4. 端到端：空表=现状 / 覆盖生效 / 幅宽生效 ==")
     recs = jilin_recs()
     check("吉林一号全量 58 颗（测试基准）", len(recs) == 58, f"{len(recs)} 颗")
+    sats_jl = sl.records_to_satellites(recs)
+    check("orbit_tag：吉林低轨判定", cov.orbit_tag(sats_jl[0]) == "低轨",
+          cov.orbit_tag(sats_jl[0]))
+    cols0 = sl.load_builtin_collections()
+    gf_recs = sl.resolve_collection(
+        next(c for c in cols0 if "高分系列 GAOFEN" in c["name"]), offline=True)
+    gf4 = next(r for r in gf_recs if "GAOFEN-4" in r.get("name", ""))
+    check("orbit_tag：GAOFEN-4 判为 GEO/静止",
+          cov.orbit_tag(sl.records_to_satellites([gf4])[0]) == "GEO/静止",
+          cov.orbit_tag(sl.records_to_satellites([gf4])[0]))
     res0 = cov.analyze_collection_pipeline(
         recs, region(), make_cfg(), "2026-08-03 00:00:00",
         "2026-08-03 08:00:00", sensor_params=[])
@@ -194,20 +188,6 @@ def main():
     check("幅宽开关关闭时：swath 行不生效（结果与默认一致）",
           res_sw_off is not None and res_sw_off["n_win"] == res0["n_win"],
           f"{res_sw_off['n_win'] if res_sw_off else 0} vs {res0['n_win']}")
-    res_gsw_off = cov.analyze_collection_pipeline(
-        recs, region(), make_cfg(), "2026-08-03 00:00:00",
-        "2026-08-03 08:00:00", sensor_params=[], swath_enabled=False,
-        global_swath_km=20.0)
-    check("全局幅宽开关关闭时：幅宽 20km 不生效（结果与默认一致）",
-          res_gsw_off is not None and res_gsw_off["n_win"] == res0["n_win"],
-          f"{res_gsw_off['n_win'] if res_gsw_off else 0} vs {res0['n_win']}")
-    res_gsw = cov.analyze_collection_pipeline(
-        recs, region(), make_cfg(), "2026-08-03 00:00:00",
-        "2026-08-03 08:00:00", sensor_params=[], swath_enabled=True,
-        global_swath_km=20.0)
-    check("全局幅宽开启时：全池幅宽 20km 覆盖窗口数不增（远小于 10° 口径，可能无窗口）",
-          (res_gsw is None) or (res_gsw["n_win"] <= res0["n_win"]),
-          f"{res_gsw['n_win'] if res_gsw else 'None(无窗口)'} vs {res0['n_win']}")
     res_sw = cov.analyze_collection_pipeline(
         recs, region(), make_cfg(), "2026-08-03 00:00:00",
         "2026-08-03 08:00:00", sensor_params=ov_sw, swath_enabled=True)
@@ -219,6 +199,23 @@ def main():
         check("幅宽覆盖 source=override 且 swath=20km",
               p_sw["source"] == "override" and p_sw["swath_km"] == 20.0
               and p_sw["fov_half_angle_deg"] is None)
+        check("低轨星幅宽不触发高轨警告", not res_sw.get("sensor_warnings"))
+
+    # GEO/高轨幅宽自动回退：给 GAOFEN-4 填幅宽，应回退视场半角并提示
+    res_gf = cov.analyze_collection_pipeline(
+        gf_recs, region(), make_cfg(),
+        "2026-08-03 00:00:00", "2026-08-03 08:00:00",
+        sensor_params=[{"norad": gf4["norad_id"], "fov_half_angle_deg": None,
+                        "min_elevation_deg": 10.0, "swath_km": 185.0}],
+        swath_enabled=True)
+    check("GEO 星幅宽自动回退：仍有窗口且警告存在",
+          res_gf is not None and res_gf.get("sensor_warnings")
+          and any("GAOFEN-4" in w for w in res_gf["sensor_warnings"]),
+          str(res_gf.get("sensor_warnings") if res_gf else None))
+    if res_gf:
+        p_gf = next(p for p in res_gf["sat_params"] if p["norad"] == gf4["norad_id"])
+        check("GEO 星回退后 swath_used=0 且 fov=全局默认",
+              p_gf["swath_km"] == 0.0 and p_gf["fov_half_angle_deg"] == 30.0)
 
     print("== 5. 收藏夹批量添加 NORAD 提取 ==")
     cols = sl.load_builtin_collections()

@@ -451,16 +451,16 @@ if tab_search.open:
             target = (next((x["name"] for x in user_cols
                              if _collection_label(x) == col_target), None)
                       if col_target else None)
-            if new_name.strip():
-                _snapshot()
-                sl.create_collection(new_name.strip())
-                target = new_name.strip()
-            if not target:
+            if not target and not new_name.strip():
                 st.error("请先选择或新建一个收藏夹。")
             elif not sel_ids:
-                st.error("请先用多选框选择至少一颗星（或点“全选当前筛选结果”）。")
+                st.error("请先用多选框选择至少一颗星（或点“全选当前筛选结果”）。"
+                         "（未选星时不会新建空收藏夹）")
             else:
                 _snapshot()
+                if new_name.strip():
+                    sl.create_collection(new_name.strip())
+                    target = new_name.strip()
                 if sl.add_entry(target, "norad_list", " ".join(map(str, sel_ids))):
                     st.session_state["page1_msg"] = (
                         "success", f"已把 {len(sel_ids)} 颗星（编号清单）加入「{target}」")
@@ -511,7 +511,7 @@ if tab_collections.open:
             st.caption("内置夹只读，不能直接修改；想要自己的版本，请新建收藏夹后手动添加同样的编号或导入文件。")
 
         # ---------- 分区 2：手动卫星（固定清单） ----------
-        st.markdown("### ① 手动导入（固定清单）")
+        st.markdown("### 手动导入（固定清单）")
         st.caption("手动勾选或输入编号保存的星，固定不变（新发射的星不会自动进来）；"
                    "可单颗删除、追加编号。")
         list_entries = [e for e in c["entries"] if e["type"] == "norad_list"]
@@ -625,7 +625,7 @@ if tab_collections.open:
                                        "（退役/保密/新发射）——离线时跳过联网；"
                                        "②缓存被清空且数据源下载被拒（限流/网络异常）。"
                                        "可到④页“下载与自检”强制更新全集后重试。")
-                        st.success(f"本夹共 {len(rows_meta)} 颗卫星（数据来自本地缓存，秒开）")
+                        st.success(f"本夹共 {len(rows_meta)} 颗卫星（数据来自本地缓存）")
                         st.caption("如需联网刷新 TLE/档案，请到④页“下载与自检”强制更新。")
                         st.caption("需要保存成 TLE 文件请到④页“下载与自检”解析下载。")
                         n_incomplete = sum(1 for x in rows_meta if not x.get("meta_complete"))
@@ -873,6 +873,8 @@ if tab_constellations.open:
             flash(f"同名收藏夹已存在：{col_name}，请改名后再上传。", kind="warning")
         st.rerun()
     st.divider()
+    st.caption("下面从星座菜单中选择（或按关键字搜索对应家族）："
+               "点“预览成员”→ 勾选要保留的星 → 确认，即建立 📡 星座收藏夹（编号快照）。")
     cons = sl.load_constellations()
     if not cons:
         st.info("暂无星座目录（data/constellations.toml 缺失或为空）。")

@@ -1166,7 +1166,9 @@ if tab_analysis.open:
             },
         )
         st.caption("只按 NORAD 精确匹配；未设置的星用上方全局默认（30°/10°）。"
-                   "重复编号以表里靠后的为准。保存后下一次\"开始覆盖分析\"生效。")
+                   "重复编号以表里靠后的为准。同一行若同时填了幅宽和视场半角，"
+                   "以幅宽为准（幅宽会按轨道高度换算成等效视场半角）。"
+                   "保存后下一次\"开始覆盖分析\"生效。")
         _b_save, _b_reset = st.columns(2)
         if _b_save.button("保存参数表", key="btn_sensor_save", type="primary"):
             _rows = _df_to_sensor_rows(edited)
@@ -1175,8 +1177,18 @@ if tab_analysis.open:
             else:
                 sl.save_sensor_params(_rows)
                 st.session_state["sensor_rows"] = _rows
-                flash(f"已保存传感器参数表（{len(_rows)} 条覆盖），下一次分析生效。",
-                      kind="success")
+                _both = [i + 1 for i, r in enumerate(_rows)
+                         if (r.get("swath_km") or 0) > 0
+                         and r.get("fov_half_angle_deg") is not None]
+                if _both:
+                    _both_s = "、".join(map(str, _both[:10]))
+                    if len(_both) > 10:
+                        _both_s += f" 等 {len(_both)} 行"
+                    flash(f"已保存 {len(_rows)} 条；第 {_both_s} 行同时填了幅宽与视场半角，"
+                          f"将以幅宽为准。", kind="warning")
+                else:
+                    flash(f"已保存传感器参数表（{len(_rows)} 条覆盖），下一次分析生效。",
+                          kind="success")
         if _b_reset.button("恢复默认模板", key="btn_sensor_reset"):
             if st.session_state.get("sensor_confirm"):
                 sl.save_sensor_params([])
@@ -1252,6 +1264,8 @@ if tab_analysis.open:
                     _pwv = _pw.number_input("幅宽(km)（0=不用）", value=0.0,
                                             min_value=0.0, step=1.0,
                                             key="sensor_src_swath")
+                    st.caption("若同时填了视场半角与幅宽，以幅宽为准"
+                               "（幅宽会换算成等效视场半角）。")
                     if st.button(f"加入参数表（{_n_sel} 颗）", key="btn_sensor_src_add",
                                  type="primary"):
                         if not _sel_idx:

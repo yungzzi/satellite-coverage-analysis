@@ -181,6 +181,15 @@ def main():
     ids = sl.collection_norad_ids(jl_col)
     check("吉林一号全量批量提取 58 个 NORAD", len(ids) == 58
           and all(isinstance(i, int) for i in ids), f"{len(ids)} 个")
+    gaofen_col = next(c for c in cols if "高分系列 GAOFEN" in c["name"])
+    rows = sl.collection_sources_dedup(["吉林一号全量（内置·测试基准）",
+                                        "高分系列 GAOFEN（内置·测试基准）"])
+    n_ids = len({r["norad"] for r in rows})
+    check("多来源去重：58+36=94 且无重复 NORAD",
+          len(rows) == n_ids == 94
+          and all(r.get("name") and r.get("source") for r in rows),
+          f"{len(rows)} 条 / 唯一 {n_ids}")
+    check("未知来源名安全跳过", sl.collection_sources_dedup(["不存在的夹"]) == [])
 
     print("== 6. AppTest 首页 0 异常 ==")
     try:

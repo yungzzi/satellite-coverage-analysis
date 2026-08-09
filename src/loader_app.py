@@ -202,8 +202,11 @@ def _collection_label(x: dict) -> str:
 def _strip_collection_label(n: str) -> str:
     """把带标识的显示名还原成收藏夹原名（③⑤页解析前调用）。"""
     n = n[len("📡 "):] if n.startswith("📡 ") else n
+    n = n[len("⭐ "):] if n.startswith("⭐ ") else n
     if n.endswith("（星座）"):
         n = n[:-len("（星座）")]
+    if n.endswith("（虚拟星座，来自选星）"):
+        n = n[:-len("（虚拟星座，来自选星）")]
     if n.endswith("（内置，只读）"):
         n = n[:-len("（内置，只读）")]
     if n.endswith("（我的）"):
@@ -1185,43 +1188,96 @@ if tab_analysis.open:
                 st.session_state["sensor_confirm"] = True
                 flash("再点一次\"恢复默认模板\"确认覆盖（会清空当前所有条目）。",
                       kind="warning")
-        with st.expander("从收藏夹批量添加（按 NORAD 逐行加入）"):
-            _all_cols = sl.load_all_collections()
-            _bc = st.selectbox("选择收藏夹", [c["name"] for c in _all_cols],
-                               key="sensor_batch_col")
-            _bf, _be, _bw = st.columns(3)
-            _bfv = _bf.number_input("视场半角(°)（0=不改）", value=0.0, min_value=0.0,
-                                    step=1.0, key="sensor_batch_fov")
-            _bev = _be.number_input("最小仰角(°)（0=不改）", value=0.0, min_value=0.0,
-                                    step=1.0, key="sensor_batch_elev")
-            _bwv = _bw.number_input("幅宽(km)（0=不用）", value=0.0, min_value=0.0,
-                                    step=1.0, key="sensor_batch_swath")
-            if st.button("追加到表格", key="btn_sensor_batch"):
-                _col = next(c for c in _all_cols if c["name"] == _bc)
-                _ids = sl.collection_norad_ids(_col)
-                if not _ids:
-                    flash(f"收藏夹「{_bc}」未解析到卫星（可能本地缓存缺失），未能添加。",
-                          kind="warning")
+        with st.expander("从本次覆盖分析的卫星来源导入（去重）"):
+            _src_names = [_strip_collection_label(n) for n in cov_sats]
+            if not _src_names:
+                st.caption("请先在上方\"卫星来源（收藏夹）\"里勾选收藏夹，"
+                           "这里会把所选来源的卫星去重后列出。")
+            else:
+                _src_key = tuple(sorted(_src_names))
+                if st.session_state.get("sensor_src_key") != _src_key:
+                    _src_rows = sl.collection_sources_dedup(_src_names)
+                    st.session_state["sensor_src_rows"] = _src_rows
+                    st.session_state["sensor_src_key"] = _src_key
+                _src_rows = st.session_state.get("sensor_src_rows", [])
+                if not _src_rows:
+                    st.caption("所选来源未解析到卫星（可能本地缓存缺失），"
+                               "请先到④页下载/解析。")
                 else:
+                    _rr_col = st.columns([5, 1])
+                    with _rr_col[1]:
+                        if st.button("重新读取来源", key="btn_sensor_src_reload",
+                                     help="重新从本地缓存解析所选来源（下载新 TLE 后点这个）"):
+                            st.session_state.pop("sensor_src_key", None)
+                            st.rerun()
                     _base = _df_to_sensor_rows(edited) or []
                     _existing = {r["norad"] for r in _base}
-                    _added = 0
-                    for _i in _ids:
-                        if _i in _existing:
-                            continue
-                        _row = {"norad": _i}
-                        if _bfv > 0:
-                            _row["fov_half_angle_deg"] = float(_bfv)
-                        if _bev > 0:
-                            _row["min_elevation_deg"] = float(_bev)
-                        if _bwv > 0:
-                            _row["swath_km"] = float(_bwv)
-                        _base.append(_row)
-                        _added += 1
-                    st.session_state["sensor_rows"] = _base
-                    flash(f"已追加 {_added} 颗（跳过已在表中的 {len(_ids) - _added} 颗）。",
-                          kind="success")
-                    st.rerun()
+                    _df_src = pd.DataFrame(_src_rows, columns=["name", "norad",
+                                                               "source"])
+                    _df_src["已在参数表"] = _df_src["norad"].isin(_existing).map(
+                        {True: "是", False: "否"})
+                    _q = st.text_input("搜索（名称或 NORAD）", key="sensor_src_q")
+                    _f_src, _f_miss = st.columns(2)
+                    _src_opts = sorted(_df_src["source"].unique().tolist())
+                    _pick_src = _f_src.multiselect("按来源筛选", _src_opts,
+                                                   default=_src_opts,
+                                                   key="sensor_src_filter")
+                    _only_miss = _f_miss.checkbox("只看未加入参数表的",
+                                                  value=True, key="sensor_src_miss")
+                    _mask = _df_src["source"].isin(_pick_src)
+                    if _q.strip():
+                        _ql = _q.strip().lower()
+                        _mask &= (_df_src["name"].str.lower().str.contains(_ql)
+                                  | _df_src["norad"].astype(str).str.contains(_ql))
+                    if _only_miss:
+                        _mask &= _df_src["已在参数表"] == "否"
+                    _df_pick = _df_src[_mask].reset_index(drop=True)
+                    st.caption(f"来源去重共 {len(_df_src)} 颗；当前筛选 {len(_df_pick)} 颗。")
+                    _pick_all = st.checkbox("全选当前筛选结果", key="sensor_src_all")
+                    _ev = st.dataframe(
+                        _df_pick[["name", "norad", "source", "已在参数表"]],
+                        hide_index=True, width="stretch",
+                        on_select="rerun", selection_mode="multi-row",
+                        key="sensor_src_pick")
+                    _sel_idx = list(range(len(_df_pick))) if _pick_all \
+                        else list(_ev.selection.rows)
+                    _n_sel = len(_sel_idx)
+                    _pf, _pe, _pw = st.columns(3)
+                    _pfv = _pf.number_input("视场半角(°)（0=不改）", value=0.0,
+                                            min_value=0.0, step=1.0,
+                                            key="sensor_src_fov")
+                    _pev = _pe.number_input("最小仰角(°)（0=不改）", value=0.0,
+                                            min_value=0.0, step=1.0,
+                                            key="sensor_src_elev")
+                    _pwv = _pw.number_input("幅宽(km)（0=不用）", value=0.0,
+                                            min_value=0.0, step=1.0,
+                                            key="sensor_src_swath")
+                    if st.button(f"加入参数表（{_n_sel} 颗）", key="btn_sensor_src_add",
+                                 type="primary"):
+                        if not _sel_idx:
+                            flash("请先勾选要加入的卫星（或勾选\"全选当前筛选结果\"）。",
+                                  kind="warning")
+                        else:
+                            _added = 0
+                            for _i in _sel_idx:
+                                _nid = int(_df_pick.loc[_i, "norad"])
+                                if _nid in _existing:
+                                    continue
+                                _row = {"norad": _nid}
+                                if _pfv > 0:
+                                    _row["fov_half_angle_deg"] = float(_pfv)
+                                if _pev > 0:
+                                    _row["min_elevation_deg"] = float(_pev)
+                                if _pwv > 0:
+                                    _row["swath_km"] = float(_pwv)
+                                _base.append(_row)
+                                _existing.add(_nid)
+                                _added += 1
+                            st.session_state["sensor_rows"] = _base
+                            flash(f"已把 {_added} 颗加入参数表（跳过已在表中的 "
+                                  f"{_n_sel - _added} 颗）；记得点\"保存参数表\"生效。",
+                                  kind="success")
+                            st.rerun()
 
     if st.button("开始覆盖分析", key="btn_cov_run", type="primary"):
         real_cols = [_strip_collection_label(n) for n in cov_sats]

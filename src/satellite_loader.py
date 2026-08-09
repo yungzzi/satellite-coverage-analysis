@@ -659,7 +659,9 @@ def save_user_collections(collections: List[dict]):
 SENSOR_TEMPLATE = """\
 # 逐星传感器参数覆盖表（程序自动生成模板；可用 GUI ⑤页编辑，也可手改）
 # 规则：只按 NORAD 编号精确匹配；未单独设置的卫星一律用⑤页全局默认值
-#       （视场半角 30°、最小仰角 10°）。
+#       （视场半角 35°、最小仰角 10°——经典值/典型中间值，见答疑记录 Q145）。
+# 全局开关：swath_enabled = false 时，下面所有 swath_km 只记录、不参与计算
+#           （幅宽暂不生效，等条带模型落地后再开）；true 时同一行幅宽优先于视场半角。
 # 每条可填：
 #   norad              必填：NORAD 编目编号（数字）
 #   fov_half_angle_deg 选填：视场半角（度）；留空用全局默认
@@ -667,7 +669,10 @@ SENSOR_TEMPLATE = """\
 #   swath_km           选填：幅宽（公里）。填了幅宽就按该时刻轨道高度换算成
 #                            等效视场半角，仍按覆盖圆锥计算；同一行幅宽优先于视场半角。
 # 重复编号：文件里后写的覆盖先写的。
-# 内置示例默认不启用（仅注释参考；来源为公开资料，使用前请自行核对）：
+# 参考幅宽（公开资料，使用前请自行核对；默认不启用）：
+#   Landsat-8 约 185 km；Sentinel-1 IW 约 250 km；SPOT-6/7 约 60 km；
+#   Pléiades 约 20 km（Neo 约 14 km）；WorldView-3 约 13.1 km。
+# 内置示例（取消注释即启用；注意 swath_enabled=false 时幅宽仍不生效）：
 # [[overrides]]
 # norad = 39084        # Landsat-8
 # swath_km = 185.0
@@ -717,9 +722,23 @@ def load_sensor_params(path: Optional[str] = None) -> List[dict]:
     return out
 
 
-def _dump_sensor_params(overrides: List[dict]) -> str:
-    """把覆盖行写成 TOML 文本（模板注释 + 覆盖行）。"""
-    lines = [SENSOR_TEMPLATE.rstrip()]
+def load_sensor_swath_enabled(path: Optional[str] = None) -> bool:
+    """读取全局开关 swath_enabled（默认 False = 幅宽只记录、不参与计算）。"""
+    p = Path(path) if path else SENSOR_PARAMS
+    if tomllib is None or not p.exists():
+        return False
+    try:
+        with open(p, "rb") as f:
+            data = tomllib.load(f)
+        return bool(data.get("swath_enabled", False))
+    except Exception:
+        return False
+
+
+def _dump_sensor_params(overrides: List[dict], swath_enabled: bool = False) -> str:
+    """把覆盖行写成 TOML 文本（模板注释 + 全局开关 + 覆盖行）。"""
+    lines = [SENSOR_TEMPLATE.rstrip(),
+             f"swath_enabled = {str(bool(swath_enabled)).lower()}", ""]
     for o in overrides:
         norad = o.get("norad")
         if norad is None:
@@ -736,11 +755,12 @@ def _dump_sensor_params(overrides: List[dict]) -> str:
     return "\n".join(lines)
 
 
-def save_sensor_params(overrides: List[dict], path: Optional[str] = None):
-    """原子写传感器参数表（先写临时文件再替换）。"""
+def save_sensor_params(overrides: List[dict], path: Optional[str] = None,
+                       swath_enabled: bool = False):
+    """原子写传感器参数表（先写临时文件再替换），含全局开关 swath_enabled。"""
     p = Path(path) if path else SENSOR_PARAMS
     _ensure_dirs()
-    text = _dump_sensor_params(overrides)
+    text = _dump_sensor_params(overrides, swath_enabled)
     fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

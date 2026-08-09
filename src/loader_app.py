@@ -1024,7 +1024,7 @@ if tab_constellations.open:
 if tab_analysis.open:
     st.subheader("覆盖分析")
     st.caption("选好收藏夹（卫星来源）后，设置目标区域与时间直接开算；"
-               "覆盖判定参数沿用已拍板默认值（视场半角 30°、最小仰角 10°、1 分钟步长 + 10 秒精化）。")
+               "覆盖判定参数沿用已拍板默认值（视场半角 35°、最小仰角 10°、1 分钟步长 + 10 秒精化）。")
     all_cols = sl.load_all_collections()
     cov_names = [_collection_label(x) for x in all_cols]
 
@@ -1124,10 +1124,13 @@ if tab_analysis.open:
                     st.warning(f"同名收藏夹已存在：{col_name}，请改名后再上传。")
     with c2:
         p1, p2 = st.columns(2)
-        cov_fov = p1.number_input("视场半角(°)", value=30.0, min_value=1.0, max_value=89.0,
-                                  step=1.0, key="cov_fov")
+        cov_fov = p1.number_input("视场半角(°)", value=35.0, min_value=1.0, max_value=89.0,
+                                  step=1.0, key="cov_fov",
+                                  help="覆盖圆口径（等价最大离轴/侧摆角）：商业光学星标准 ±30°、"
+                                       "任务常用 30~45°，取典型中间值 35°（Q145）")
         cov_elev = p2.number_input("最小仰角(°)", value=10.0, min_value=0.0, max_value=85.0,
-                                   step=1.0, key="cov_elev")
+                                   step=1.0, key="cov_elev",
+                                   help="经典标准值 10°（过境/覆盖分析常用）；不需要该限制就填 0")
         p3, p4 = st.columns(2)
         cov_step = p3.number_input("时间步长(分钟)", value=1, min_value=1, step=1,
                                    key="cov_step")
@@ -1165,30 +1168,38 @@ if tab_analysis.open:
                     help="选填；填了按幅宽换算视场半角（仍按覆盖圆锥计算），同一行幅宽优先"),
             },
         )
-        st.caption("只按 NORAD 精确匹配；未设置的星用上方全局默认（30°/10°）。"
+        st.caption("只按 NORAD 精确匹配；未设置的星用上方全局默认（35°/10°）。"
                    "重复编号以表里靠后的为准。同一行若同时填了幅宽和视场半角，"
-                   "以幅宽为准（幅宽会按轨道高度换算成等效视场半角）。"
+                   "以幅宽为准（幅宽会按轨道高度换算成等效视场半角）；"
+                   "幅宽是否生效由下方开关控制，默认关闭（只记录、不参与计算）。"
                    "保存后下一次\"开始覆盖分析\"生效。")
+        _sw_en = st.checkbox(
+            "幅宽生效（默认关闭；关闭时幅宽只记录、不参与计算，开启后同一行幅宽优先于视场半角）",
+            value=sl.load_sensor_swath_enabled(), key="sensor_sw_en")
         _b_save, _b_reset = st.columns(2)
         if _b_save.button("保存参数表", key="btn_sensor_save", type="primary"):
             _rows = _df_to_sensor_rows(edited)
             if _rows is None:
                 flash("参数表有无效行：NORAD 必须是正整数，请修正后再保存。", kind="warning")
             else:
-                sl.save_sensor_params(_rows)
+                sl.save_sensor_params(_rows, swath_enabled=bool(_sw_en))
                 st.session_state["sensor_rows"] = _rows
-                _both = [i + 1 for i, r in enumerate(_rows)
-                         if (r.get("swath_km") or 0) > 0
-                         and r.get("fov_half_angle_deg") is not None]
-                if _both:
-                    _both_s = "、".join(map(str, _both[:10]))
-                    if len(_both) > 10:
-                        _both_s += f" 等 {len(_both)} 行"
-                    flash(f"已保存 {len(_rows)} 条；第 {_both_s} 行同时填了幅宽与视场半角，"
-                          f"将以幅宽为准。", kind="warning")
+                if _sw_en:
+                    _both = [i + 1 for i, r in enumerate(_rows)
+                             if (r.get("swath_km") or 0) > 0
+                             and r.get("fov_half_angle_deg") is not None]
+                    if _both:
+                        _both_s = "、".join(map(str, _both[:10]))
+                        if len(_both) > 10:
+                            _both_s += f" 等 {len(_both)} 行"
+                        flash(f"已保存 {len(_rows)} 条；第 {_both_s} 行同时填了幅宽与视场半角，"
+                              f"将以幅宽为准。", kind="warning")
+                    else:
+                        flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽已生效），"
+                              f"下一次分析生效。", kind="success")
                 else:
-                    flash(f"已保存传感器参数表（{len(_rows)} 条覆盖），下一次分析生效。",
-                          kind="success")
+                    flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽未生效——"
+                          f"开关保持关闭），下一次分析生效。", kind="success")
         if _b_reset.button("恢复默认模板", key="btn_sensor_reset"):
             if st.session_state.get("sensor_confirm"):
                 sl.save_sensor_params([])
@@ -1264,8 +1275,8 @@ if tab_analysis.open:
                     _pwv = _pw.number_input("幅宽(km)（0=不用）", value=0.0,
                                             min_value=0.0, step=1.0,
                                             key="sensor_src_swath")
-                    st.caption("若同时填了视场半角与幅宽，以幅宽为准"
-                               "（幅宽会换算成等效视场半角）。")
+                    st.caption("若同时填了视场半角与幅宽，在\"幅宽生效\"开关开启时以幅宽为准"
+                               "（幅宽会换算成等效视场半角）；开关关闭时幅宽只记录、不参与计算。")
                     if st.button(f"加入参数表（{_n_sel} 颗）", key="btn_sensor_src_add",
                                  type="primary"):
                         if not _sel_idx:
@@ -1340,7 +1351,8 @@ if tab_analysis.open:
                     cov_t0.strftime("%Y-%m-%d %H:%M:%S"),
                     cov_t1.strftime("%Y-%m-%d %H:%M:%S"),
                     progress=lambda frac, msg: bar.progress(min(frac, 1.0), text=msg),
-                    sensor_params=sl.load_sensor_params())
+                    sensor_params=sl.load_sensor_params(),
+                    swath_enabled=sl.load_sensor_swath_enabled())
                 if cov_result is None:
                     st.warning("该时段内没有卫星覆盖目标区域（无窗口）。可尝试：更长时段、"
                                "更大的目标区域，或更大的视场角。")
@@ -1360,12 +1372,12 @@ if tab_analysis.open:
         _n_ov = sum(1 for p in _sp if p.get("source") == "override")
         if _n_ov:
             st.caption(f"逐星传感器参数表生效：{_n_ov} 条覆盖（其余用全局默认 "
-                       f"{res['cfg'].get('fov_half_angle_deg', 30.0)}°/"
+                       f"{res['cfg'].get('fov_half_angle_deg', 35.0)}°/"
                        f"{res['cfg'].get('min_elevation_deg', 10.0)}°），"
                        f"每颗星实际所用参数见下方卫星汇总表。")
         else:
             st.caption("传感器参数：全部使用全局默认"
-                       f"（视场半角 {res['cfg'].get('fov_half_angle_deg', 30.0)}°、"
+                       f"（视场半角 {res['cfg'].get('fov_half_angle_deg', 35.0)}°、"
                        f"最小仰角 {res['cfg'].get('min_elevation_deg', 10.0)}°）。")
         if "cov_xlsx" not in st.session_state:
             meta = {
@@ -1375,7 +1387,7 @@ if tab_analysis.open:
                 "end_utc": str(df_state["end_utc"].iloc[-1])[:19],
                 "step_minutes": res["cfg"].get("step_minutes", 1),
                 "refine_step_seconds": res["cfg"].get("refine_step_seconds", 10),
-                "fov_half_angle_deg": res["cfg"].get("fov_half_angle_deg", 30.0),
+                "fov_half_angle_deg": res["cfg"].get("fov_half_angle_deg", 35.0),
                 "min_elevation_deg": res["cfg"].get("min_elevation_deg", 10.0),
                 "grid_spacing_deg": res["cfg"].get("grid_spacing_deg", 0.2),
                 "sensor_override_count": _n_ov,
@@ -1488,7 +1500,7 @@ if tab_analysis.open:
                     n_sats_limit=int(sel_n) if sel_n else None,
                     coverage_pct=float(sel_p))
                 sel_res["region_name"] = res["cfg"].get("region_name", "")
-                sel_res["fov"] = res["cfg"].get("fov_half_angle_deg", 30.0)
+                sel_res["fov"] = res["cfg"].get("fov_half_angle_deg", 35.0)
                 sel_res["elev"] = res["cfg"].get("min_elevation_deg", 10.0)
                 sel_res["refine"] = res["cfg"].get("refine_step_seconds", 10)
                 sel_res["sensor_override_count"] = sum(
@@ -1609,7 +1621,7 @@ if tab_analysis.open:
                     ss.export_selection_xlsx(sel_res, out_path,
                                              region_name=sel_res["region_name"],
                                              extra_meta={
-                                                 "视场半角(°)": sel_res.get("fov", 30.0),
+                                                 "视场半角(°)": sel_res.get("fov", 35.0),
                                                  "最小仰角(°)": sel_res.get("elev", 10.0),
                                                  "边界精化(秒)": sel_res.get("refine", 10),
                                                  "逐星参数覆盖条数": sel_res.get(

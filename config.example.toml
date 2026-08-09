@@ -23,7 +23,7 @@ step_minutes = 1
 # ---------- 传感器参数（全局默认） ----------
 # 逐星覆盖：见 data/sensor_params.toml（只按 NORAD 匹配；未设置用这里的默认值；
 #            GUI ⑤页可编辑，CLI 可用 --sensor-params 指定其他表）
-fov_half_angle_deg = 30.0    # 视场半角（度）
+fov_half_angle_deg = 35.0    # 视场半角（度）：=最大离轴/侧摆角口径，商业光学星典型中间值（Q145）
 min_elevation_deg = 10.0      # 最小仰角（度）
 
 # ---------- 网格（仅 polygon 模式用） ----------

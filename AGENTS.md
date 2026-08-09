@@ -36,9 +36,10 @@
   “5 公里圆”简化：足印圆与目标圆有交集就算覆盖，同时输出目标圆被覆盖面积比例）；
   ② 地区多边形（GeoJSON，保留现有网格点模型）。
 - 覆盖圆（足印）：卫星传感器视场圆锥打到地面的圆形区域。默认视场半角 η = 30°（假设值）。
-- **传感器参数接口已开放（Q143）**：全局默认（⑤页输入框 / config.toml：视场半角 30°、最小仰角 10°）
-  之上可叠加逐星覆盖表 data/sensor_params.toml（不入库，只按 NORAD 精确匹配；幅宽 swath_km 选填，
-  填了按该时刻轨道高度换算成等效视场半角、仍走覆盖圆锥，同一行幅宽优先；未设置用全局默认）。
+- **传感器参数接口已开放（Q143/Q146）**：全局默认（⑤页输入框 / config.toml：视场半角 35°、
+  最小仰角 10°）之上可叠加逐星覆盖表 data/sensor_params.toml（不入库，只按 NORAD 精确匹配；
+  幅宽 swath_km 选填，填了按该时刻轨道高度换算成等效视场半角、仍走覆盖圆锥；**幅宽默认不生效**
+  （swath_enabled=false 只记录不参与计算），开启后同一行幅宽优先于视场半角；未设置用全局默认）。
 - 覆盖判定：某时刻至少一个代表点/目标圆圆心在足印内，且仰角 ≥ 最小仰角（默认 10°），即算覆盖；
   同时记录覆盖比例（被覆盖代表点占比）。
 - 时间步长：1 分钟粗筛 + 窗口边界 10 秒精化（已实现）。
@@ -300,3 +301,4 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 - [x] Q143 逐星传感器参数接口（2026-08-09）：data/sensor_params.toml（只按 NORAD 精确匹配，重复编号后写覆盖，无 norad 空行忽略；幅宽→等效视场半角仍走圆锥）；⑤页新增"传感器参数表（可选，逐星覆盖）"折叠区：data_editor 增删改 + 保存写回 TOML + 恢复默认模板（二次确认）+ 从收藏夹批量添加（按 NORAD 逐行，吉林 58 颗验证）；覆盖分析传参，汇总表/Excel 增加每星实际所用参数列（fov_used_deg/min_elev_used_deg/swath_used_km/sensor_source），说明页与选星 Excel 增加"逐星参数覆盖条数"；CLI 加 --sensor-params（默认自动读 data/sensor_params.toml）；新增 validate_sensor_params.py 21/21（读写往返/匹配优先级/重复覆盖/幅宽换算数值/端到端窗口量级/批量提取/AppTest 0 异常），validate_selection 39/39、validate_loader 43/43、validate_china_remote 全过
 - [x] Q144 传感器参数表"从本次卫星来源导入（去重）"（2026-08-09）：⑤页按卫星来源（收藏夹多选）解析并跨夹按 NORAD 去重，支持名称/NORAD 搜索 + 按来源筛选 + "只看未加入"开关 + 多行选择/全选当前筛选 + 参数三选加入表格（跳过已有）+"重新读取来源"；顺带修复虚拟星座标签还原（⭐/（虚拟星座，来自选星））；去重逻辑抽为 sl.collection_sources_dedup；validate_sensor_params 23/23、AppTest 0 异常
 - [x] Q145 幅宽/视场半角同填说明 + 业界参数用法调研（2026-08-09）：确认同填时幅宽优先（换算成等效半角仍走圆锥）；⑤页 caption、导入区提示、保存时同填行警告；调研结论=载荷资料/论文层多用幅宽（km），STK/Orekit 等工具内部用角度（半角），两参数都收并自动换算贴合业界流程；validate_sensor_params 23/23
+- [x] Q146 默认参数改典型值 + 幅宽默认收录不生效（2026-08-09）：最小仰角默认保持 10°（经典标准值，与幅宽正交仍需保留）；视场半角默认 30→35°（=最大离轴/侧摆角口径，商业光学星标准 ±30°/任务常用 30~45° 的中间值）；sensor_params.toml 增加 swath_enabled 全局开关（默认 false，幅宽只记录不参与计算，开启后同行幅宽优先），GUI ⑤页加"幅宽生效"复选框，模板注释加参考幅宽（Landsat 185/Sentinel-1 250/SPOT 60/Pléiades 20/WorldView-3 13.1 km）；CLI 同步读开关；validate_sensor_params 27/27、validate_selection 39/39、validate_loader 43/43、validate_china_remote 全过

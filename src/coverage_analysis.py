@@ -72,7 +72,7 @@ CONFIG = {
     "start_utc": "2026-08-03 00:00:00",          # 分析开始时间（UTC）
     "end_utc": "2026-08-03 08:00:00",            # 分析结束时间（UTC）
     "step_minutes": 1,                            # 粗筛时间步长（分钟）
-    "fov_half_angle_deg": 30.0,                   # 视场半角（度）：传感器最大能"歪着头"看多少
+    "fov_half_angle_deg": 35.0,                   # 视场半角（度）：=最大离轴/侧摆角口径；典型中间值 35°（Q145）
     "min_elevation_deg": 10.0,                    # 最小仰角（度）：太低受大气影响，不算有效覆盖
     "grid_spacing_deg": 0.2,                      # 网格间距（度，约 22 km）
     "max_gantt_rows": 15,                         # 甘特图最多画几颗星（按覆盖时长排名）
@@ -690,11 +690,12 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total, sat_params=None):
     return df_windows, df_summary, df_state, df_gaps
 
 
-def resolve_sat_cfg(norad_id, overrides, global_cfg):
+def resolve_sat_cfg(norad_id, overrides, global_cfg, swath_enabled=False):
     """按 NORAD 精确匹配逐星传感器参数（文件里最后命中者覆盖）。
 
     返回 (sat_cfg, info)：
-      sat_cfg = global_cfg 副本 + 该星覆盖值（幅宽优先于视场半角）；
+      sat_cfg = global_cfg 副本 + 该星覆盖值（幅宽仅在 swath_enabled=True 时优先于视场半角；
+               未开启时幅宽只记录、不参与计算，回退用视场半角）；
       info    = {"norad", "source": "override"/"default",
                  "fov_half_angle_deg", "min_elevation_deg", "swath_km"}，
                 供界面/Excel 展示"这颗星实际用的参数"。
@@ -711,8 +712,9 @@ def resolve_sat_cfg(norad_id, overrides, global_cfg):
                 "swath_km": 0.0}
         return sat_cfg, info
     sat_cfg.pop("swath_km", None)
-    if (hit.get("swath_km") or 0) > 0:
-        sat_cfg["swath_km"] = float(hit["swath_km"])
+    sw = hit.get("swath_km") or 0
+    if swath_enabled and sw > 0:
+        sat_cfg["swath_km"] = float(sw)
         fov_used = None          # 判据用幅宽，角度口径不参与
     elif hit.get("fov_half_angle_deg") is not None:
         sat_cfg["fov_half_angle_deg"] = float(hit["fov_half_angle_deg"])
@@ -748,7 +750,7 @@ def enrich_summary_sensor(df_summary, sat_params_by_name):
 # ==================== 6. 主流程 ====================
 
 def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=None,
-                                sensor_params=None):
+                                sensor_params=None, swath_enabled=None):
     """解析卫星 → 逐颗覆盖分析 → 组装结果（GUI 与测试共用的同一入口）。
 
     2026-08-07 新增：把⑤页"开始覆盖分析"的运行逻辑抽成纯函数，
@@ -767,13 +769,16 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
     sats = sl.records_to_satellites(recs)
     if sensor_params is None:
         sensor_params = sl.load_sensor_params()   # 文件不存在则空表 = 全用全局默认
+    if swath_enabled is None:
+        swath_enabled = sl.load_sensor_swath_enabled()
     all_windows = []
     windows_by_sat = []
     sat_params = []
     for i, sat in enumerate(sats):
         if progress:
             progress((i + 1) / len(sats), f"分析 {sat.name}（{i + 1}/{len(sats)}）")
-        sat_cfg, info = resolve_sat_cfg(sat.norad_id, sensor_params, cfg)
+        sat_cfg, info = resolve_sat_cfg(sat.norad_id, sensor_params, cfg,
+                                        swath_enabled=swath_enabled)
         sat_params.append({"name": sat.name, **info})
         windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg)
         windows_by_sat.append(windows)
@@ -838,6 +843,7 @@ def main():
         cfg["min_elevation_deg"] = args.min_elevation
     # 逐星传感器参数（只按 NORAD 匹配）：显式 --sensor-params 优先，否则自动读默认文件
     import satellite_loader as sl
+    _sp_path = args.sensor_params if args.sensor_params else None
     if args.sensor_params:
         sensor_overrides = sl.load_sensor_params(args.sensor_params)
         print(f"已加载逐星传感器参数表：{args.sensor_params}（{len(sensor_overrides)} 条覆盖）")
@@ -846,6 +852,9 @@ def main():
         if sensor_overrides:
             print(f"已加载逐星传感器参数表：data/sensor_params.toml"
                   f"（{len(sensor_overrides)} 条覆盖）")
+    swath_enabled = sl.load_sensor_swath_enabled(_sp_path)
+    if swath_enabled:
+        print("幅宽生效开关：已开启（同一行幅宽优先于视场半角）。")
     if args.location:
         loc = next((x for x in sl.load_locations() if x["name"] == args.location), None)
         if loc is None:
@@ -894,7 +903,8 @@ def main():
     sat_params = []
     for sat in sats:
         norad = int(sat.model.satnum) if getattr(sat, "model", None) else None
-        sat_cfg, info = resolve_sat_cfg(norad, sensor_overrides, cfg)
+        sat_cfg, info = resolve_sat_cfg(norad, sensor_overrides, cfg,
+                                        swath_enabled=swath_enabled)
         sat_params.append({"name": sat.name, **info})
         windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg)
         all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)

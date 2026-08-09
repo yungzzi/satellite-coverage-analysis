@@ -80,11 +80,15 @@ def main():
               and rows[1]["swath_km"] == 185.0,
               str(rows))
         check("无 norad 空行忽略", all(r["norad"] is not None for r in rows))
+        check("幅宽开关默认关闭（false）", sl.load_sensor_swath_enabled(str(p)) is False)
+        sl.save_sensor_params(rows, str(p), swath_enabled=True)
+        check("保存/读取幅宽开关往返", sl.load_sensor_swath_enabled(str(p)) is True)
 
         p2 = Path(td) / "auto.toml"
         made = sl.ensure_sensor_params(str(p2))
         check("ensure 自动生成模板", made.exists()
-              and sl.load_sensor_params(str(p2)) == [])
+              and sl.load_sensor_params(str(p2)) == []
+              and sl.load_sensor_swath_enabled(str(p2)) is False)
 
     print("== 2. NORAD 匹配 / 优先级 / 重复编号 ==")
     ov = [
@@ -103,13 +107,17 @@ def main():
     check("重复编号后写覆盖（40° 生效）",
           sat_cfg["fov_half_angle_deg"] == 40.0 and info["source"] == "override"
           and info["min_elevation_deg"] == 5.0)
-    sat_cfg, info = cov.resolve_sat_cfg(67890, ov, cfg)
-    check("幅宽覆盖：swath_km 进入 sat_cfg",
+    sat_cfg, info = cov.resolve_sat_cfg(67890, ov, cfg, swath_enabled=True)
+    check("幅宽生效时：swath_km 进入 sat_cfg",
           sat_cfg.get("swath_km") == 30.0 and info["swath_km"] == 30.0)
+    sat_cfg, info = cov.resolve_sat_cfg(67890, ov, cfg)   # 默认开关关闭
+    check("幅宽未开启时：swath 不生效，回退视场半角",
+          sat_cfg.get("swath_km") is None and info["swath_km"] == 0.0
+          and info["fov_half_angle_deg"] == 30.0)
     ov_sw = [{"norad": 777, "fov_half_angle_deg": 45.0, "min_elevation_deg": None,
               "swath_km": 100.0}]
-    sat_cfg, info = cov.resolve_sat_cfg(777, ov_sw, cfg)
-    check("同一行幅宽优先于视场半角",
+    sat_cfg, info = cov.resolve_sat_cfg(777, ov_sw, cfg, swath_enabled=True)
+    check("幅宽生效时同一行幅宽优先于视场半角",
           sat_cfg.get("swath_km") == 100.0 and info["fov_half_angle_deg"] is None)
 
     print("== 3. 幅宽换算数学 ==")
@@ -163,9 +171,15 @@ def main():
 
     ov_sw = [{"norad": first_norad, "fov_half_angle_deg": None,
               "min_elevation_deg": 10.0, "swath_km": 20.0}]
+    res_sw_off = cov.analyze_collection_pipeline(
+        recs, region(), make_cfg(), "2026-08-03 00:00:00",
+        "2026-08-03 08:00:00", sensor_params=ov_sw, swath_enabled=False)
+    check("幅宽开关关闭时：swath 行不生效（结果与默认一致）",
+          res_sw_off is not None and res_sw_off["n_win"] == res0["n_win"],
+          f"{res_sw_off['n_win'] if res_sw_off else 0} vs {res0['n_win']}")
     res_sw = cov.analyze_collection_pipeline(
         recs, region(), make_cfg(), "2026-08-03 00:00:00",
-        "2026-08-03 08:00:00", sensor_params=ov_sw)
+        "2026-08-03 08:00:00", sensor_params=ov_sw, swath_enabled=True)
     check("单星幅宽 20km 覆盖窗口数不增（远小于 30° 口径）",
           res_sw is not None and res_sw["n_win"] <= res0["n_win"],
           f"{res_sw['n_win'] if res_sw else 0} vs {res0['n_win']}")

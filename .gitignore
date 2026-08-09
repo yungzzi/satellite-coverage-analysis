@@ -37,3 +37,6 @@ Thumbs.db
 
 # 用户常用地点（程序维护，不入库）
 data/user_locations.toml
+
+# 逐星传感器参数覆盖表（程序维护，不入库；模板首次运行自动生成）
+data/sensor_params.toml

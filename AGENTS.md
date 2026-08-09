@@ -18,7 +18,8 @@
 - 传感器口径：判据参数 = 视场半角（视线张角，仪器参数、与轨道高度无关，默认 10° 假设值）；
   幅宽为逐星可选口径（在传感器参数表按星填、且"幅宽生效"开启时，按该星轨道高度换算），
   没填幅宽的星一律按角度计算；不给所有卫星一个统一全局幅宽默认值（不同高度换算差异大、
-  GEO 凝视成像无条带概念）。
+  GEO 凝视成像无条带概念）；高轨/静止星（周期 ≥ 700 分钟，由 TLE 平运动判断）即使填了幅宽
+  也会自动回退视场半角并提示（Q152）。
 
 ## 3. 用户背景与沟通约定（重要，务必遵守）
 - 用户非航空航天专业；轨道力学仅了解二体问题和星下点基本概念。
@@ -314,3 +315,4 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 - [x] Q145 幅宽/视场半角同填说明 + 业界参数用法调研（2026-08-09）：确认同填时幅宽优先（换算成等效半角仍走圆锥）；⑤页 caption、导入区提示、保存时同填行警告；调研结论=载荷资料/论文层多用幅宽（km），STK/Orekit 等工具内部用角度（半角），两参数都收并自动换算贴合业界流程；validate_sensor_params 23/23
 - [x] Q146 默认参数改典型值 + 幅宽默认收录不生效（2026-08-09）：最小仰角默认保持 10°（经典标准值，与幅宽正交仍需保留）；视场半角默认 30→35°（=最大离轴/侧摆角口径，商业光学星标准 ±30°/任务常用 30~45° 的中间值）；sensor_params.toml 增加 swath_enabled 全局开关（默认 false，幅宽只记录不参与计算，开启后同行幅宽优先），GUI ⑤页加"幅宽生效"复选框，模板注释加参考幅宽（Landsat 185/Sentinel-1 250/SPOT 60/Pléiades 20/WorldView-3 13.1 km）；CLI 同步读开关；validate_sensor_params 27/27、validate_selection 39/39、validate_loader 43/43、validate_china_remote 全过
 - [x] Q148 视场半角语义修正落地 + 全局幅宽框（2026-08-09）：视场半角=视线张角（天底圆锥半角，假设值 10°，取代 Q146 的 35° 侧摆平均理由）；⑤页右上角加"幅宽(km)（普通卫星）"输入（默认 60）+ "幅宽生效"复选框（统一管全局幅宽与逐星行幅宽，写回 swath_enabled）；优先级=逐星行 > 全局幅宽（开启时）> 全局视场半角；config.toml 加 swath_km_global；validate_sensor_params 34/34、validate_selection 39/39、validate_loader 43/43、validate_china_remote 全过
+- [x] Q152 幅宽改逐星 + GEO/高轨判断与自动回退（2026-08-09）：删除⑤页全局幅宽输入框与 swath_km_global；"幅宽（逐星）生效"开关只作用于参数表逐星幅宽，未填幅宽的星按默认视场半角；新增 cov.orbit_tag（TLE 平运动算周期：≥1300min GEO/静止、≥700min 高轨、其余低轨）；GEO/高轨星填幅宽自动回退视场半角并写入 sensor_warnings（GUI 警告/CLI 打印）；validate_sensor_params 33/33（含 orbit_tag 判定、GEO 回退端到端）、validate_selection 39/39、validate_loader 43/43、validate_china_remote 全过

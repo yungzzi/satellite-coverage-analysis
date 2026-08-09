@@ -201,7 +201,8 @@ def greedy_select(sat_cov, k_min, mrt_minutes, step_minutes):
 
 # ==================== 3. 算法二：整数规划（精确最优） ====================
 
-def ilp_select(sat_cov, k_min, mrt_minutes, step_minutes, time_limit=180, exclude=None):
+def ilp_select(sat_cov, k_min, mrt_minutes, step_minutes, time_limit=180, exclude=None,
+               n_limit=None):
     """整数规划精确选星（依赖 pulp + CBC）。
 
     数学形式（白话版见文件头注释）：
@@ -229,6 +230,8 @@ def ilp_select(sat_cov, k_min, mrt_minutes, step_minutes, time_limit=180, exclud
     x = [pulp.LpVariable(f"x{j}", 0, 1, cat=pulp.LpBinary) for j in range(n_sat)]
     y = [pulp.LpVariable(f"y{i}", 0, 1, cat=pulp.LpBinary) for i in range(m)]
     prob += pulp.lpSum(x)
+    if n_limit is not None:
+        prob += pulp.lpSum(x) <= max(0, int(n_limit))
     M = n_sat
     for _ex in (exclude or []):
         prob += pulp.lpSum(x[j] for j in _ex) <= len(_ex) - 1
@@ -247,6 +250,130 @@ def ilp_select(sat_cov, k_min, mrt_minutes, step_minutes, time_limit=180, exclud
         note = "最优（已证明）" if status == "Optimal" else "到达时间上限，给出当前最优可行解"
         return selected, counts, status, note
     return [], np.zeros(m, dtype=int), status, f"求解状态：{status}（可能需求本身无法满足）"
+
+
+def ilp_select_coverage(sat_cov, k_min, coverage_pct, step_minutes, time_limit=180,
+                        exclude=None):
+    """PSCLP 整数规划精确版：最少颗数使覆盖率 ≥ coverage_pct%。
+
+    变量 x_j ∈{0,1} 是否选星；y_i ∈{0,1} 时间片 i 是否达标（覆盖数 >= K）；
+    约束：y=1 → 覆盖数 ≥ K；覆盖数 ≥ K → 强制 y=1；达标片数 ≥ ceil(P% × m)；
+    目标：min Σx_j。返回 (selected, counts, status, note)。
+    """
+    try:
+        import pulp
+    except ImportError:
+        return None, None, "unsupported", "未安装 pulp（pip install pulp），自动退回贪心。"
+    n_sat = len(sat_cov)
+    m = len(sat_cov[0]) if n_sat else 0
+    if n_sat > 1500:
+        return None, None, "skipped", "卫星数过多（>1500），整数规划太慢，自动退回贪心。"
+    if m == 0:
+        return [], np.zeros(0, dtype=int), "Optimal", ""
+    target = max(1, int(np.ceil(m * float(coverage_pct) / 100.0)))
+    prob = pulp.LpProblem("sat_psclp", pulp.LpMinimize)
+    x = [pulp.LpVariable(f"x{j}", 0, 1, cat=pulp.LpBinary) for j in range(n_sat)]
+    y = [pulp.LpVariable(f"y{i}", 0, 1, cat=pulp.LpBinary) for i in range(m)]
+    prob += pulp.lpSum(x)
+    for _ex in (exclude or []):
+        prob += pulp.lpSum(x[j] for j in _ex) <= len(_ex) - 1
+    M = n_sat
+    for i in range(m):
+        cov_sum = pulp.lpSum(x[j] for j in range(n_sat) if sat_cov[j][i])
+        prob += cov_sum - k_min * y[i] >= 0
+        prob += cov_sum - M * y[i] <= k_min - 1
+    prob += pulp.lpSum(y) >= target
+    prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit))
+    status = pulp.LpStatus[prob.status]
+    obj = pulp.value(prob.objective)
+    if status in ("Optimal", "Not Solved") and obj is not None:
+        selected = [j for j in range(n_sat) if pulp.value(x[j]) > 0.5]
+        counts = _counts_of(sat_cov, selected)
+        note = "最优（已证明）" if status == "Optimal" else "到达时间上限，给出当前最优可行解"
+        return selected, counts, status, note
+    return [], np.zeros(m, dtype=int), status, f"求解状态：{status}（可能覆盖率要求本身无法满足）"
+
+
+def ilp_select_max_coverage(sat_cov, k_min, n_limit, time_limit=120):
+    """给定 N 颗最大化组合覆盖率的整数规划精确版。
+
+    约束：总选星 ≤ N；y_i=1 仅当覆盖数 ≥ K（y_i ≤ Σx_j / K，且覆盖数 ≥ K 时强制 y=1）；
+    目标：max Σy_i。返回 (selected, counts, status, note)。
+    """
+    try:
+        import pulp
+    except ImportError:
+        return None, None, "unsupported", "未安装 pulp（pip install pulp），自动退回贪心。"
+    n_sat = len(sat_cov)
+    m = len(sat_cov[0]) if n_sat else 0
+    n_limit = max(0, min(int(n_limit), n_sat))
+    if n_sat > 1500:
+        return None, None, "skipped", "卫星数过多（>1500），整数规划太慢，自动退回贪心。"
+    if m == 0 or n_limit == 0:
+        return [], np.zeros(m, dtype=int), "Optimal", ""
+    prob = pulp.LpProblem("sat_maxcov", pulp.LpMaximize)
+    x = [pulp.LpVariable(f"x{j}", 0, 1, cat=pulp.LpBinary) for j in range(n_sat)]
+    y = [pulp.LpVariable(f"y{i}", 0, 1, cat=pulp.LpBinary) for i in range(m)]
+    prob += pulp.lpSum(y)
+    prob += pulp.lpSum(x) <= n_limit
+    M = n_sat
+    for i in range(m):
+        cov_sum = pulp.lpSum(x[j] for j in range(n_sat) if sat_cov[j][i])
+        prob += cov_sum >= k_min * y[i]
+        prob += cov_sum - M * y[i] <= k_min - 1
+    prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit))
+    status = pulp.LpStatus[prob.status]
+    if status in ("Optimal", "Not Solved"):
+        selected = [j for j in range(n_sat) if pulp.value(x[j]) > 0.5]
+        counts = _counts_of(sat_cov, selected)
+        note = "最优（已证明）" if status == "Optimal" else "到达时间上限，给出当前最优可行解"
+        return selected, counts, status, note
+    return [], np.zeros(m, dtype=int), status, f"求解状态：{status}"
+
+
+def ilp_select_min_max_gap(sat_cov, k_min, n_limit, step_minutes, time_limit=60):
+    """给定 N 颗，把最长空窗压到最小的整数规划（对空窗上限 T 二分 + 可行性 ILP）。
+
+    返回 (selected, counts, status, note, best_mrt_minutes)。
+    """
+    n_sat = len(sat_cov)
+    m = len(sat_cov[0]) if n_sat else 0
+    n_limit = max(0, min(int(n_limit), n_sat))
+    if m == 0 or n_limit == 0:
+        return [], np.zeros(m, dtype=int), "Optimal", "", 0.0
+    if n_sat > 1500:
+        return None, None, "skipped", "卫星数过多（>1500），整数规划太慢，自动退回贪心。", None
+    try:
+        import pulp
+    except ImportError:
+        return None, None, "unsupported", "未安装 pulp（pip install pulp），自动退回贪心。", None
+    lo, hi = 0, m
+    best = None
+    while lo < hi:
+        mid = (lo + hi) // 2
+        sel, cnts, status, _note = ilp_select(sat_cov, k_min, mid, step_minutes,
+                                              time_limit=time_limit, n_limit=n_limit)
+        if sel is not None and status in ("Optimal", "Not Solved") and sel:
+            best = (sel, cnts, mid)
+            hi = mid
+        else:
+            lo = mid + 1
+    if best is not None:
+        sel, cnts, T = best
+        return sel, cnts, "Optimal", "最优（已证明）", float(T * step_minutes)
+    g_sel, g_cnts = select_min_gap(sat_cov, n_limit, k_min, step_minutes, None, None,
+                                   mode="max")
+    cnts = np.asarray(g_cnts, dtype=int)
+    mx = 0
+    run = 0
+    for flag in (cnts >= k_min):
+        if flag:
+            run = 0
+        else:
+            run += 1
+            mx = max(mx, run)
+    return g_sel, g_cnts, "Infeasible", "整数规划未找到可行解（最长空窗无法再压低），用贪心结果。", \
+        float(mx * step_minutes)
 
 
 # ==================== 4. 汇总与报告 ====================
@@ -289,16 +416,18 @@ def greedy_select_coverage(sat_cov, k_min, coverage_pct, step_minutes):
             if j in selected_set:
                 continue
             ids = indices[j]
-            gain = int((counts[ids] == k_min - 1).sum())
+            # 收益 = 各时间片向 K 靠近的有效覆盖单位增量
+            # （K=1 时等价于"新增覆盖片数"；K>=2 时保证第一颗星也能入选）
+            gain = int((np.minimum(counts[ids] + 1, k_min)
+                        - np.minimum(counts[ids], k_min)).sum())
             if gain > best_gain:
                 best_gain, best_j = gain, j
         if best_j < 0 or best_gain <= 0:
             break
         selected.append(best_j)
         selected_set.add(best_j)
-        ids = indices[best_j]
-        counts[ids] += 1
-        covered_total += best_gain
+        counts[indices[best_j]] += 1
+        covered_total = int((counts >= k_min).sum())
     return selected, counts
 
 
@@ -326,7 +455,8 @@ def select_max_coverage(sat_cov, n_limit, k_min, step_minutes, t0, t1):
             if j in selected_set:
                 continue
             ids = indices[j]
-            gain = int((counts[ids] == k_min - 1).sum())
+            gain = int((np.minimum(counts[ids] + 1, k_min)
+                        - np.minimum(counts[ids], k_min)).sum())
             if gain > best_gain:
                 best_gain, best_j = gain, j
                 if best_gain == m - covered_total:
@@ -335,9 +465,8 @@ def select_max_coverage(sat_cov, n_limit, k_min, step_minutes, t0, t1):
             break
         selected.append(best_j)
         selected_set.add(best_j)
-        ids = indices[best_j]
-        counts[ids] += 1
-        covered_total += best_gain
+        counts[indices[best_j]] += 1
+        covered_total = int((counts >= k_min).sum())
     # 已达 100% 覆盖但名额未满时，按单星覆盖片数降序补足（满足“给定 N 颗”的冗余需求）
     if len(selected) < n_limit:
         rest = [j for j in usable if j not in selected_set]
@@ -507,6 +636,52 @@ def enumerate_optimal_solutions(sat_cov, sats, k_min, mrt_minutes, step_minutes,
     return solutions, note
 
 
+def enumerate_optimal_coverage_solutions(sat_cov, sats, k_min, coverage_pct, step_minutes,
+                                         max_solutions=10, time_limit=60):
+    """PSCLP 全部最优方案：最少颗数且覆盖率达标的所有组合（no-good cut 迭代，最多 max_solutions 个）。
+
+    返回 (solutions, note)：solutions 元素含 sat_names / n / coverage_pct。
+    """
+    n_sat = len(sat_cov)
+    m = len(sat_cov[0]) if n_sat else 0
+    if not sats:
+        sats = [type("S", (), {"name": f"SAT-{j}"})() for j in range(n_sat)]
+    _t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    _t1 = _t0 + timedelta(minutes=max(1, m * max(1, step_minutes)))
+    try:
+        import pulp
+    except ImportError:
+        g_sel, _ = greedy_select_coverage(sat_cov, k_min, coverage_pct, step_minutes)
+        return [_cov_sol(sat_cov, sats, k_min, g_sel, step_minutes, _t0, _t1)], \
+            "未安装 pulp，仅给出一个贪心方案"
+    if n_sat > 1500:
+        g_sel, _ = greedy_select_coverage(sat_cov, k_min, coverage_pct, step_minutes)
+        return [_cov_sol(sat_cov, sats, k_min, g_sel, step_minutes, _t0, _t1)], \
+            "卫星数>1500，最优枚举成本过高，仅给出一个贪心方案"
+    banned = []
+    solutions = []
+    for _ in range(max_solutions):
+        sel, _cnt, status, _n2 = ilp_select_coverage(
+            sat_cov, k_min, coverage_pct, step_minutes,
+            time_limit=time_limit, exclude=banned)
+        if sel is None or status != "Optimal" or not sel:
+            break
+        if solutions and len(sel) != solutions[0]["n"]:
+            break
+        solutions.append(_cov_sol(sat_cov, sats, k_min, sel, step_minutes, _t0, _t1))
+        banned.append(sel)
+    note = (f"整数规划迭代收集到 {len(solutions)} 个最优方案"
+            + ("（可能还有更多）" if len(solutions) >= max_solutions else ""))
+    return solutions, note
+
+
+def _cov_sol(sat_cov, sats, k_min, sel, step_minutes, t0, t1):
+    """PSCLP 枚举用：把一组选中星转成方案字典。"""
+    ev = evaluate_selection(sat_cov, sel, k_min, 0.0, step_minutes, t0, t1)
+    return {"sat_names": [sats[j].name for j in sel],
+            "n": len(sel), "coverage_pct": round(ev["coverage_pct"], 2)}
+
+
 def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
                   mrt_minutes=30, min_event_minutes=0.0, method="both",
                   time_limit=180, req_mode="continuous", objective="min_sats",
@@ -577,23 +752,55 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     if objective in ("max_coverage", "min_max_gap", "min_avg_gap"):
         n_lim = int(n_sats_limit) if n_sats_limit else min(10, n_sat)
         if objective == "max_coverage":
-            sel_mc, counts_mc = select_max_coverage(sat_cov, n_lim, k_min, step_minutes, t0, t1)
-            algo_note = (f"目标：给定 {n_lim} 颗最大化组合覆盖率"
-                         f"（贪心最大边际收益；覆盖率=被覆盖时间片占比）")
+            g_sel_mc, g_counts_mc = select_max_coverage(sat_cov, n_lim, k_min,
+                                                        step_minutes, t0, t1)
+            base_note = f"目标：给定 {n_lim} 颗最大化组合覆盖率（覆盖率=被覆盖时间片占比）"
         elif objective == "min_max_gap":
-            sel_mc, counts_mc = select_min_gap(sat_cov, n_lim, k_min, step_minutes, t0, t1, mode="max")
-            algo_note = f"目标：给定 {n_lim} 颗最小化最大空窗（MMRT，贪心）"
+            g_sel_mc, g_counts_mc = select_min_gap(sat_cov, n_lim, k_min,
+                                                   step_minutes, t0, t1, mode="max")
+            base_note = f"目标：给定 {n_lim} 颗最小化最大空窗（MMRT）"
         else:
-            sel_mc, counts_mc = select_min_gap(sat_cov, n_lim, k_min, step_minutes, t0, t1, mode="avg")
-            algo_note = f"目标：给定 {n_lim} 颗最小化平均空窗（MART，贪心）"
-        res["greedy"] = None
+            g_sel_mc, g_counts_mc = select_min_gap(sat_cov, n_lim, k_min,
+                                                   step_minutes, t0, t1, mode="avg")
+            base_note = f"目标：给定 {n_lim} 颗最小化平均空窗（MART）"
+        sel_mc, counts_mc = g_sel_mc, g_counts_mc
+        algo = "greedy-budget"
+        algo_note = base_note + "（贪心）"
+        res["greedy"] = {
+            "selected": g_sel_mc,
+            "eval": evaluate_selection(sat_cov, g_sel_mc, k_min, eff_mrt,
+                                       step_minutes, t0, t1,
+                                       coverage_threshold_pct=cov_thr),
+            "note": "",
+        }
         res["ilp"] = None
+        if method in ("both", "ilp"):
+            i_sel, i_cnt, i_st, i_note, i_gap = None, None, None, "", None
+            if objective == "max_coverage":
+                i_sel, i_cnt, i_st, i_note = ilp_select_max_coverage(
+                    sat_cov, k_min, n_lim, time_limit=time_limit)
+            elif objective == "min_max_gap":
+                i_sel, i_cnt, i_st, i_note, i_gap = ilp_select_min_max_gap(
+                    sat_cov, k_min, n_lim, step_minutes, time_limit=60)
+            if i_sel is not None and i_st in ("Optimal", "Not Solved") and i_sel:
+                sel_mc, counts_mc = i_sel, i_cnt
+                algo = "ilp"
+                algo_note = i_note + (f"（最长空窗 {i_gap:.0f} 分钟）" if i_gap is not None else "")
+                res["ilp"] = {
+                    "selected": i_sel,
+                    "eval": evaluate_selection(sat_cov, i_sel, k_min, eff_mrt,
+                                               step_minutes, t0, t1,
+                                               coverage_threshold_pct=cov_thr),
+                    "status": i_st, "note": i_note,
+                }
+            elif objective == "min_avg_gap":
+                algo_note = base_note + "（平均空窗为分式目标，当前用贪心，无精确 ILP）"
         res["selected"] = sel_mc
         res["selected_names"] = [sats[j].name for j in sel_mc]
         res["eval"] = evaluate_selection(sat_cov, sel_mc, k_min, eff_mrt,
                                          step_minutes, t0, t1,
                                          coverage_threshold_pct=cov_thr)
-        res["algo"] = "greedy-budget"
+        res["algo"] = algo
         res["algo_note"] = algo_note
         res["detail_rows"] = _sat_detail(sats, windows_by_sat, sel_mc,
                                          step_minutes, period_minutes)
@@ -630,7 +837,18 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         "note": "",
     }
     ilp = None
-    if method in ("both", "ilp") and req_mode != "coverage_pct":
+    if method in ("both", "ilp") and req_mode == "coverage_pct":
+        sel_i, counts_i, status_i, note_i = ilp_select_coverage(
+            sat_cov, k_min, float(coverage_pct), step_minutes, time_limit=time_limit)
+        if sel_i is not None:
+            ilp = {
+                "selected": sel_i,
+                "eval": evaluate_selection(sat_cov, sel_i, k_min, eff_mrt,
+                                          step_minutes, t0, t1,
+                                          coverage_threshold_pct=cov_thr),
+                "status": status_i, "note": note_i,
+            }
+    elif method in ("both", "ilp"):
         sel_i, counts_i, status_i, note_i = ilp_select(
             sat_cov, k_min, eff_mrt, step_minutes, time_limit=time_limit)
         if sel_i is not None:
@@ -644,11 +862,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     res["ilp"] = ilp
 
     final = None
-    if req_mode == "coverage_pct":
-        final = res["greedy"]
-        final["algo"] = "greedy"
-        final["note"] = "覆盖率阈值任务（PSCLP）当前用贪心（最大边际收益）；整数规划版本待实现。"
-    elif ilp is not None and ilp["eval"]["satisfied"]:
+    if ilp is not None and ilp["eval"]["satisfied"]:
         final = ilp
         final["algo"] = "ilp"
     else:
@@ -656,6 +870,8 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         final["algo"] = "greedy"
         if ilp is not None and ilp["status"] not in ("Optimal", "Not Solved"):
             final["note"] = "整数规划不可行/超时，已用贪心结果。"
+        elif ilp is None and method in ("both", "ilp") and n_sat > 1500:
+            final["note"] = "卫星数过多（>1500），整数规划自动跳过，用贪心结果。"
     res["selected"] = final["selected"]
     res["selected_names"] = [sats[j].name for j in final["selected"]]
     res["eval"] = final["eval"]
@@ -683,8 +899,11 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
 
     # 全部最优方案（仅最少颗数目标；无全程星时用 ILP no-good cut 收集）
     if req_mode == "coverage_pct":
-        res["optimal_solutions"] = []
-        res["optimal_note"] = "覆盖率阈值任务当前不做最优方案枚举。"
+        _opt_sols, _opt_note = enumerate_optimal_coverage_solutions(
+            sat_cov, sats, k_min, float(coverage_pct), step_minutes,
+            max_solutions=max_solutions, time_limit=60)
+        res["optimal_solutions"] = _opt_sols
+        res["optimal_note"] = _opt_note
     else:
         _opt_sols, _opt_note = enumerate_optimal_solutions(
             sat_cov, sats, k_min, eff_mrt, step_minutes,
@@ -867,12 +1086,18 @@ def export_selection_xlsx(res, path, region_name="", extra_meta=None):
         "时间步长(分钟)": res["step_minutes"],
         "需求模式": req_label,
         "目标模式": obj_label,
-        "需求-K(最少同时可见)": res["k_min"],
+        "需求-K(最少同时可见)": (res["k_min"]
+                                  if res["req_mode"] in ("continuous", "coverage_pct")
+                                  else "不适用（仅覆盖率/连续任务使用）"),
         "需求-MRT(最大重访间隔,分)": ("0（连续覆盖）" if res["req_mode"] == "continuous"
                                        else ("不适用" if res["req_mode"] in ("any", "coverage_pct")
                                              else res["mrt_minutes"])),
         "单次最短窗口(分)": res["min_event_minutes"],
         "算法": res["algo"] + (f"（{res['algo_note']}）" if res.get("algo_note") else ""),
+        "算法说明": ("贪心：每步选当前收益最大的星，速度快、可处理几千颗，但不保证全局最优；"
+                   "整数规划（ILP）：把选星写成 0/1 优化问题由求解器证明最优"
+                   "（卫星数 ≤1500 时使用，超出自动退回贪心）。"
+                   "任务⑤（平均空窗）为分式目标，当前用贪心。"),
         "卫星池规模": res["n_sats_total"],
         "选中卫星数": len(res["selected"]),
         "组合覆盖率(%)": round(res["eval"]["coverage_pct"], 2),

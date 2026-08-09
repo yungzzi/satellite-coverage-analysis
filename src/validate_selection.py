@@ -260,6 +260,62 @@ def main():
               not rp2["eval"]["satisfied"]
               and "PSCLP" in rp2["summary"])
 
+    print("== 8. 新算法回归：PSCLP-ILP / 任务③④ ILP / K>=2 贪心修复 ==")
+    try:
+        cols8 = sl.load_builtin_collections()
+        col8 = next(c for c in cols8 if "中国遥感全量" in c["name"])
+        recs8 = sl.resolve_collection(col8)
+        cfg8 = make_cfg("杭州5km")
+        region8 = {"mode": "circle", "lat": 30.25, "lon": 120.15, "radius_km": 5.0}
+        res8 = cov.analyze_collection_pipeline(recs8, region8, cfg8,
+                                               "2026-08-03 00:00:00",
+                                               "2026-08-03 08:00:00")
+        r_a = ss.run_selection(res8["sats"], res8["windows_by_sat"],
+                               res8["t0"], res8["t1"],
+                               step_minutes=1, k_min=2, mrt_minutes=1.0,
+                               method="both", req_mode="coverage_pct", coverage_pct=100.0)
+        check("PSCLP K=2 P=100 贪心修复（≥2 颗且满足）",
+              r_a["greedy"] is not None and len(r_a["greedy"]["selected"]) >= 2
+              and r_a["greedy"]["eval"]["satisfied"],
+              f"贪心 {len(r_a['greedy']['selected']) if r_a['greedy'] else 0} 颗")
+        check("PSCLP K=2 P=100 ILP 精确最优",
+              r_a["ilp"] is not None and r_a["ilp"]["status"] == "Optimal"
+              and len(r_a["ilp"]["selected"]) == 2 and r_a["ilp"]["eval"]["satisfied"],
+              f"ILP {len(r_a['ilp']['selected']) if r_a['ilp'] else 0} 颗")
+        check("PSCLP K=2 P=100 采用 ILP 结果",
+              r_a["algo"] == "ilp" and r_a["eval"]["satisfied"])
+        check("PSCLP K=2 P=100 最优方案枚举",
+              len(r_a.get("optimal_solutions") or []) >= 2,
+              f"{len(r_a.get('optimal_solutions') or [])} 种")
+        r_c = ss.run_selection(res8["sats"], res8["windows_by_sat"],
+                               res8["t0"], res8["t1"],
+                               step_minutes=1, k_min=1, mrt_minutes=1.0,
+                               method="both", req_mode="any", objective="max_coverage",
+                               n_sats_limit=5)
+        check("任务③ ILP 精确最优（覆盖率100%）",
+              r_c["ilp"] is not None and r_c["ilp"]["status"] == "Optimal"
+              and r_c["eval"]["coverage_pct"] >= 99.9,
+              f"algo={r_c['algo']} cov={r_c['eval']['coverage_pct']:.1f}%")
+        r_d = ss.run_selection(res8["sats"], res8["windows_by_sat"],
+                               res8["t0"], res8["t1"],
+                               step_minutes=1, k_min=1, mrt_minutes=1.0,
+                               method="both", req_mode="any", objective="min_max_gap",
+                               n_sats_limit=3)
+        check("任务④ ILP 精确最优（最长空窗0）",
+              r_d["ilp"] is not None and r_d["ilp"]["status"] == "Optimal"
+              and r_d["eval"]["mrt_actual_minutes"] <= 1.0,
+              f"algo={r_d['algo']} 空窗={r_d['eval']['mrt_actual_minutes']:.0f}分")
+        r_e = ss.run_selection(res8["sats"], res8["windows_by_sat"],
+                               res8["t0"], res8["t1"],
+                               step_minutes=1, k_min=1, mrt_minutes=1.0,
+                               method="both", req_mode="any", objective="min_avg_gap",
+                               n_sats_limit=3)
+        check("任务⑤ 保持贪心并注明分式目标",
+              r_e["algo"] == "greedy-budget" and "分式目标" in r_e["algo_note"],
+              r_e["algo_note"])
+    except Exception as _ex:
+        check("新算法回归（中国遥感全量）", False, str(_ex))
+
     print("========================================")
     print(f"结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

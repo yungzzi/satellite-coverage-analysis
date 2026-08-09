@@ -1225,7 +1225,12 @@ if tab_analysis.open:
                 "⑤ 给定 N 颗 · 平均空窗最小（MART）":
                     "问：只有 N 颗星的名额，平均空窗能压到多短？",
             }[sel_task])
-            sel_k = t2c.number_input("K（最少同时可见）", value=1, min_value=1, step=1, key="sel_k")
+            if sel_task.startswith("①"):
+                sel_k = t2c.number_input("K（最少同时可见）", value=1, min_value=1, step=1,
+                                         key="sel_k",
+                                         help="仅覆盖率/连续任务使用：要求任意时刻同时 ≥K 颗覆盖")
+            else:
+                sel_k = 1
             if sel_task.startswith("②"):
                 sel_preset = st.selectbox(
                     "重访预设", ["标准（MRT=180 分钟）", "宽松（MRT=360 分钟）",
@@ -1251,6 +1256,9 @@ if tab_analysis.open:
                                          step=1.0, key="sel_min_ev")
             sel_method = st.selectbox("算法", ["两者对照（推荐）", "贪心（快）", "整数规划（精确）"],
                                       key="sel_method")
+            st.caption("算法说明：贪心=每步选当前收益最大的星，快、能处理几千颗，但不保证全局最优；"
+                       "整数规划（ILP）=把选星写成 0/1 优化问题，可证明最优"
+                       "（卫星数 ≤1500 时使用，超出自动退回贪心；任务⑤平均空窗为分式目标，用贪心）。")
             if st.button("开始选星", key="btn_sel_run", type="primary"):
                 task_map = {
                     "① 覆盖率 ≥P% · 最少颗数（P=100 即连续覆盖，推荐）": ("coverage_pct", "min_sats"),
@@ -1309,7 +1317,7 @@ if tab_analysis.open:
                         st.info("该组合已用最少卫星把空窗压到该池子能做到的最小（尽力而为）。")
                     elif sel_res["req_mode"] == "revisit":
                         st.warning("需求无法完全满足：即使所有卫星一起上仍有超长空窗（见空窗表）。"
-                                   "建议放宽 MRT、减小 K，或更换/延长时段。")
+                                   "建议放宽 MRT、增加卫星，或更换/延长时段。")
                         st.info("该组合已用最少卫星把空窗压到该池子能做到的最小（尽力而为）。")
                     elif sel_res["req_mode"] == "coverage_pct":
                         _full_cov = sel_res.get("full", {}).get("coverage_pct", 0.0)
@@ -1384,9 +1392,11 @@ if tab_analysis.open:
                     key="sel_vc_name")
                 if st.button("保存为收藏夹（虚拟星座）", key="btn_sel_save"):
                     ids = [sel_res["sats"][j].norad_id for j in sel_res["selected"]]
+                    _kpart = (f"K={sel_res['k_min']} "
+                              if sel_res["req_mode"] in ("continuous", "coverage_pct") else "")
                     desc = (f"选星虚拟星座：{sel_res.get('region_name', '')} "
                             f"{sel_res['t0']:%Y-%m-%d %H:%M}~{sel_res['t1']:%H:%M} UTC "
-                            f"K={sel_res['k_min']} MRT={sel_res['mrt_minutes']:.0f} 分 "
+                            f"{_kpart}MRT={sel_res['mrt_minutes']:.0f} 分 "
                             f"（{sel_res['algo']}，{len(ids)} 颗）")
                     if sl.create_collection(vc_name, description=desc,
                                             kind="virtual_constellation"):

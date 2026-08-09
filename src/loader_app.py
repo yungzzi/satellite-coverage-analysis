@@ -58,6 +58,29 @@ def show_flash():
             st.warning(f["msg"])
 
 
+def _upload_file_to_new_collection(f_up, kind="constellation"):
+    """把上传的 TLE/编号文件复制到 data/user_files/，并新建一个 file 类型收藏夹。
+
+    返回 (收藏夹名, 星数)；同名夹已存在时返回 (None, 星数)。
+    """
+    sl._ensure_dirs()
+    dst = sl.USER_FILES_DIR / f_up.name
+    if dst.exists():
+        dst = sl.USER_FILES_DIR / f"{Path(f_up.name).stem}_{int(time.time())}{Path(f_up.name).suffix}"
+    dst.write_bytes(f_up.getvalue())
+    col_name = f"上传TLE-{Path(f_up.name).stem}-{datetime.now():%H%M%S}"
+    try:
+        _n = len(sl.parse_tle_records(dst.read_text(encoding="ascii", errors="replace")))
+    except Exception:
+        _n = "?"
+    if sl.find_collection(sl.load_user_collections(), col_name) is None:
+        _snapshot()
+        sl.create_collection(col_name, description=f"上传的 TLE 文件：{f_up.name}", kind=kind)
+        sl.add_entry(col_name, "file", str(dst))
+        return col_name, _n
+    return None, _n
+
+
 # ---------- 撤销 / 重做（收藏夹文件快照栈，仅本次会话内有效） ----------
 
 def _catalog_text() -> str:
@@ -619,8 +642,10 @@ if tab_collections.open:
                     try:
                         rows_meta = sl.resolve_collection_with_meta(c, progress=cb, offline=True)
                     except Exception as ex:
+                        bar.empty()
                         st.error(f"解析失败：{ex}")
                     else:
+                        bar.progress(1.0, text="解析完成")
                         if not rows_meta:
                             st.warning("未能获取卫星数据。可能原因：①编号不在在轨全集"
                                        "（退役/保密/新发射）——离线时跳过联网；"
@@ -708,7 +733,8 @@ if tab_collections.open:
                      "④页'下载与自检'自动下载；也可从 CelesTrak（celestrak.org）、"
                      "spacemapper.cn、Space-Track（需注册）获取文件后手动导入。"
                      "建议用分析日期前 2 天内的 TLE。")
-            if f_up is not None and st.button("导入并加入当前收藏夹", key="btn_import"):
+            i1, i2 = st.columns(2)
+            if f_up is not None and i1.button("导入并加入当前收藏夹", key="btn_import"):
                 if c.get("builtin"):
                     st.error("内置夹只读，请新建收藏夹后再导入。")
                 else:
@@ -723,6 +749,17 @@ if tab_collections.open:
                           else "已有相同条目，未重复添加。",
                           kind="success" if ok else "warning")
                     st.rerun()
+            if f_up is not None and i2.button("上传并新建收藏夹（自动建夹）", key="btn_import_new"):
+                col_name, _n = _upload_file_to_new_collection(f_up)
+                if col_name:
+                    _all = sl.load_all_collections()
+                    _idx = next((i for i, x in enumerate(_all)
+                                 if not x.get("builtin") and x["name"] == col_name), 0)
+                    st.session_state["col_sel"] = _idx
+                    flash(f"已新建收藏夹「{col_name}」（{_n} 颗，文件已复制到 data/user_files/）")
+                else:
+                    flash(f"同名收藏夹已存在：{col_name}，请稍后再试。", kind="warning")
+                st.rerun()
 
 
 # ==================== ④ 下载与自检 ====================
@@ -860,21 +897,8 @@ if tab_constellations.open:
         help="适合用 CelesTrak / SpaceMapper / Space-Track 下载的整组 TLE 文件；"
              "文件内容原样保留（含不在在轨全集中的星）。")
     if up3 is not None and st.button("上传并自动建夹", key="btn_cons_upload"):
-        sl._ensure_dirs()
-        dst = sl.USER_FILES_DIR / up3.name
-        if dst.exists():
-            dst = sl.USER_FILES_DIR / f"{Path(up3.name).stem}_{int(time.time())}{Path(up3.name).suffix}"
-        dst.write_bytes(up3.getvalue())
-        col_name = f"上传TLE-{Path(up3.name).stem}-{datetime.now():%H%M%S}"
-        try:
-            _n = len(sl.parse_tle_records(dst.read_text(encoding="ascii", errors="replace")))
-        except Exception:
-            _n = "?"
-        if sl.find_collection(sl.load_user_collections(), col_name) is None:
-            _snapshot()
-            sl.create_collection(col_name, description=f"上传的 TLE 文件：{up3.name}",
-                                 kind="constellation")
-            sl.add_entry(col_name, "file", str(dst))
+        col_name, _n = _upload_file_to_new_collection(up3)
+        if col_name:
             flash(f"已创建 📡 星座收藏夹「{col_name}」（{_n} 颗，文件已复制到 data/user_files/）")
         else:
             flash(f"同名收藏夹已存在：{col_name}，请改名后再上传。", kind="warning")

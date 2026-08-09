@@ -50,6 +50,7 @@ CONSTELLATIONS_CATALOG = DATA_DIR / "constellations.toml"  # 星座目录（入�
 USER_CATALOG = DATA_DIR / "user_catalog.toml"           # 用户收藏（不入库）
 BUILTIN_LOCATIONS = DATA_DIR / "locations.toml"         # 内置常用地点（入库，只读）
 USER_LOCATIONS = DATA_DIR / "user_locations.toml"       # 用户常用地点（不入库，程序维护）
+SENSOR_PARAMS = DATA_DIR / "sensor_params.toml"          # 逐星传感器参数覆盖表（不入库，首次运行自动生成模板）
 
 # CelesTrak 免费接口（URL 即接口，无需 token）
 CELESTRAK_GP = "https://celestrak.org/NORAD/elements/gp.php"
@@ -651,6 +652,125 @@ def save_user_collections(collections: List[dict]):
     finally:
         if os.path.exists(tmp_name):
             os.remove(tmp_name)
+
+
+# ==================== 3.5 逐星传感器参数表 ====================
+
+SENSOR_TEMPLATE = """\
+# 逐星传感器参数覆盖表（程序自动生成模板；可用 GUI ⑤页编辑，也可手改）
+# 规则：只按 NORAD 编号精确匹配；未单独设置的卫星一律用⑤页全局默认值
+#       （视场半角 30°、最小仰角 10°）。
+# 每条可填：
+#   norad              必填：NORAD 编目编号（数字）
+#   fov_half_angle_deg 选填：视场半角（度）；留空用全局默认
+#   min_elevation_deg  选填：最小仰角（度）；留空用全局默认
+#   swath_km           选填：幅宽（公里）。填了幅宽就按该时刻轨道高度换算成
+#                            等效视场半角，仍按覆盖圆锥计算；同一行幅宽优先于视场半角。
+# 重复编号：文件里后写的覆盖先写的。
+# 内置示例默认不启用（仅注释参考；来源为公开资料，使用前请自行核对）：
+# [[overrides]]
+# norad = 39084        # Landsat-8
+# swath_km = 185.0
+# [[overrides]]
+# norad = 20165        # SPOT-5
+# swath_km = 60.0
+"""
+
+
+def load_sensor_params(path: Optional[str] = None) -> List[dict]:
+    """读取逐星传感器参数表，返回 [{norad, fov_half_angle_deg|None, min_elevation_deg|None, swath_km|None}]。
+    文件不存在或损坏时返回空列表；无 norad 的行忽略。"""
+    p = Path(path) if path else SENSOR_PARAMS
+    if tomllib is None or not p.exists():
+        return []
+    try:
+        with open(p, "rb") as f:
+            data = tomllib.load(f)
+    except Exception as e:
+        print(f"  [警告] 传感器参数表损坏，按空表处理：{e}")
+        return []
+
+    def _flt(k: str) -> Optional[float]:
+        v = o.get(k)
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    out: List[dict] = []
+    for o in data.get("overrides", []):
+        norad = o.get("norad")
+        if norad is None:
+            continue
+        try:
+            norad = int(norad)
+        except (TypeError, ValueError):
+            continue
+        out.append({
+            "norad": norad,
+            "fov_half_angle_deg": _flt("fov_half_angle_deg"),
+            "min_elevation_deg": _flt("min_elevation_deg"),
+            "swath_km": _flt("swath_km"),
+        })
+    return out
+
+
+def _dump_sensor_params(overrides: List[dict]) -> str:
+    """把覆盖行写成 TOML 文本（模板注释 + 覆盖行）。"""
+    lines = [SENSOR_TEMPLATE.rstrip()]
+    for o in overrides:
+        norad = o.get("norad")
+        if norad is None:
+            continue
+        lines.append("[[overrides]]")
+        lines.append(f"norad = {int(norad)}")
+        if o.get("swath_km"):
+            lines.append(f"swath_km = {float(o['swath_km']):g}")
+        if o.get("fov_half_angle_deg"):
+            lines.append(f"fov_half_angle_deg = {float(o['fov_half_angle_deg']):g}")
+        if o.get("min_elevation_deg"):
+            lines.append(f"min_elevation_deg = {float(o['min_elevation_deg']):g}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def save_sensor_params(overrides: List[dict], path: Optional[str] = None):
+    """原子写传感器参数表（先写临时文件再替换）。"""
+    p = Path(path) if path else SENSOR_PARAMS
+    _ensure_dirs()
+    text = _dump_sensor_params(overrides)
+    fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp_name, p)
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+
+
+def ensure_sensor_params(path: Optional[str] = None) -> Path:
+    """若模板不存在则生成（只含注释，无覆盖行）。返回文件路径。"""
+    p = Path(path) if path else SENSOR_PARAMS
+    if not p.exists():
+        save_sensor_params([], p)
+    return p
+
+
+def collection_norad_ids(collection: dict) -> List[int]:
+    """取一个收藏夹里全部卫星的 NORAD 编号（本地缓存离线解析，不联网）。
+    用于⑤页"从收藏夹批量添加"传感器参数。"""
+    ids: List[int] = []
+    try:
+        recs = resolve_collection(collection, offline=True)
+        for r in recs:
+            if r.get("norad_id") is not None:
+                ids.append(int(r["norad_id"]))
+    except Exception as e:
+        print(f"  [警告] 解析收藏夹 {collection.get('name', '')} 失败：{e}")
+    return sorted(set(ids))
 
 
 def load_all_collections() -> List[dict]:

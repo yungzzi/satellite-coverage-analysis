@@ -36,7 +36,9 @@
   “5 公里圆”简化：足印圆与目标圆有交集就算覆盖，同时输出目标圆被覆盖面积比例）；
   ② 地区多边形（GeoJSON，保留现有网格点模型）。
 - 覆盖圆（足印）：卫星传感器视场圆锥打到地面的圆形区域。默认视场半角 η = 30°（假设值）。
-- **传感器参数接口必须开放**：用户可输入 视场半角 或 幅宽（swath ≈ 2·h·tan η 换算）和 最小仰角。
+- **传感器参数接口已开放（Q143）**：全局默认（⑤页输入框 / config.toml：视场半角 30°、最小仰角 10°）
+  之上可叠加逐星覆盖表 data/sensor_params.toml（不入库，只按 NORAD 精确匹配；幅宽 swath_km 选填，
+  填了按该时刻轨道高度换算成等效视场半角、仍走覆盖圆锥，同一行幅宽优先；未设置用全局默认）。
 - 覆盖判定：某时刻至少一个代表点/目标圆圆心在足印内，且仰角 ≥ 最小仰角（默认 10°），即算覆盖；
   同时记录覆盖比例（被覆盖代表点占比）。
 - 时间步长：1 分钟粗筛 + 窗口边界 10 秒精化（已实现）。
@@ -295,3 +297,4 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 - [x] Q137 col_sel 回调化修复（2026-08-09）："新建收藏夹"与"上传并新建收藏夹"的自动选中改为 on_click 回调（回调在控件重建前执行，不再报 "st.session_state.col_sel cannot be modified after the widget is instantiated"）；"上传并新建"按钮在未选文件时置灰。验证：ast 语法通过、AppTest 首页 0 异常
 - [x] Q138 选星 ILP 补齐 + K>=2 贪心 bug 修复（2026-08-09）：实测中国遥感全量杭州有 5 颗 GEO 全程星（GAOFEN-4/GAOFEN-13 01/02/LUDI TANCE-4 01A/YAOGAN-41），K=2 覆盖 100% 可行——之前"筛选不出来"是 PSCLP 贪心 K>=2 收益 bug（gain 只在 counts==K-1 时计，永远不触发→返回 0 颗）。修复：贪心收益改"向 K 靠近的有效覆盖单位增量"（K=1 行为不变）；新实现 PSCLP ILP（ilp_select_coverage）、任务③ ILP（ilp_select_max_coverage）、任务④ ILP（ilp_select_min_max_gap，二分+可行性 ILP）、PSCLP 最优方案枚举（no-good cut，杭州 K=2 → 10 种）；任务⑤保持贪心并注明"平均空窗为分式目标，无精确 ILP"；K 输入只在任务①显示（②③④⑤固定 K=1），Excel"需求-K"相应显示不适用、删除"整数规划版本待实现"、新增"算法说明"行；GUI 加贪心/ILP 白话说明。实测贪心与 ILP 在 303 颗×8h 完全一致且 ILP<1s；validate_selection 37/37、AppTest 0 异常
 - [x] Q139 选星提示与对照展示打磨（2026-08-09）：K=6 P=100 等物理不可行场景的提示改为说明"覆盖率口径=时间片内≥K 颗同时覆盖"+ 最多同时可见数 + "整数规划已证明不可行"（区分 Infeasible 与超时，不再笼统写"不可行/超时"）；"两者对照"现在 GUI 摘要显示"算法：整数规划（最优已证明），贪心对照 N 颗"，Excel 对比表新增"贪心（对照）"行（全池/贪心对照/选中 ILP 三行）；覆盖率未满足提示附调小 K 或换任务的建议。综合矩阵：3 卫星池 × 6 地点 × 9 任务（method=both）162 项 0 异常；validate_selection 39/39；AppTest 0 异常
+- [x] Q143 逐星传感器参数接口（2026-08-09）：data/sensor_params.toml（只按 NORAD 精确匹配，重复编号后写覆盖，无 norad 空行忽略；幅宽→等效视场半角仍走圆锥）；⑤页新增"传感器参数表（可选，逐星覆盖）"折叠区：data_editor 增删改 + 保存写回 TOML + 恢复默认模板（二次确认）+ 从收藏夹批量添加（按 NORAD 逐行，吉林 58 颗验证）；覆盖分析传参，汇总表/Excel 增加每星实际所用参数列（fov_used_deg/min_elev_used_deg/swath_used_km/sensor_source），说明页与选星 Excel 增加"逐星参数覆盖条数"；CLI 加 --sensor-params（默认自动读 data/sensor_params.toml）；新增 validate_sensor_params.py 21/21（读写往返/匹配优先级/重复覆盖/幅宽换算数值/端到端窗口量级/批量提取/AppTest 0 异常），validate_selection 39/39、validate_loader 43/43、validate_china_remote 全过

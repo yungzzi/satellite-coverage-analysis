@@ -182,6 +182,7 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
         info = pd.DataFrame({
             "项目": ["分析地区", "区域模式", "分析时段(UTC)", "时间步长(分钟)", "边界精化(秒)",
                      "视场半角(°)", "最小仰角(°)", "网格间距(°)",
+                     "逐星参数覆盖条数",
                      "导出范围",
                      "本表范围有覆盖卫星数（=卫星汇总行数）",
                      "整个分析时段有覆盖卫星数",
@@ -192,7 +193,9 @@ def export_excel(meta, state, windows, summary, gaps, out_path, scope_label):
                      f"{meta['start_utc']} ~ {meta['end_utc']}",
                      meta["step_minutes"], meta["refine_step_seconds"],
                      meta["fov_half_angle_deg"], meta["min_elevation_deg"],
-                     meta["grid_spacing_deg"], scope_label,
+                     meta["grid_spacing_deg"],
+                     meta.get("sensor_override_count", 0),
+                     scope_label,
                      n_scope,
                      meta["n_satellites_covered"],
                      meta["n_satellites_total"],

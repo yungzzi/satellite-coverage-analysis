@@ -20,7 +20,9 @@ start_utc = "2026-08-03 00:00:00"
 end_utc = "2026-08-03 08:00:00"
 step_minutes = 1
 
-# ---------- 传感器参数（全局默认；"按星分配不同参数"是后续功能，设计中） ----------
+# ---------- 传感器参数（全局默认） ----------
+# 逐星覆盖：见 data/sensor_params.toml（只按 NORAD 匹配；未设置用这里的默认值；
+#            GUI ⑤页可编辑，CLI 可用 --sensor-params 指定其他表）
 fov_half_angle_deg = 30.0    # 视场半角（度）
 min_elevation_deg = 10.0      # 最小仰角（度）
 

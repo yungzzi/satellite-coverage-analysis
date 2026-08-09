@@ -81,6 +81,42 @@ def _upload_file_to_new_collection(f_up, kind="constellation"):
     return None, _n
 
 
+def _df_to_sensor_rows(df):
+    """把 data_editor 返回的表格转成 [{norad, fov..|None, min_elev..|None, swath..|None}]。
+
+    NORAD 为空/NaN 的行按"空行"忽略；填了但非正整数则返回 None（视为无效表，
+    阻止保存并提示）。其他字段留空 = None（用全局默认）。
+    """
+    rows = []
+    for _, r in df.iterrows():
+        norad = r.get("norad")
+        if norad is None or pd.isna(norad) or norad == "":
+            continue
+        try:
+            norad = int(float(norad))
+        except (TypeError, ValueError):
+            return None
+        if norad <= 0:
+            return None
+
+        def _f(k):
+            v = r.get(k)
+            if v is None or pd.isna(v) or v == "":
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        rows.append({
+            "norad": norad,
+            "fov_half_angle_deg": _f("fov_half_angle_deg"),
+            "min_elevation_deg": _f("min_elevation_deg"),
+            "swath_km": _f("swath_km"),
+        })
+    return rows
+
+
 # ---------- 撤销 / 重做（收藏夹文件快照栈，仅本次会话内有效） ----------
 
 def _catalog_text() -> str:
@@ -1097,6 +1133,96 @@ if tab_analysis.open:
         st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。"
                    "结果会同时保存到 output/ 目录。")
 
+    with st.expander("传感器参数表（可选，逐星覆盖）"):
+        sl.ensure_sensor_params()
+        if "sensor_rows" not in st.session_state:
+            st.session_state["sensor_rows"] = sl.load_sensor_params()
+        _cur = st.session_state["sensor_rows"]
+        _df = pd.DataFrame(_cur, columns=["norad", "fov_half_angle_deg",
+                                          "min_elevation_deg", "swath_km"])
+        for _c in ["fov_half_angle_deg", "min_elevation_deg", "swath_km"]:
+            _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
+        _df["norad"] = pd.to_numeric(_df["norad"], errors="coerce").astype("Int64")
+        edited = st.data_editor(
+            _df,
+            key="sensor_editor",
+            num_rows="dynamic",
+            hide_index=True,
+            column_config={
+                "norad": st.column_config.NumberColumn("NORAD 编号", min_value=1, step=1,
+                                                       help="必填：卫星编目编号"),
+                "fov_half_angle_deg": st.column_config.NumberColumn(
+                    "视场半角(°)", min_value=0.0, step=1.0, format="%.1f",
+                    help="选填；留空用全局默认"),
+                "min_elevation_deg": st.column_config.NumberColumn(
+                    "最小仰角(°)", min_value=0.0, step=1.0, format="%.1f",
+                    help="选填；留空用全局默认"),
+                "swath_km": st.column_config.NumberColumn(
+                    "幅宽(km)", min_value=0.0, step=1.0, format="%.1f",
+                    help="选填；填了按幅宽换算视场半角（仍按覆盖圆锥计算），同一行幅宽优先"),
+            },
+        )
+        st.caption("只按 NORAD 精确匹配；未设置的星用上方全局默认（30°/10°）。"
+                   "重复编号以表里靠后的为准。保存后下一次\"开始覆盖分析\"生效。")
+        _b_save, _b_reset = st.columns(2)
+        if _b_save.button("保存参数表", key="btn_sensor_save", type="primary"):
+            _rows = _df_to_sensor_rows(edited)
+            if _rows is None:
+                flash("参数表有无效行：NORAD 必须是正整数，请修正后再保存。", kind="warning")
+            else:
+                sl.save_sensor_params(_rows)
+                st.session_state["sensor_rows"] = _rows
+                flash(f"已保存传感器参数表（{len(_rows)} 条覆盖），下一次分析生效。",
+                      kind="success")
+        if _b_reset.button("恢复默认模板", key="btn_sensor_reset"):
+            if st.session_state.get("sensor_confirm"):
+                sl.save_sensor_params([])
+                st.session_state["sensor_rows"] = []
+                st.session_state["sensor_confirm"] = False
+                flash("已恢复默认模板（无覆盖行）。", kind="success")
+                st.rerun()
+            else:
+                st.session_state["sensor_confirm"] = True
+                flash("再点一次\"恢复默认模板\"确认覆盖（会清空当前所有条目）。",
+                      kind="warning")
+        with st.expander("从收藏夹批量添加（按 NORAD 逐行加入）"):
+            _all_cols = sl.load_all_collections()
+            _bc = st.selectbox("选择收藏夹", [c["name"] for c in _all_cols],
+                               key="sensor_batch_col")
+            _bf, _be, _bw = st.columns(3)
+            _bfv = _bf.number_input("视场半角(°)（0=不改）", value=0.0, min_value=0.0,
+                                    step=1.0, key="sensor_batch_fov")
+            _bev = _be.number_input("最小仰角(°)（0=不改）", value=0.0, min_value=0.0,
+                                    step=1.0, key="sensor_batch_elev")
+            _bwv = _bw.number_input("幅宽(km)（0=不用）", value=0.0, min_value=0.0,
+                                    step=1.0, key="sensor_batch_swath")
+            if st.button("追加到表格", key="btn_sensor_batch"):
+                _col = next(c for c in _all_cols if c["name"] == _bc)
+                _ids = sl.collection_norad_ids(_col)
+                if not _ids:
+                    flash(f"收藏夹「{_bc}」未解析到卫星（可能本地缓存缺失），未能添加。",
+                          kind="warning")
+                else:
+                    _base = _df_to_sensor_rows(edited) or []
+                    _existing = {r["norad"] for r in _base}
+                    _added = 0
+                    for _i in _ids:
+                        if _i in _existing:
+                            continue
+                        _row = {"norad": _i}
+                        if _bfv > 0:
+                            _row["fov_half_angle_deg"] = float(_bfv)
+                        if _bev > 0:
+                            _row["min_elevation_deg"] = float(_bev)
+                        if _bwv > 0:
+                            _row["swath_km"] = float(_bwv)
+                        _base.append(_row)
+                        _added += 1
+                    st.session_state["sensor_rows"] = _base
+                    flash(f"已追加 {_added} 颗（跳过已在表中的 {len(_ids) - _added} 颗）。",
+                          kind="success")
+                    st.rerun()
+
     if st.button("开始覆盖分析", key="btn_cov_run", type="primary"):
         real_cols = [_strip_collection_label(n) for n in cov_sats]
         if not real_cols:
@@ -1143,7 +1269,8 @@ if tab_analysis.open:
                     recs, region, cfg,
                     cov_t0.strftime("%Y-%m-%d %H:%M:%S"),
                     cov_t1.strftime("%Y-%m-%d %H:%M:%S"),
-                    progress=lambda frac, msg: bar.progress(min(frac, 1.0), text=msg))
+                    progress=lambda frac, msg: bar.progress(min(frac, 1.0), text=msg),
+                    sensor_params=sl.load_sensor_params())
                 if cov_result is None:
                     st.warning("该时段内没有卫星覆盖目标区域（无窗口）。可尝试：更长时段、"
                                "更大的目标区域，或更大的视场角。")
@@ -1159,6 +1286,17 @@ if tab_analysis.open:
         st.success(f"分析完成：卫星池 {res['n_sats']} 颗（全部导入）参与分析，"
                    f"{len(df_summary)} 颗有覆盖，共 {res['n_win']} 个窗口"
                    f"（目标：{res['cfg']['region_name']}）")
+        _sp = res.get("sat_params") or []
+        _n_ov = sum(1 for p in _sp if p.get("source") == "override")
+        if _n_ov:
+            st.caption(f"逐星传感器参数表生效：{_n_ov} 条覆盖（其余用全局默认 "
+                       f"{res['cfg'].get('fov_half_angle_deg', 30.0)}°/"
+                       f"{res['cfg'].get('min_elevation_deg', 10.0)}°），"
+                       f"每颗星实际所用参数见下方卫星汇总表。")
+        else:
+            st.caption("传感器参数：全部使用全局默认"
+                       f"（视场半角 {res['cfg'].get('fov_half_angle_deg', 30.0)}°、"
+                       f"最小仰角 {res['cfg'].get('min_elevation_deg', 10.0)}°）。")
         if "cov_xlsx" not in st.session_state:
             meta = {
                 "region_name": res["cfg"].get("region_name", ""),
@@ -1170,6 +1308,7 @@ if tab_analysis.open:
                 "fov_half_angle_deg": res["cfg"].get("fov_half_angle_deg", 30.0),
                 "min_elevation_deg": res["cfg"].get("min_elevation_deg", 10.0),
                 "grid_spacing_deg": res["cfg"].get("grid_spacing_deg", 0.2),
+                "sensor_override_count": _n_ov,
                 "n_satellites_total": res["n_sats"],
                 "n_satellites_covered": len(df_summary),
             }
@@ -1282,6 +1421,9 @@ if tab_analysis.open:
                 sel_res["fov"] = res["cfg"].get("fov_half_angle_deg", 30.0)
                 sel_res["elev"] = res["cfg"].get("min_elevation_deg", 10.0)
                 sel_res["refine"] = res["cfg"].get("refine_step_seconds", 10)
+                sel_res["sensor_override_count"] = sum(
+                    1 for p in (res.get("sat_params") or [])
+                    if p.get("source") == "override")
                 st.session_state["sel_result"] = sel_res
                 st.session_state.pop("sel_xlsx", None)
             sel_res = st.session_state.get("sel_result")
@@ -1400,6 +1542,8 @@ if tab_analysis.open:
                                                  "视场半角(°)": sel_res.get("fov", 30.0),
                                                  "最小仰角(°)": sel_res.get("elev", 10.0),
                                                  "边界精化(秒)": sel_res.get("refine", 10),
+                                                 "逐星参数覆盖条数": sel_res.get(
+                                                     "sensor_override_count", 0),
                                              })
                     st.session_state["sel_xlsx"] = {"data": Path(out_path).read_bytes(),
                                                     "name": Path(out_path).name,

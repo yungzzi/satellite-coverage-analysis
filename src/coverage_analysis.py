@@ -237,6 +237,24 @@ def footprint_max_angle_deg(altitude_km, fov_half_deg):
     return np.degrees(np.minimum(lam, horizon))
 
 
+def swath_to_half_angle_deg(altitude_km, swath_km):
+    """把幅宽（km）换算成等效视场半角（度）。
+
+    语义（Q142 拍板）：把"天底条带宽 W"近似为"以星下点为圆心、半径 W/2 的
+    覆盖圆"，仍走原来的圆锥几何。球面精确式：
+      半地心角 λ = (W/2)/R；卫星到条带边缘的离轴角 η 满足
+      tan η = R·sin λ / (r − R·cos λ)，r = R + h。
+    输入支持标量或数组（数组用于逐时刻高度），返回同形状的度数。
+    """
+    alt = np.asarray(altitude_km, dtype=float)
+    # λ = 半幅宽对应的地心角（弧度）：弧长/半径，无需再转弧度
+    lam = (float(swath_km) / 2.0) / R_EARTH_KM
+    r = R_EARTH_KM + alt
+    denom = r - R_EARTH_KM * np.cos(lam)
+    eta = np.arctan2(R_EARTH_KM * np.sin(lam), denom)
+    return np.clip(np.degrees(eta), 0.0, 89.0)
+
+
 def central_angle_deg(lat1, lon1, lat2, lon2):
     """两组经纬度之间的大圆地心角（度），向量化 haversine 公式"""
     lat1r, lat2r = np.radians(lat1), np.radians(lat2)
@@ -300,7 +318,14 @@ def compute_covered_series(sat, t, dt_list, region, cfg):
     alt = sub.elevation.km
 
     # 每个时刻的覆盖圆最大地心角（随高度变化）：形状 (T,)
-    lam_max = footprint_max_angle_deg(alt, cfg["fov_half_angle_deg"])
+    # 若该星配置了幅宽（swath_km>0），先按当前高度换算成等效视场半角，
+    # 再走同一套圆锥几何（Q142：幅宽只作换算，仍按圆锥计算）。
+    swath_km = float(cfg.get("swath_km") or 0.0)
+    if swath_km > 0:
+        eta = swath_to_half_angle_deg(alt, swath_km)
+        lam_max = footprint_max_angle_deg(alt, eta)
+    else:
+        lam_max = footprint_max_angle_deg(alt, cfg["fov_half_angle_deg"])
 
     # ---- circle 模式：目标是一个点+半径的圆 ----
     if region["mode"] == "circle":
@@ -523,6 +548,10 @@ def build_summary_text(state_df, df_summary, cfg, meta):
     lines.append("")
     lines.append("口径说明：覆盖 = 至少一个网格代表点在视场圆内且仰角≥10°；"
                  "1 分钟粗筛 + 窗口边界秒级精化。")
+    if meta.get("sensor_override_count"):
+        lines.append(f"逐星传感器参数覆盖：{meta['sensor_override_count']} 条生效；"
+                     f"未覆盖星用全局默认（视场半角 {cfg.get('fov_half_angle_deg')}°、"
+                     f"最小仰角 {cfg.get('min_elevation_deg')}°）。")
     return "\n".join(lines)
 
 
@@ -576,7 +605,7 @@ def plot_gantt(all_windows, df_summary, cfg):
     plt.close(fig)
 
 
-def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
+def build_outputs(all_windows, cfg, t0, t1, n_sats_total, sat_params=None):
     """
     把所有窗口整理成一套完整输出：
       CSV（数据底座，给程序/脚本用）：
@@ -604,6 +633,9 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
         })
     df_windows = pd.DataFrame(rows)
     df_summary = summarize_windows(all_windows, cfg, (t1 - t0).total_seconds())
+    if sat_params:
+        by_name = {p["name"]: p for p in sat_params}
+        df_summary = enrich_summary_sensor(df_summary, by_name)
     df_state = build_state_table(all_windows, t0, t1, cfg)
     df_gaps = build_gaps_table(df_state)
 
@@ -631,6 +663,8 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
         "fov_half_angle_deg": cfg["fov_half_angle_deg"],
         "min_elevation_deg": cfg["min_elevation_deg"],
         "grid_spacing_deg": cfg["grid_spacing_deg"],
+        "sensor_override_count": sum(1 for p in (sat_params or [])
+                                     if p.get("source") == "override"),
         "n_satellites_total": n_sats_total,
         "n_satellites_covered": int(len(df_summary)),
     }
@@ -656,9 +690,65 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total):
     return df_windows, df_summary, df_state, df_gaps
 
 
+def resolve_sat_cfg(norad_id, overrides, global_cfg):
+    """按 NORAD 精确匹配逐星传感器参数（文件里最后命中者覆盖）。
+
+    返回 (sat_cfg, info)：
+      sat_cfg = global_cfg 副本 + 该星覆盖值（幅宽优先于视场半角）；
+      info    = {"norad", "source": "override"/"default",
+                 "fov_half_angle_deg", "min_elevation_deg", "swath_km"}，
+                供界面/Excel 展示"这颗星实际用的参数"。
+    """
+    sat_cfg = dict(global_cfg)
+    hit = None
+    for o in overrides or []:
+        if o.get("norad") == norad_id:
+            hit = o
+    if hit is None:
+        info = {"norad": norad_id, "source": "default",
+                "fov_half_angle_deg": global_cfg.get("fov_half_angle_deg"),
+                "min_elevation_deg": global_cfg.get("min_elevation_deg"),
+                "swath_km": 0.0}
+        return sat_cfg, info
+    sat_cfg.pop("swath_km", None)
+    if (hit.get("swath_km") or 0) > 0:
+        sat_cfg["swath_km"] = float(hit["swath_km"])
+        fov_used = None          # 判据用幅宽，角度口径不参与
+    elif hit.get("fov_half_angle_deg") is not None:
+        sat_cfg["fov_half_angle_deg"] = float(hit["fov_half_angle_deg"])
+        fov_used = sat_cfg["fov_half_angle_deg"]
+    else:
+        fov_used = sat_cfg.get("fov_half_angle_deg")
+    if hit.get("min_elevation_deg") is not None:
+        sat_cfg["min_elevation_deg"] = float(hit["min_elevation_deg"])
+    info = {"norad": norad_id, "source": "override",
+            "fov_half_angle_deg": fov_used,
+            "min_elevation_deg": sat_cfg.get("min_elevation_deg"),
+            "swath_km": sat_cfg.get("swath_km", 0.0)}
+    return sat_cfg, info
+
+
+def enrich_summary_sensor(df_summary, sat_params_by_name):
+    """给卫星汇总表补"这颗星实际用的传感器参数"四列（用于 GUI/Excel 展示）。"""
+    def _row(info):
+        sw = float((info or {}).get("swath_km") or 0.0)
+        if info is None:
+            return pd.Series({"fov_used_deg": None, "min_elev_used_deg": None,
+                              "swath_used_km": 0.0, "sensor_source": "默认"})
+        return pd.Series({
+            "fov_used_deg": None if sw > 0 else info.get("fov_half_angle_deg"),
+            "min_elev_used_deg": info.get("min_elevation_deg"),
+            "swath_used_km": sw,
+            "sensor_source": "逐星覆盖" if info.get("source") == "override" else "默认",
+        })
+    cols = df_summary["satellite"].map(sat_params_by_name.get).apply(_row)
+    return pd.concat([df_summary, cols], axis=1)
+
+
 # ==================== 6. 主流程 ====================
 
-def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=None):
+def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=None,
+                                sensor_params=None):
     """解析卫星 → 逐颗覆盖分析 → 组装结果（GUI 与测试共用的同一入口）。
 
     2026-08-07 新增：把⑤页"开始覆盖分析"的运行逻辑抽成纯函数，
@@ -669,26 +759,33 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
       cfg         覆盖参数（含 region_name / step_minutes 等）
       start_str / end_str  时段（UTC，"%Y-%m-%d %H:%M:%S"）
       progress    可选回调 progress(已完成比例 0~1, 说明文字)
-    返回 cov_result 字典（dfs / windows_by_sat / sats / t0 / t1），无任何窗口时返回 None。
+    返回 cov_result 字典（dfs / windows_by_sat / sats / sat_params / t0 / t1），无任何窗口时返回 None。
     """
     import satellite_loader as sl  # 延迟导入，避免模块顶层互相依赖
     ts = sl.load.timescale(builtin=True)
     t, dt_list = make_time_array(ts, start_str, end_str, int(cfg.get("step_minutes", 1)))
     sats = sl.records_to_satellites(recs)
+    if sensor_params is None:
+        sensor_params = sl.load_sensor_params()   # 文件不存在则空表 = 全用全局默认
     all_windows = []
     windows_by_sat = []
+    sat_params = []
     for i, sat in enumerate(sats):
         if progress:
             progress((i + 1) / len(sats), f"分析 {sat.name}（{i + 1}/{len(sats)}）")
-        windows = analyze_one_satellite(sat, t, dt_list, region, cfg)
+        sat_cfg, info = resolve_sat_cfg(sat.norad_id, sensor_params, cfg)
+        sat_params.append({"name": sat.name, **info})
+        windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg)
         windows_by_sat.append(windows)
         all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
     if not all_windows:
         return None
-    dfs = build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats))
+    dfs = build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats),
+                        sat_params=sat_params)
     return {
         "dfs": dfs, "cfg": cfg, "n_sats": len(sats), "n_win": len(all_windows),
         "windows_by_sat": windows_by_sat, "sats": sats,
+        "sat_params": sat_params,
         "t0": dt_list[0], "t1": dt_list[-1],
     }
 
@@ -707,6 +804,8 @@ def main():
     parser.add_argument("--end", help="分析结束时间 UTC")
     parser.add_argument("--fov", type=float, help="视场半角（度）")
     parser.add_argument("--min-elevation", type=float, help="最小仰角（度）")
+    parser.add_argument("--sensor-params", help="逐星传感器参数表（TOML，模板见 data/sensor_params.toml）；"
+                                                "不指定则自动读 data/sensor_params.toml（存在才生效）")
     args = parser.parse_args()
 
     cfg = dict(CONFIG)
@@ -737,8 +836,17 @@ def main():
         cfg["fov_half_angle_deg"] = args.fov
     if args.min_elevation is not None:
         cfg["min_elevation_deg"] = args.min_elevation
+    # 逐星传感器参数（只按 NORAD 匹配）：显式 --sensor-params 优先，否则自动读默认文件
+    import satellite_loader as sl
+    if args.sensor_params:
+        sensor_overrides = sl.load_sensor_params(args.sensor_params)
+        print(f"已加载逐星传感器参数表：{args.sensor_params}（{len(sensor_overrides)} 条覆盖）")
+    else:
+        sensor_overrides = sl.load_sensor_params()
+        if sensor_overrides:
+            print(f"已加载逐星传感器参数表：data/sensor_params.toml"
+                  f"（{len(sensor_overrides)} 条覆盖）")
     if args.location:
-        import satellite_loader as sl
         loc = next((x for x in sl.load_locations() if x["name"] == args.location), None)
         if loc is None:
             print(f"未找到常用地点：{args.location}（见 data/locations.toml）")
@@ -781,16 +889,21 @@ def main():
     print(f"时间轴：{dt_list[0]} ~ {dt_list[-1]}（UTC），步长 {cfg['step_minutes']} 分钟，"
           f"共 {len(dt_list)} 步")
 
-    # 4) 逐颗卫星分析
+    # 4) 逐颗卫星分析（逐星传感器参数仅按 NORAD 匹配，未设置用全局默认）
     all_windows = []
+    sat_params = []
     for sat in sats:
-        windows = analyze_one_satellite(sat, t, dt_list, region, cfg)
+        norad = int(sat.model.satnum) if getattr(sat, "model", None) else None
+        sat_cfg, info = resolve_sat_cfg(norad, sensor_overrides, cfg)
+        sat_params.append({"name": sat.name, **info})
+        windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg)
         all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
         if windows:
             print(f"  {sat.name}: {len(windows)} 个覆盖窗口")
 
     # 5) 输出（CSV 四件套 + 文字摘要 + 图 + 元信息）
-    build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats))
+    build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats),
+                  sat_params=sat_params)
 
 
 if __name__ == "__main__":

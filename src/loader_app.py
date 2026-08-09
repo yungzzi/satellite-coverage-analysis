@@ -607,7 +607,8 @@ if tab_collections.open:
         with st.expander("查看本夹全部卫星（完整信息，只查看不保存）"):
             if st.button("查看本夹全部卫星", key="btn_show_col_sats"):
                 if not c["entries"]:
-                    st.warning("这个收藏夹是空的，先添加条目。")
+                    st.warning("这个收藏夹还没有条目。添加方式：③页“上传 TLE 文件（自动建夹）”，"
+                               "或本页选择该夹后“导入本地文件”，或①页搜索勾选后加入。")
                 else:
                     bar = st.progress(0.0, text="开始解析……")
                     def cb(done, total, msg):
@@ -655,6 +656,11 @@ if tab_collections.open:
                     flash("已新建收藏夹：" + new_name.strip() if ok
                           else f"已存在同名收藏夹：{new_name.strip()}，未新建。",
                           kind="success" if ok else "warning")
+                    if ok:
+                        _all = sl.load_all_collections()
+                        _idx = next((i for i, x in enumerate(_all)
+                                     if not x.get("builtin") and x["name"] == new_name.strip()), 0)
+                        st.session_state["col_sel"] = _idx
                 st.rerun()
             if not c.get("builtin"):
                 rename_to = st.text_input("改名为", key="rename_to")
@@ -693,7 +699,8 @@ if tab_collections.open:
             else:
                 st.caption("（暂无其他用户收藏夹可复制）")
         with m2:
-            st.caption("导入本地文件（TLE 或编号清单），程序会复制到 data/user_files/ 统一管理：")
+            st.caption(f"导入本地文件（TLE 或编号清单）到当前夹「{c['name']}」，"
+                       "程序会复制到 data/user_files/ 统一管理：")
             f_up = st.file_uploader(
                 "选择文件（.txt / .tle）", type=["txt", "tle"], key="file_up",
                 help="TLE：标准两行轨道根数，每颗星 3 行（名称行 + 两行数字），可多颗；"

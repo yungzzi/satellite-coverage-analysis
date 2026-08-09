@@ -313,6 +313,19 @@ def main():
         check("任务⑤ 保持贪心并注明分式目标",
               r_e["algo"] == "greedy-budget" and "分式目标" in r_e["algo_note"],
               r_e["algo_note"])
+        r_k6 = ss.run_selection(res8["sats"], res8["windows_by_sat"],
+                                res8["t0"], res8["t1"],
+                                step_minutes=1, k_min=6, mrt_minutes=1.0,
+                                method="both", req_mode="coverage_pct", coverage_pct=100.0)
+        check("K=6 P=100 ILP 证明不可行 + 提示区分",
+              not r_k6["eval"]["satisfied"]
+              and r_k6.get("ilp") is not None and r_k6["ilp"]["status"] == "Infeasible"
+              and "已证明" in r_k6.get("algo_note", ""),
+              r_k6.get("algo_note", ""))
+        check("两者对照：贪心对照行存在",
+              r_a["algo"] == "ilp" and len(r_a["compare_rows"]) >= 3
+              and any("贪心" in str(x.get("口径", "")) for x in r_a["compare_rows"]),
+              f"{len(r_a['compare_rows'])} 行")
     except Exception as _ex:
         check("新算法回归（中国遥感全量）", False, str(_ex))
 

@@ -808,18 +808,24 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         sel_set = set(sel_mc)
         res["state_rows"] = _state_rows(sats, sat_cov, counts, sel_set, dt_list)
         res["gaps"] = res["eval"]["gaps"]
-        res["compare_rows"] = [
-            {"口径": "全池（不选星）", "卫星数": n_sat,
-             "覆盖率(%)": round(full["coverage_pct"], 2),
-             "MRT(分)": round(full["mrt_actual_minutes"], 1),
-             "ART(分)": round(full["art_actual_minutes"], 1),
-             "需求满足": "—"},
-            {"口径": f"选中（目标 {n_lim} 颗）", "卫星数": len(sel_mc),
-             "覆盖率(%)": round(res["eval"]["coverage_pct"], 2),
-             "MRT(分)": round(res["eval"]["mrt_actual_minutes"], 1),
-             "ART(分)": round(res["eval"]["art_actual_minutes"], 1),
-             "需求满足": "—"},
-        ]
+        _rows_b = [{"口径": "全池（不选星）", "卫星数": n_sat,
+                    "覆盖率(%)": round(full["coverage_pct"], 2),
+                    "MRT(分)": round(full["mrt_actual_minutes"], 1),
+                    "ART(分)": round(full["art_actual_minutes"], 1),
+                    "需求满足": "—"}]
+        if res["ilp"] is not None and res["greedy"] is not None:
+            _gb = res["greedy"]
+            _rows_b.append({"口径": "贪心（对照）", "卫星数": len(_gb["selected"]),
+                            "覆盖率(%)": round(_gb["eval"]["coverage_pct"], 2),
+                            "MRT(分)": round(_gb["eval"]["mrt_actual_minutes"], 1),
+                            "ART(分)": round(_gb["eval"]["art_actual_minutes"], 1),
+                            "需求满足": "—"})
+        _rows_b.append({"口径": f"选中（{algo}）", "卫星数": len(sel_mc),
+                        "覆盖率(%)": round(res["eval"]["coverage_pct"], 2),
+                        "MRT(分)": round(res["eval"]["mrt_actual_minutes"], 1),
+                        "ART(分)": round(res["eval"]["art_actual_minutes"], 1),
+                        "需求满足": "—"})
+        res["compare_rows"] = _rows_b
         res["optimal_solutions"] = []
         res["optimal_note"] = "预算型任务（给定 N 颗）不做“最少颗数最优方案”枚举。"
         res["summary"] = _summary_text(res)
@@ -869,7 +875,10 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         final = res["greedy"]
         final["algo"] = "greedy"
         if ilp is not None and ilp["status"] not in ("Optimal", "Not Solved"):
-            final["note"] = "整数规划不可行/超时，已用贪心结果。"
+            if ilp["status"] == "Infeasible":
+                final["note"] = "整数规划已证明该需求无法满足（物理不可行），用贪心给出尽力而为组合。"
+            else:
+                final["note"] = "整数规划求解超时/失败，已用贪心结果。"
         elif ilp is None and method in ("both", "ilp") and n_sat > 1500:
             final["note"] = "卫星数过多（>1500），整数规划自动跳过，用贪心结果。"
     res["selected"] = final["selected"]
@@ -884,18 +893,24 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     sel_set = set(final["selected"])
     res["state_rows"] = _state_rows(sats, sat_cov, counts, sel_set, dt_list)
     res["gaps"] = final["eval"]["gaps"]
-    res["compare_rows"] = [
-        {"口径": "全池（不选星）", "卫星数": n_sat,
-         "覆盖率(%)": round(full["coverage_pct"], 2),
-         "MRT(分)": round(full["mrt_actual_minutes"], 1),
-         "ART(分)": round(full["art_actual_minutes"], 1),
-         "需求满足": "是" if full["satisfied"] else "否"},
-        {"口径": f"选中（{res['algo']}）", "卫星数": len(final["selected"]),
-         "覆盖率(%)": round(final["eval"]["coverage_pct"], 2),
-         "MRT(分)": round(final["eval"]["mrt_actual_minutes"], 1),
-         "ART(分)": round(final["eval"]["art_actual_minutes"], 1),
-         "需求满足": "是" if final["eval"]["satisfied"] else "否"},
-    ]
+    _rows = [{"口径": "全池（不选星）", "卫星数": n_sat,
+              "覆盖率(%)": round(full["coverage_pct"], 2),
+              "MRT(分)": round(full["mrt_actual_minutes"], 1),
+              "ART(分)": round(full["art_actual_minutes"], 1),
+              "需求满足": "是" if full["satisfied"] else "否"}]
+    if ilp is not None and ilp["eval"]["satisfied"] and res["greedy"] is not None:
+        _g = res["greedy"]
+        _rows.append({"口径": "贪心（对照）", "卫星数": len(_g["selected"]),
+                      "覆盖率(%)": round(_g["eval"]["coverage_pct"], 2),
+                      "MRT(分)": round(_g["eval"]["mrt_actual_minutes"], 1),
+                      "ART(分)": round(_g["eval"]["art_actual_minutes"], 1),
+                      "需求满足": "是" if _g["eval"]["satisfied"] else "否"})
+    _rows.append({"口径": f"选中（{res['algo']}）", "卫星数": len(final["selected"]),
+                  "覆盖率(%)": round(final["eval"]["coverage_pct"], 2),
+                  "MRT(分)": round(final["eval"]["mrt_actual_minutes"], 1),
+                  "ART(分)": round(final["eval"]["art_actual_minutes"], 1),
+                  "需求满足": "是" if final["eval"]["satisfied"] else "否"})
+    res["compare_rows"] = _rows
 
     # 全部最优方案（仅最少颗数目标；无全程星时用 ILP no-good cut 收集）
     if req_mode == "coverage_pct":

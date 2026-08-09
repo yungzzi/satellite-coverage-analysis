@@ -1306,6 +1306,19 @@ if tab_analysis.open:
                     st.success(f"选星完成：卫星池 {sel_res['n_sats_total']} 颗 → 推荐 "
                                f"{len(sel_res['selected'])} 颗（任务：{req_lbl} + {obj_lbl}），"
                                f"需求{'满足' if sel_res['eval']['satisfied'] else '未满足'}")
+                _algo_cn = {"ilp": "整数规划（精确）", "greedy": "贪心",
+                            "greedy-budget": "贪心"}.get(sel_res["algo"], sel_res["algo"])
+                _algo_txt = f"算法：{_algo_cn}"
+                if sel_res["algo"] == "ilp":
+                    _algo_txt += "（最优已证明）"
+                if (sel_res.get("greedy") is not None
+                        and sel_res["greedy"].get("selected") is not None):
+                    _gn = len(sel_res["greedy"]["selected"])
+                    if sel_res["algo"] == "ilp":
+                        _algo_txt += f"，贪心对照 {_gn} 颗"
+                    else:
+                        _algo_txt += f"（选中 {_gn} 颗）"
+                st.caption(_algo_txt)
                 if not sel_res["eval"]["satisfied"]:
                     if sel_res["req_mode"] == "continuous":
                         _fb = sel_res.get("feasibility", {})
@@ -1322,9 +1335,21 @@ if tab_analysis.open:
                     elif sel_res["req_mode"] == "coverage_pct":
                         _full_cov = sel_res.get("full", {}).get("coverage_pct", 0.0)
                         _thr = sel_res.get("coverage_threshold_pct") or 100.0
-                        st.error(f"覆盖率要求未达到：该卫星池最高也只有 {_full_cov:.1f}% 覆盖率"
-                                 f"（阈值 {_thr:.0f}%）。")
-                        st.info("该组合已用最少卫星达到该池子能做到的最大覆盖率（尽力而为）。")
+                        _k = sel_res["k_min"]
+                        _sim_max = sel_res.get("full", {}).get("n_sim_max", "?")
+                        st.error(
+                            f"覆盖率要求未达到（阈值 {_thr:.0f}%）。本任务的“覆盖率”口径："
+                            f"时间片内有 ≥{_k} 颗同时覆盖才算覆盖；"
+                            f"该卫星池最多同时可见 {_sim_max} 颗，"
+                            f"全池按此口径也只有 {_full_cov:.1f}% 的时间达到 ≥{_k} 颗。"
+                            f"这不是选星算法的问题，是星座布局做不到——"
+                            f"可调小 K（≤同时可见下限）或改用重访 / 给定 N 颗任务。")
+                        _ilp_infeasible = (sel_res.get("ilp") is not None
+                                           and sel_res["ilp"]["status"] == "Infeasible")
+                        st.info(("已用整数规划验证：该需求物理不可行，"
+                                 "当前给出尽力而为组合（尽可能少的星逼近覆盖上限）。"
+                                 if _ilp_infeasible else
+                                 "当前给出尽力而为组合（尽可能少的星逼近该池子的覆盖上限）。"))
                 if (sel_res["eval"]["satisfied"] and sel_res["req_mode"] == "continuous"
                         and len(sel_res["selected"]) == 1):
                     st.info(f"说明：{sel_res['selected_names'][0]} 对目标区域全程 0 空窗覆盖，"

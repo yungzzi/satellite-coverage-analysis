@@ -671,22 +671,42 @@ if tab_collections.open:
 
         # ---------- 管理收藏夹 ----------
         st.markdown("### 管理收藏夹")
+
+        def _btn_new_col():
+            # 回调在控件重建前执行，这里改 col_sel 才不会报"控件已实例化"
+            name = str(st.session_state.get("new_col_name", "")).strip()
+            if not name:
+                return
+            _snapshot()
+            ok = sl.create_collection(name)
+            flash("已新建收藏夹：" + name if ok
+                  else f"已存在同名收藏夹：{name}，未新建。",
+                  kind="success" if ok else "warning")
+            if ok:
+                _all = sl.load_all_collections()
+                _idx = next((i for i, x in enumerate(_all)
+                             if not x.get("builtin") and x["name"] == name), 0)
+                st.session_state["col_sel"] = _idx
+
+        def _btn_import_new():
+            # 回调：读取已上传的文件，依据文件直接新建收藏夹并自动选中
+            f_up = st.session_state.get("file_up")
+            if f_up is None:
+                return
+            col_name, _n = _upload_file_to_new_collection(f_up)
+            if col_name:
+                _all = sl.load_all_collections()
+                _idx = next((i for i, x in enumerate(_all)
+                             if not x.get("builtin") and x["name"] == col_name), 0)
+                st.session_state["col_sel"] = _idx
+                flash(f"已新建收藏夹「{col_name}」（{_n} 颗，文件已复制到 data/user_files/）")
+            else:
+                flash(f"同名收藏夹已存在：{col_name}，请稍后再试。", kind="warning")
+
         m1, m2 = st.columns(2)
         with m1:
             new_name = st.text_input("新建收藏夹名称", key="new_col_name")
-            if st.button("新建", key="btn_new_col"):
-                if new_name.strip():
-                    _snapshot()
-                    ok = sl.create_collection(new_name.strip())
-                    flash("已新建收藏夹：" + new_name.strip() if ok
-                          else f"已存在同名收藏夹：{new_name.strip()}，未新建。",
-                          kind="success" if ok else "warning")
-                    if ok:
-                        _all = sl.load_all_collections()
-                        _idx = next((i for i, x in enumerate(_all)
-                                     if not x.get("builtin") and x["name"] == new_name.strip()), 0)
-                        st.session_state["col_sel"] = _idx
-                st.rerun()
+            st.button("新建", key="btn_new_col", on_click=_btn_new_col)
             if not c.get("builtin"):
                 rename_to = st.text_input("改名为", key="rename_to")
                 if st.button("改名", key="btn_rename"):
@@ -749,17 +769,8 @@ if tab_collections.open:
                           else "已有相同条目，未重复添加。",
                           kind="success" if ok else "warning")
                     st.rerun()
-            if f_up is not None and i2.button("上传并新建收藏夹（自动建夹）", key="btn_import_new"):
-                col_name, _n = _upload_file_to_new_collection(f_up)
-                if col_name:
-                    _all = sl.load_all_collections()
-                    _idx = next((i for i, x in enumerate(_all)
-                                 if not x.get("builtin") and x["name"] == col_name), 0)
-                    st.session_state["col_sel"] = _idx
-                    flash(f"已新建收藏夹「{col_name}」（{_n} 颗，文件已复制到 data/user_files/）")
-                else:
-                    flash(f"同名收藏夹已存在：{col_name}，请稍后再试。", kind="warning")
-                st.rerun()
+            i2.button("上传并新建收藏夹（自动建夹）", key="btn_import_new",
+                      on_click=_btn_import_new, disabled=f_up is None)
 
 
 # ==================== ④ 下载与自检 ====================

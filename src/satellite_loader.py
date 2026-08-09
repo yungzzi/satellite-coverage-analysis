@@ -773,6 +773,34 @@ def collection_norad_ids(collection: dict) -> List[int]:
     return sorted(set(ids))
 
 
+def collection_sources_dedup(src_names: List[str]) -> List[dict]:
+    """把多个收藏夹（按名字）解析并去重（按 NORAD），返回 [{name, norad, source}]。
+
+    本地缓存离线解析，不联网；找不到的收藏夹跳过。用于⑤页"从本次覆盖分析的
+    卫星来源导入"传感器参数表（去重后供搜索/筛选/选择）。
+    """
+    rows: List[dict] = []
+    seen = set()
+    all_cols = load_all_collections()
+    for nm in src_names:
+        col = find_collection(all_cols, nm)
+        if col is None:
+            continue
+        try:
+            recs = resolve_collection(col, offline=True)
+        except Exception as e:
+            print(f"  [警告] 解析收藏夹 {nm} 失败：{e}")
+            continue
+        for r in recs:
+            nid = r.get("norad_id")
+            if nid is None or nid in seen:
+                continue
+            seen.add(nid)
+            rows.append({"name": r.get("name", ""), "norad": int(nid),
+                         "source": col["name"]})
+    return rows
+
+
 def load_all_collections() -> List[dict]:
     """内置 + 用户 合并（内置在前，标 builtin=True）。"""
     return load_builtin_collections() + load_user_collections()

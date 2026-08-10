@@ -9,6 +9,7 @@
 | --- | --- | --- | --- | --- |
 | 1 | Hoots F R, Roehrich R L. Spacetrack Report No.3: Models for Propagation of NORAD Element Sets[R]. 1980. | `01_Spacetrack_Report_No3_1980.pdf`（484 KB） | celestrak.com（NORAD 官方编目配套文档，公开） | SGP4 算法原始出处，第 1 章轨道外推的理论依据 |
 | 2 | Vallado D A, Crawford P, Hujsak R, Kelso T S. Revisiting Spacetrack Report #3[C]. AIAA 2006-6753, 2006. | `02_Revisiting_Spacetrack_Report3_2006.pdf`（1.18 MB） | celestrak.org（作者官方公开） | SGP4/SDP4 现代实现与验证基准，第 1 章 |
+| 9 | Williamson D P, Shmoys D B. The Design of Approximation Algorithms[M]. Cambridge University Press, 2011. | `09_Williamson_Shmoys_ApproxAlgorithms_免费教材.pdf`（2.4 MB） | designofapproxalgs.com（作者官网，CC 授权免费公开） | 集合覆盖贪心 ln n 界、最大覆盖 1−1/e、Feige ln n 下界的**合法替代参考**（含完整证明） |
 
 ## 付费墙（无合法开放全文，给出官方获取途径）
 
@@ -24,9 +25,11 @@
 ## 说明
 
 1. 序号 3~5 是 1979~1998 年的经典优化理论论文，出版方（INFORMS/Springer/ACM）均无合法开放全文，Unpaywall 接口确认无 OA 副本；其核心结论（ln n、1−1/e）已在报告中给出，不影响本工程的引用与复算。
-2. 序号 6 的预印本（optimization-online）与 HAL 副本是合法公开的，本次因源站限速/反爬未能下载到本地；换网络或浏览器可直接访问。
-3. 序号 7、8 的国内文献建议在校园网用知网下载；若老师需要，可由其单位图书馆代下。
-4. 需要英文文献全文时，图书馆的"文献传递"服务（如 CALIS）也可作为兜底。
+2. **序号 3~5 的结论有合法替代全文**：Williamson-Shmoys《The Design of Approximation Algorithms》免费教材（序号 9）第 2 章（集合覆盖贪心 H(k) 界）、第 3 章（最大覆盖 (1−1/e)）及第 16 章（Feige 下界讨论）覆盖了报告引用的全部定理，含完整证明，可作为论文答辩引用的可靠来源。
+3. 序号 6 的预印本（optimization-online）与 HAL 副本是合法公开的，本次因源站限速/反爬未能下载到本地；换网络或浏览器可直接访问。
+4. 序号 7、8 的国内文献建议在校园网用知网下载；若老师需要，可由其单位图书馆代下。
+5. 需要英文文献全文时，图书馆的"文献传递"服务（如 CALIS）也可作为兜底；向论文作者发邮件索取副本是常见的合法途径（研究者通常乐意提供）。
+6. **本工程明确不使用 sci-hub、libgen 等盗版渠道获取文献**（版权侵权，且答辩引用盗版来源有学术诚信风险）；缺文献一律走上述合法途径。
 
 ## 引用可信度说明（诚实声明）
 

@@ -10,6 +10,7 @@
 import os
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -21,6 +22,11 @@ import satellite_loader as sl
 import satellite_selection as ss
 
 PROJ = Path(__file__).resolve().parent.parent
+
+
+def t1end(dt_list):
+    """左闭右开栅格：真实终点 = 最后一点 + 一个步长（1 分钟）。"""
+    return dt_list[-1] + timedelta(minutes=1)
 
 LOCATIONS = [
     ("杭州", 30.25, 120.15), ("北京", 39.90, 116.40), ("乌鲁木齐", 43.83, 87.62),
@@ -56,12 +62,13 @@ def main():
         region, cfg = make_region_cfg(lat, lon)
         t0 = time.time()
         t, dt_list = cov.make_time_array(ts, *T8, 1)
+        t1 = t1end(dt_list)
         wbs = [cov.analyze_one_satellite(s, t, dt_list, region, cfg) for s in sats]
         el = time.time() - t0
         sat_cov = ss.build_slice_cover(sats, wbs, dt_list)
         full = ss.evaluate_selection(sat_cov, list(range(n_sat)), 1, 0, 1,
-                                     dt_list[0], dt_list[-1])
-        sel = ss.run_selection(sats, wbs, dt_list[0], dt_list[-1], step_minutes=1,
+                                     dt_list[0], t1)
+        sel = ss.run_selection(sats, wbs, dt_list[0], t1, step_minutes=1,
                                k_min=1, mrt_minutes=180, method="greedy",
                                req_mode="coverage_pct", coverage_pct=100.0)
         n_cover = sum(1 for w in wbs if w)
@@ -84,10 +91,11 @@ def main():
     print("\n== 2) 杭州 24h ==")
     region, cfg = make_region_cfg(30.25, 120.15)
     t, dt_list = cov.make_time_array(ts, *T24, 1)
+    t1 = t1end(dt_list)
     wbs24 = [cov.analyze_one_satellite(s, t, dt_list, region, cfg) for s in sats]
     sat_cov24 = ss.build_slice_cover(sats, wbs24, dt_list)
     full24 = ss.evaluate_selection(sat_cov24, list(range(n_sat)), 1, 0, 1,
-                                   dt_list[0], dt_list[-1])
+                                   dt_list[0], t1)
     rows.append({
         "场景": "杭州 24h", "卫星数": n_sat,
         "有覆盖星": sum(1 for w in wbs24 if w),
@@ -102,6 +110,7 @@ def main():
     print("\n== 3) 杭州 8h 五任务 ==")
     region, cfg = make_region_cfg(30.25, 120.15)
     t, dt_list = cov.make_time_array(ts, *T8, 1)
+    t1 = t1end(dt_list)
     wbs = [cov.analyze_one_satellite(s, t, dt_list, region, cfg) for s in sats]
     tasks = [
         ("① 覆盖率≥100%·最少", "coverage_pct", "min_sats", None, 100.0),
@@ -111,7 +120,7 @@ def main():
         ("⑤ 给定5颗·平均空窗最小", "any", "min_avg_gap", 5, 100.0),
     ]
     for label, req, obj, n, p in tasks:
-        r = ss.run_selection(sats, wbs, dt_list[0], dt_list[-1], step_minutes=1,
+        r = ss.run_selection(sats, wbs, dt_list[0], t1, step_minutes=1,
                              k_min=1, mrt_minutes=180, method="greedy",
                              req_mode=req, objective=obj, n_sats_limit=n,
                              coverage_pct=p)
@@ -126,9 +135,9 @@ def main():
         print(f"{label}: 选{len(r['selected'])}颗 覆盖率{ev['coverage_pct']:.1f}% "
               f"最大空窗{ev['mrt_actual_minutes']:.0f}分 平均空窗{ev['art_actual_minutes']:.0f}分")
 
-    # ---------- 4) 时间精度对比：1 分钟+10s 精化 vs 10 秒步长 ----------
+    # ---------- 4) 时间精度对比：10s 粗筛+1s 精化 vs 10 秒细算（P1 回归） ----------
     print("\n== 4) 时间精度对比（杭州 8h）==")
-    region, cfg10 = make_region_cfg(30.25, 120.15, step_minutes=1, refine=10)
+    region, cfg10 = make_region_cfg(30.25, 120.15, step_minutes=1, refine=1)
     t, dt_list = cov.make_time_array(ts, *T8, 1)
     wbs1 = [cov.analyze_one_satellite(s, t, dt_list, region, cfg10) for s in sats]
     region, cfg_fine = make_region_cfg(30.25, 120.15, step_minutes=1, refine=0)
@@ -151,13 +160,15 @@ def main():
     dur1 = sum((e - st).total_seconds() for w in wbs1 for st, e, _ in w)
     dur10 = sum((e - st).total_seconds() for w in wbs10 for st, e, _ in w)
     rows.append({
-        "场景": "杭州 8h 时间精度对比", "窗口数(1min+精化)": n_win1,
+        "场景": "杭州 8h 时间精度对比", "窗口数(10s粗筛+1s精化)": n_win1,
         "窗口数(10s步长)": n_win10,
-        "总覆盖秒(1min+精化)": int(dur1), "总覆盖秒(10s步长)": int(dur10),
+        "总覆盖秒(10s粗筛+1s精化)": int(dur1), "总覆盖秒(10s步长)": int(dur10),
         "时长偏差%": round(abs(dur1 - dur10) / max(dur10, 1) * 100, 2),
     })
-    print(f"1min+精化: 窗口{n_win1} 总覆盖{dur1:.0f}s | 10s步长: 窗口{n_win10} 总覆盖{dur10:.0f}s "
+    print(f"10s粗筛+1s精化: 窗口{n_win1} 总覆盖{dur1:.0f}s | 10s细算: 窗口{n_win10} 总覆盖{dur10:.0f}s "
           f"| 时长偏差{abs(dur1-dur10)/max(dur10,1)*100:.2f}%")
+    assert n_win1 == n_win10, f"P1 检测仍有漏检：{n_win1} vs 真值 {n_win10}"
+    assert abs(dur1 - dur10) / max(dur10, 1) < 0.02, "P1 时长偏差过大"
 
     # ---------- 输出 CSV ----------
     out_dir = PROJ / "output" / "validation"

@@ -144,6 +144,89 @@ def evaluate_selection(sat_cov, selected, k_min, mrt_minutes, step_minutes, t0, 
     }
 
 
+def evaluate_windows_exact(sats, windows_by_sat, selected, t0, t1, k_min,
+                           mrt_minutes=0.0, coverage_threshold_pct=None,
+                           min_event_minutes=0.0, minute_eval=None):
+    """窗口级精确评估（秒级，Q168/P1c）。
+
+    直接把被选卫星的覆盖窗口合并成覆盖时间线，按秒精确计算
+    覆盖率 / 最大空窗 / 平均空窗 / 连续判定，不受选星矩阵分钟片布尔化误差影响
+    （短窗口不再膨胀成整分钟、分钟内的短空窗不再被吞）。
+    返回结构与 evaluate_selection 一致；counts/covered/n_sim 沿用 minute_eval
+    （分钟片口径，供状态图等展示），gaps 为秒级精确值。
+    """
+    t0s = t0.timestamp()
+    t1s = t1.timestamp()
+    period_s = max(1.0, t1s - t0s)
+    min_sec = float(min_event_minutes) * 60.0
+    delta = {}
+    for j in selected:
+        for start, end, _ratio in windows_by_sat[j]:
+            if end <= start:
+                continue
+            if min_sec > 0 and (end - start).total_seconds() < min_sec:
+                continue
+            s = max(start.timestamp(), t0s)
+            e = min(end.timestamp(), t1s)
+            if e <= s:
+                continue
+            delta[s] = delta.get(s, 0) + 1
+            delta[e] = delta.get(e, 0) - 1
+
+    covered_s = 0.0
+    gaps_raw = []
+    cov = 0
+    gap_start = t0s if k_min > 0 else None   # 初始未覆盖：空窗从 t0 开始
+    prev = t0s
+    for ts_ in sorted(delta):
+        # 区间 [prev, ts_) 的状态由 cov 决定（应用 ts_ 处事件之前）
+        if cov >= k_min:
+            covered_s += (ts_ - prev)
+        cov += delta[ts_]
+        if cov >= k_min:
+            # 覆盖开始：闭合空窗
+            if gap_start is not None:
+                gaps_raw.append((gap_start, ts_))
+                gap_start = None
+        else:
+            # 覆盖结束：开启空窗
+            if gap_start is None:
+                gap_start = ts_
+        prev = ts_
+    if cov >= k_min:
+        covered_s += (t1s - prev)
+    else:
+        gaps_raw.append((gap_start if gap_start is not None else prev, t1s))
+
+    gaps = [{
+        "start_utc": datetime.fromtimestamp(s, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "end_utc": datetime.fromtimestamp(e, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "duration_minutes": round((e - s) / 60.0, 1),
+        "duration_s": int(round(e - s)),
+    } for s, e in gaps_raw]
+    mrt_actual = max(((e - s) / 60.0 for s, e in gaps_raw), default=0.0)
+    art_actual = (float(np.mean([(e - s) / 60.0 for s, e in gaps_raw]))
+                  if gaps_raw else 0.0)
+    coverage_pct = covered_s / period_s * 100.0
+    if coverage_threshold_pct is not None:
+        satisfied = coverage_pct >= coverage_threshold_pct
+    else:
+        satisfied = coverage_pct > 0 and mrt_actual <= mrt_minutes
+    me = minute_eval or {}
+    return {
+        "counts": me.get("counts"),
+        "covered": me.get("covered"),
+        "gaps": gaps,
+        "mrt_actual_minutes": mrt_actual,
+        "art_actual_minutes": art_actual,
+        "coverage_pct": coverage_pct,
+        "n_sim_mean": me.get("n_sim_mean", 0.0),
+        "n_sim_max": me.get("n_sim_max", 0),
+        "satisfied": satisfied,
+        "exact": True,
+    }
+
+
 def _feasible(sat_cov, selected, k_min, mrt_minutes, step_minutes):
     """判断一组被选卫星是否满足需求（用于贪心的'能删就删'改进）。"""
     counts = _counts_of(sat_cov, selected)
@@ -351,8 +434,11 @@ def ilp_select_min_max_gap(sat_cov, k_min, n_limit, step_minutes, time_limit=60)
     best = None
     while lo < hi:
         mid = (lo + hi) // 2
-        sel, cnts, status, _note = ilp_select(sat_cov, k_min, mid, step_minutes,
-                                              time_limit=time_limit, n_limit=n_limit)
+        # P2 修复（Q155/附录A问题1）：mid 是"时间片数"，ilp_select 期望"分钟"，
+        # step_minutes=1 时两者相等，>1 时必须换算
+        sel, cnts, status, _note = ilp_select(sat_cov, k_min, mid * step_minutes,
+                                              step_minutes, time_limit=time_limit,
+                                              n_limit=n_limit)
         if sel is not None and status in ("Optimal", "Not Solved") and sel:
             best = (sel, cnts, mid)
             hi = mid
@@ -727,8 +813,18 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     }
 
     # 全池基线（不选星、全部参与能达到的覆盖水平 = 物理上限）
-    full = evaluate_selection(sat_cov, list(range(n_sat)), k_min, eff_mrt,
-                              step_minutes, t0, t1, coverage_threshold_pct=cov_thr)
+    def _exact(sel, minute=None):
+        """分钟片选候选 + 窗口级精确评估最终指标（Q168/P1c）。"""
+        if minute is None:
+            minute = evaluate_selection(sat_cov, sel, k_min, eff_mrt, step_minutes,
+                                        t0, t1, coverage_threshold_pct=cov_thr)
+        return evaluate_windows_exact(sats, windows_by_sat, sel, t0, t1, k_min,
+                                      mrt_minutes=eff_mrt,
+                                      coverage_threshold_pct=cov_thr,
+                                      min_event_minutes=min_event_minutes,
+                                      minute_eval=minute)
+
+    full = _exact(list(range(n_sat)))
     res["full"] = full
     if req_mode == "continuous" and not full["satisfied"]:
         res["feasibility"] = {
@@ -768,9 +864,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         algo_note = base_note + "（贪心）"
         res["greedy"] = {
             "selected": g_sel_mc,
-            "eval": evaluate_selection(sat_cov, g_sel_mc, k_min, eff_mrt,
-                                       step_minutes, t0, t1,
-                                       coverage_threshold_pct=cov_thr),
+            "eval": _exact(g_sel_mc),
             "note": "",
         }
         res["ilp"] = None
@@ -788,18 +882,14 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
                 algo_note = i_note + (f"（最长空窗 {i_gap:.0f} 分钟）" if i_gap is not None else "")
                 res["ilp"] = {
                     "selected": i_sel,
-                    "eval": evaluate_selection(sat_cov, i_sel, k_min, eff_mrt,
-                                               step_minutes, t0, t1,
-                                               coverage_threshold_pct=cov_thr),
+                    "eval": _exact(i_sel),
                     "status": i_st, "note": i_note,
                 }
             elif objective == "min_avg_gap":
                 algo_note = base_note + "（平均空窗为分式目标，当前用贪心，无精确 ILP）"
         res["selected"] = sel_mc
         res["selected_names"] = [sats[j].name for j in sel_mc]
-        res["eval"] = evaluate_selection(sat_cov, sel_mc, k_min, eff_mrt,
-                                         step_minutes, t0, t1,
-                                         coverage_threshold_pct=cov_thr)
+        res["eval"] = _exact(sel_mc)
         res["algo"] = algo
         res["algo_note"] = algo_note
         res["detail_rows"] = _sat_detail(sats, windows_by_sat, sel_mc,
@@ -838,8 +928,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         g_sel, g_counts = greedy_select(sat_cov, k_min, eff_mrt, step_minutes)
     res["greedy"] = {
         "selected": g_sel,
-        "eval": evaluate_selection(sat_cov, g_sel, k_min, eff_mrt, step_minutes, t0, t1,
-                                     coverage_threshold_pct=cov_thr),
+        "eval": _exact(g_sel),
         "note": "",
     }
     ilp = None
@@ -849,9 +938,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         if sel_i is not None:
             ilp = {
                 "selected": sel_i,
-                "eval": evaluate_selection(sat_cov, sel_i, k_min, eff_mrt,
-                                          step_minutes, t0, t1,
-                                          coverage_threshold_pct=cov_thr),
+                "eval": _exact(sel_i),
                 "status": status_i, "note": note_i,
             }
     elif method in ("both", "ilp"):
@@ -860,9 +947,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         if sel_i is not None:
             ilp = {
                 "selected": sel_i,
-                "eval": evaluate_selection(sat_cov, sel_i, k_min, eff_mrt,
-                                          step_minutes, t0, t1,
-                                          coverage_threshold_pct=cov_thr),
+                "eval": _exact(sel_i),
                 "status": status_i, "note": note_i,
             }
     res["ilp"] = ilp
@@ -1050,7 +1135,7 @@ def main(argv=None):
     for sat in sats:
         windows_by_sat.append(cov.analyze_one_satellite(sat, t, dt_list, region, cfg))
     t0 = dt_list[0]
-    t1 = dt_list[-1]
+    t1 = dt_list[-1] + timedelta(minutes=args.step)   # 左闭右开：真实终点
     res = run_selection(sats, windows_by_sat, t0, t1,
                         step_minutes=args.step, k_min=args.k_min,
                         mrt_minutes=args.mrt, min_event_minutes=args.min_event,

@@ -339,6 +339,21 @@ def main():
               r_d2["eval"]["mrt_actual_minutes"] >= 0
               and r_d2["eval"].get("exact") is True,
               f"algo={r_d2['algo']} 空窗={r_d2['eval']['mrt_actual_minutes']:.1f}分")
+        r_f = ss.run_selection(res8["sats"], res8["windows_by_sat"],
+                               res8["t0"], res8["t1"],
+                               step_minutes=1, k_min=1, mrt_minutes=1.0,
+                               method="both", req_mode="coverage_pct", coverage_pct=100.0,
+                               decision_step_seconds=10)
+        check("高精度决策(10s)：强制贪心、无 ILP、精确评估",
+              r_f["algo"] in ("greedy", "greedy-budget")
+              and r_f.get("ilp") is None
+              and r_f["eval"].get("exact") is True
+              and r_f.get("decision_step_seconds") == 10
+              and "贪心" in r_f.get("algo_note", ""),
+              f"algo={r_f['algo']} note={r_f.get('algo_note', '')[:60]}")
+        check("高精度决策(10s)：连续覆盖仍满足",
+              r_f["eval"]["satisfied"],
+              f"cov={r_f['eval']['coverage_pct']:.1f}%")
     except Exception as _ex:
         check("新算法回归（中国遥感全量）", False, str(_ex))
 

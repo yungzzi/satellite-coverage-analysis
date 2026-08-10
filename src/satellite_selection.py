@@ -771,7 +771,8 @@ def _cov_sol(sat_cov, sats, k_min, sel, step_minutes, t0, t1):
 def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
                   mrt_minutes=30, min_event_minutes=0.0, method="both",
                   time_limit=180, req_mode="continuous", objective="min_sats",
-                  n_sats_limit=None, max_solutions=10, coverage_pct=100.0):
+                  n_sats_limit=None, max_solutions=10, coverage_pct=100.0,
+                  decision_step_seconds=0):
     """选星总入口：算覆盖矩阵 → 贪心/ILP → 统计 → 对比全池。
 
     req_mode: "continuous"=连续覆盖（无空窗，每个时间片都达标）；
@@ -783,11 +784,19 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
       full（全池基线）/ feasibility（连续覆盖物理上限）/ optimal_solutions（全部最优方案）
       selected / selected_names / detail_rows / gaps / state_rows / compare_rows / summary
     """
+    decision_step_seconds = int(decision_step_seconds or 0)
+    fine = decision_step_seconds > 0
+    dec_step = decision_step_seconds / 60.0 if fine else float(step_minutes)
+    # 高精度决策（Q173）：决策矩阵 10s，只允许贪心（ILP 规模过大，见 Q170 实测）
+    fine_note = ("决策矩阵 10 秒（高精度）：整数规划规模过大，自动使用贪心。" if fine else "")
+    if fine and method in ("both", "ilp"):
+        method = "greedy"
     dt_list = []
     t = t0
     while t < t1:
         dt_list.append(t)
-        t += timedelta(minutes=step_minutes)
+        t += (timedelta(seconds=decision_step_seconds) if fine
+              else timedelta(minutes=dec_step))
     if not dt_list:
         dt_list = [t0]
     sat_cov = build_slice_cover(sats, windows_by_sat, dt_list, min_event_minutes)
@@ -805,6 +814,8 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         "objective": objective,
         "n_sats_limit": int(n_sats_limit) if n_sats_limit else None,
         "step_minutes": int(step_minutes),
+        "decision_step_seconds": decision_step_seconds,
+        "decision_step_minutes": dec_step,
         "min_event_minutes": float(min_event_minutes),
         "method": method, "n_sats_total": n_sat,
         "sats": sats, "sat_cov": sat_cov,
@@ -816,7 +827,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     def _exact(sel, minute=None):
         """分钟片选候选 + 窗口级精确评估最终指标（Q168/P1c）。"""
         if minute is None:
-            minute = evaluate_selection(sat_cov, sel, k_min, eff_mrt, step_minutes,
+            minute = evaluate_selection(sat_cov, sel, k_min, eff_mrt, dec_step,
                                         t0, t1, coverage_threshold_pct=cov_thr)
         return evaluate_windows_exact(sats, windows_by_sat, sel, t0, t1, k_min,
                                       mrt_minutes=eff_mrt,
@@ -849,15 +860,15 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         n_lim = int(n_sats_limit) if n_sats_limit else min(10, n_sat)
         if objective == "max_coverage":
             g_sel_mc, g_counts_mc = select_max_coverage(sat_cov, n_lim, k_min,
-                                                        step_minutes, t0, t1)
+                                                        dec_step, t0, t1)
             base_note = f"目标：给定 {n_lim} 颗最大化组合覆盖率（覆盖率=被覆盖时间片占比）"
         elif objective == "min_max_gap":
             g_sel_mc, g_counts_mc = select_min_gap(sat_cov, n_lim, k_min,
-                                                   step_minutes, t0, t1, mode="max")
+                                                   dec_step, t0, t1, mode="max")
             base_note = f"目标：给定 {n_lim} 颗最小化最大空窗（MMRT）"
         else:
             g_sel_mc, g_counts_mc = select_min_gap(sat_cov, n_lim, k_min,
-                                                   step_minutes, t0, t1, mode="avg")
+                                                   dec_step, t0, t1, mode="avg")
             base_note = f"目标：给定 {n_lim} 颗最小化平均空窗（MART）"
         sel_mc, counts_mc = g_sel_mc, g_counts_mc
         algo = "greedy-budget"
@@ -875,7 +886,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
                     sat_cov, k_min, n_lim, time_limit=time_limit)
             elif objective == "min_max_gap":
                 i_sel, i_cnt, i_st, i_note, i_gap = ilp_select_min_max_gap(
-                    sat_cov, k_min, n_lim, step_minutes, time_limit=60)
+                    sat_cov, k_min, n_lim, dec_step, time_limit=60)
             if i_sel is not None and i_st in ("Optimal", "Not Solved") and i_sel:
                 sel_mc, counts_mc = i_sel, i_cnt
                 algo = "ilp"
@@ -891,9 +902,10 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
         res["selected_names"] = [sats[j].name for j in sel_mc]
         res["eval"] = _exact(sel_mc)
         res["algo"] = algo
-        res["algo_note"] = algo_note
+        res["algo_note"] = ((algo_note + " " + fine_note).strip()
+                            if fine_note else algo_note)
         res["detail_rows"] = _sat_detail(sats, windows_by_sat, sel_mc,
-                                         step_minutes, period_minutes)
+                                         dec_step, period_minutes)
         counts = res["eval"]["counts"]
         sel_set = set(sel_mc)
         res["state_rows"] = _state_rows(sats, sat_cov, counts, sel_set, dt_list)
@@ -923,9 +935,9 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
 
     # ---- 目标模式①：最少颗数满足需求 ----
     if req_mode == "coverage_pct":
-        g_sel, g_counts = greedy_select_coverage(sat_cov, k_min, float(coverage_pct), step_minutes)
+        g_sel, g_counts = greedy_select_coverage(sat_cov, k_min, float(coverage_pct), dec_step)
     else:
-        g_sel, g_counts = greedy_select(sat_cov, k_min, eff_mrt, step_minutes)
+        g_sel, g_counts = greedy_select(sat_cov, k_min, eff_mrt, dec_step)
     res["greedy"] = {
         "selected": g_sel,
         "eval": _exact(g_sel),
@@ -934,7 +946,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     ilp = None
     if method in ("both", "ilp") and req_mode == "coverage_pct":
         sel_i, counts_i, status_i, note_i = ilp_select_coverage(
-            sat_cov, k_min, float(coverage_pct), step_minutes, time_limit=time_limit)
+            sat_cov, k_min, float(coverage_pct), dec_step, time_limit=time_limit)
         if sel_i is not None:
             ilp = {
                 "selected": sel_i,
@@ -943,7 +955,7 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
             }
     elif method in ("both", "ilp"):
         sel_i, counts_i, status_i, note_i = ilp_select(
-            sat_cov, k_min, eff_mrt, step_minutes, time_limit=time_limit)
+            sat_cov, k_min, eff_mrt, dec_step, time_limit=time_limit)
         if sel_i is not None:
             ilp = {
                 "selected": sel_i,
@@ -970,10 +982,11 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     res["selected_names"] = [sats[j].name for j in final["selected"]]
     res["eval"] = final["eval"]
     res["algo"] = final["algo"]
-    res["algo_note"] = final.get("note", "")
+    _an = final.get("note", "")
+    res["algo_note"] = ((_an + " " + fine_note).strip() if fine_note else _an)
 
     res["detail_rows"] = _sat_detail(sats, windows_by_sat, final["selected"],
-                                     step_minutes, period_minutes)
+                                     dec_step, period_minutes)
     counts = final["eval"]["counts"]
     sel_set = set(final["selected"])
     res["state_rows"] = _state_rows(sats, sat_cov, counts, sel_set, dt_list)
@@ -1000,13 +1013,13 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     # 全部最优方案（仅最少颗数目标；无全程星时用 ILP no-good cut 收集）
     if req_mode == "coverage_pct":
         _opt_sols, _opt_note = enumerate_optimal_coverage_solutions(
-            sat_cov, sats, k_min, float(coverage_pct), step_minutes,
+            sat_cov, sats, k_min, float(coverage_pct), dec_step,
             max_solutions=max_solutions, time_limit=60)
         res["optimal_solutions"] = _opt_sols
         res["optimal_note"] = _opt_note
     else:
         _opt_sols, _opt_note = enumerate_optimal_solutions(
-            sat_cov, sats, k_min, eff_mrt, step_minutes,
+            sat_cov, sats, k_min, eff_mrt, dec_step,
             max_solutions=max_solutions, time_limit=time_limit)
         res["optimal_solutions"] = _opt_sols
         res["optimal_note"] = _opt_note
@@ -1033,8 +1046,11 @@ def _summary_text(res):
         "min_avg_gap": f"给定 {res.get('n_sats_limit') or 0} 颗最小化平均空窗（MART）",
     }
     obj_label = obj_map.get(res["objective"], res["objective"])
+    _step_txt = (f"决策步长 {res['decision_step_seconds']} 秒（高精度，仅贪心）"
+                 if res.get("decision_step_seconds")
+                 else f"步长 {res['step_minutes']} 分钟")
     lines = [
-        f"需求模式：{req_label}（K={res['k_min']}，步长 {res['step_minutes']} 分钟）",
+        f"需求模式：{req_label}（K={res['k_min']}，{_step_txt}）",
         f"目标模式：{obj_label}",
         f"卫星池 {res['n_sats_total']} 颗 → 选中 {len(res['selected'])} 颗（算法：{res['algo']}）",
         f"组合覆盖率 {ev['coverage_pct']:.1f}%，最大空窗 {ev['mrt_actual_minutes']:.1f} 分钟，"
@@ -1074,6 +1090,8 @@ def main(argv=None):
     ap.add_argument("--start", required=True, help="开始时间 UTC，如 2026-08-03 00:00:00")
     ap.add_argument("--end", required=True, help="结束时间 UTC")
     ap.add_argument("--step", type=int, default=1, help="时间步长（分钟）")
+    ap.add_argument("--decision-step-seconds", type=int, default=0,
+                    help="选星决策矩阵步长（秒）：0=用 --step 分钟；10=高精度决策矩阵（仅贪心，Q173）")
     ap.add_argument("--fov", type=float, default=30.0, help="视场半角（度）")
     ap.add_argument("--elev", type=float, default=10.0, help="最小仰角（度）")
     ap.add_argument("--grid", type=float, default=0.2, help="网格间距（度）")
@@ -1141,7 +1159,8 @@ def main(argv=None):
                         mrt_minutes=args.mrt, min_event_minutes=args.min_event,
                         method=args.method, req_mode=args.req_mode,
                         objective=args.objective, n_sats_limit=args.n_sats,
-                        max_solutions=10, coverage_pct=args.coverage_pct)
+                        max_solutions=10, coverage_pct=args.coverage_pct,
+                        decision_step_seconds=args.decision_step_seconds)
     print(res["summary"])
     print()
     print("推荐卫星：", "、".join(res["selected_names"]) or "（无）")
@@ -1184,6 +1203,8 @@ def export_selection_xlsx(res, path, region_name="", extra_meta=None):
         "分析地区": region_name or "",
         "分析时段(UTC)": f"{res['t0']:%Y-%m-%d %H:%M:%S} ~ {res['t1']:%Y-%m-%d %H:%M:%S}",
         "时间步长(分钟)": res["step_minutes"],
+        "决策步长": (f"{res['decision_step_seconds']} 秒（高精度，仅贪心）"
+                  if res.get("decision_step_seconds") else f"{res['step_minutes']} 分钟"),
         "需求模式": req_label,
         "目标模式": obj_label,
         "需求-K(最少同时可见)": (res["k_min"]

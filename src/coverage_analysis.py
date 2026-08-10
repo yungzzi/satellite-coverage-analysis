@@ -71,14 +71,15 @@ CONFIG = {
     "satellite_keywords": ["YAOGAN"],
     "start_utc": "2026-08-03 00:00:00",          # 分析开始时间（UTC）
     "end_utc": "2026-08-03 08:00:00",            # 分析结束时间（UTC）
-    "step_minutes": 1,                            # 粗筛时间步长（分钟）
+    "step_minutes": 1,                            # 输出/选星时间步长（分钟），决策矩阵粒度（P1 解耦）
+    "coarse_step_seconds": 10,                    # 检测步长（秒）：粗筛网格，短窗口不漏检（Q161/P1）
     "fov_half_angle_deg": 10.0,                   # 视场半角（度）：视线张角/天底圆锥半角（假设值，Q147）
     "min_elevation_deg": 10.0,                    # 最小仰角（度）：太低受大气影响，不算有效覆盖
     "grid_spacing_deg": 0.2,                      # 网格间距（度，约 22 km）
     "max_gantt_rows": 15,                         # 甘特图最多画几颗星（按覆盖时长排名）
     "save_gantt": False,                          # 甘特图默认不生成；需要时改 True
     "save_plots": False,                          # 两张图默认都不生成；需要演示图时改 True
-    "refine_step_seconds": 10,                    # 两段式：窗口边界精化步长（秒），0=不精化
+    "refine_step_seconds": 1,                     # 两段式：窗口边界精化步长（秒），0=不精化（P1 改 1s）
     "refine_margin_minutes": 3,                   # 精化时向窗口两侧多扫的分钟数
 }
 
@@ -113,6 +114,8 @@ def apply_config_file(cfg, path):
         cfg["end_utc"] = str(data["end_utc"])
     if "step_minutes" in data:
         cfg["step_minutes"] = int(data["step_minutes"])
+    if "coarse_step_seconds" in data:
+        cfg["coarse_step_seconds"] = int(data["coarse_step_seconds"])
     # 传感器参数（全局默认；"按星分配不同参数"是后续功能，设计中）
     if "fov_half_angle_deg" in data:
         cfg["fov_half_angle_deg"] = float(data["fov_half_angle_deg"])
@@ -184,12 +187,13 @@ def load_satellites(tle_path, keywords, ts):
 # ==================== 3. 时间轴 ====================
 
 def make_time_array(ts, start_str, end_str, step_minutes):
-    """生成 [开始, 结束] 的等间隔时间点（datetime 列表 + skyfield 时间对象）"""
+    """生成 [开始, 结束) 的等间隔时间点（左闭右开，不含终点 t1；datetime 列表 + skyfield 时间对象）。
+    与选星 run_selection 的栅格一致（Q151/P3）。"""
     t0 = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     t1 = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     dt_list = []
     t = t0
-    while t <= t1:
+    while t < t1:
         dt_list.append(t)
         t += timedelta(minutes=step_minutes)
     return ts.from_datetimes(dt_list), dt_list
@@ -293,8 +297,8 @@ def circle_overlap_ratio(d_km, r_foot_km, r_target_km):
     r1, r2, d = r_foot_km, r_target_km, d_km
     a = (r1 * r1 * np.arccos((d * d + r1 * r1 - r2 * r2) / (2 * d * r1))
          + r2 * r2 * np.arccos((d * d + r2 * r2 - r1 * r1) / (2 * d * r2))
-         - 0.5 * np.sqrt(((-d + r1 + r2) * (d + r1 - r2)
-                          * (d - r1 + r2) * (d + r1 + r2)).clip(0)))
+         - 0.5 * np.sqrt(np.clip((-d + r1 + r2) * (d + r1 - r2)
+                                 * (d - r1 + r2) * (d + r1 + r2), 0, None)))
     return min(1.0, a / (np.pi * r2 * r2))
 
 
@@ -362,43 +366,68 @@ def compute_covered_series(sat, t, dt_list, region, cfg):
     return covered_grid.any(axis=1), covered_grid.mean(axis=1)
 
 
-def analyze_one_satellite(sat, t, dt_list, region, cfg):
+def analyze_one_satellite(sat, t, dt_list, region, cfg, period_end=None):
     """
     分析单颗卫星的覆盖情况，返回窗口列表：
     [(开始datetime, 结束datetime, 窗口内最大覆盖比例), ...]
-    两段式：先用 1 分钟粗筛出窗口，再对每个窗口边界附近做细网格精化
-    （默认 10 秒），让窗口起止精确到秒级，而不用全程细算。
+
+    两段式（P1 解耦，Q161/Q168）：
+      第一步 检测：按 coarse_step_seconds（默认 10s）粗网格整段扫描，找出"大致覆盖段"；
+      第二步 精化：对每个粗窗口边界 ±margin 按 refine_step_seconds（默认 1s）加密，
+               把起止定到秒级；横跨整个分析时段的窗口（边界=时段端点）跳过不精化（Q162 性能守卫）；
+               精化时按连续覆盖段切分，被空隙隔开的两个真实窗口不会被错误合并。
+    dt_list 只提供时段范围（[t0, t1) 左闭右开）与 skyfield 时间基准，不再决定检测步长。
+    period_end：分析时段真实终点（默认 dt_list[-1] + step，兼容旧调用）。
     """
-    # ---- 第一步：1 分钟粗筛 ----
-    covered, ratio = compute_covered_series(sat, t, dt_list, region, cfg)
+    t_lo = dt_list[0]
+    step_s = int(cfg.get("step_minutes", 1)) * 60
+    if period_end is None:
+        period_end = dt_list[-1] + timedelta(seconds=step_s)
+    coarse = int(cfg.get("coarse_step_seconds", 10))
+    refine = int(cfg.get("refine_step_seconds", 0))
+
+    # ---- 第一步：coarse 秒粗筛（检测步长与输出/选星步长解耦） ----
+    dt_coarse = make_dt_series(t_lo, period_end, coarse)
+    t_coarse = t.ts.from_datetimes(dt_coarse)
+    covered, ratio = compute_covered_series(sat, t_coarse, dt_coarse, region, cfg)
     windows = []
     in_window = False
     for i, c in enumerate(covered):
         if c and not in_window:
-            start = dt_list[i]
+            start = dt_coarse[i]
             in_window = True
         elif not c and in_window:
-            windows.append([start, dt_list[i - 1], float(ratio[i - 1])])
+            windows.append([start, dt_coarse[i - 1], float(ratio[i - 1])])
             in_window = False
     if in_window:
-        windows.append([start, dt_list[-1], float(ratio[-1])])
+        windows.append([start, dt_coarse[-1], float(ratio[-1])])
 
     # ---- 第二步：窗口边界精化（两段式） ----
-    refine = cfg.get("refine_step_seconds", 0)
-    margin = cfg.get("refine_margin_minutes", 3)
+    margin = timedelta(minutes=cfg.get("refine_margin_minutes", 3))
     if refine and windows:
         refined = []
         for start, end, r in windows:
-            dt_f = make_dt_series(start - timedelta(minutes=margin),
-                                  end + timedelta(minutes=margin), refine)
+            # 横跨全时段（覆盖到两端）的窗口：边界就是 t0/t1，无需重算（Q162 性能守卫）
+            if start - margin <= t_lo and end + margin >= period_end:
+                refined.append([start, end, r])
+                continue
+            dt_f = make_dt_series(start - margin, end + margin, refine)
             t_f = t.ts.from_datetimes(dt_f)
             cov_f, _ = compute_covered_series(sat, t_f, dt_f, region, cfg)
             idx = np.where(cov_f)[0]
-            if len(idx):
-                refined.append([dt_f[idx[0]], dt_f[idx[-1]], r])
-            else:
+            if not len(idx):
                 refined.append([start, end, r])
-        # 两个粗窗口相距很近时精化区间会重叠，合并一下
+                continue
+            # 按连续覆盖段切分：间隔 ≥1 个精化步长就拆开，避免合并两个真实窗口（P1）
+            seg_start = idx[0]
+            prev_i = idx[0]
+            for k in idx[1:]:
+                if k > prev_i + 1:
+                    refined.append([dt_f[seg_start], dt_f[prev_i], r])
+                    seg_start = k
+                prev_i = k
+            refined.append([dt_f[seg_start], dt_f[prev_i], r])
+        # 相邻窗口触碰/重叠才合并（间隔 ≥ refine 秒的不合并）
         refined.sort(key=lambda w: w[0])
         merged = []
         for w in refined:
@@ -408,9 +437,8 @@ def analyze_one_satellite(sat, t, dt_list, region, cfg):
             else:
                 merged.append(w)
         windows = [tuple(w) for w in merged]
-        # 精化会向窗口两侧多扫 margin 分钟，可能越过分析时段边界，裁回分析时段内
-        t_lo, t_hi = dt_list[0], dt_list[-1]
-        windows = [(max(s, t_lo), min(e, t_hi), r) for s, e, r in windows]
+        # 精化会向窗口两侧多扫 margin 分钟，可能越过分析时段边界，裁回 [t_lo, period_end]
+        windows = [(max(s, t_lo), min(e, period_end), r) for s, e, r in windows]
         # 边界裁剪后可能出现 0 时长伪窗口（窗口实际在时段外），过滤掉（Q92 多坐标验证发现）
         windows = [w for w in windows if w[1] > w[0]]
     return windows
@@ -458,7 +486,7 @@ def build_state_table(all_windows, t0, t1, cfg):
     卫星名单按"整个分析时段内的覆盖总时长"降序排（最勤快的排前面）。
     """
     step_s = cfg["step_minutes"] * 60
-    n = int(round((t1 - t0).total_seconds() / step_s)) + 1
+    n = int(round((t1 - t0).total_seconds() / step_s))   # 左闭右开：480 片（8h）
     sats_at_min = [set() for _ in range(n)]
     for name, start, end, ratio in all_windows:
         i0 = int(np.ceil((start - t0).total_seconds() / step_s - 1e-9))
@@ -783,6 +811,7 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
     import satellite_loader as sl  # 延迟导入，避免模块顶层互相依赖
     ts = sl.load.timescale(builtin=True)
     t, dt_list = make_time_array(ts, start_str, end_str, int(cfg.get("step_minutes", 1)))
+    t1_true = dt_list[-1] + timedelta(seconds=int(cfg.get("step_minutes", 1)) * 60)
     sats = sl.records_to_satellites(recs)
     if sensor_params is None:
         sensor_params = sl.load_sensor_params()   # 文件不存在则空表 = 全用全局默认
@@ -807,19 +836,20 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
                 f"{sat.name}（NORAD {sat.norad_id}，{tag}）：填了幅宽但高轨/静止卫星"
                 f"没有条带成像概念，已改按视场半角 {fov_back}° 计算")
         sat_params.append({"name": sat.name, **info})
-        windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg)
+        windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg,
+                                        period_end=t1_true)
         windows_by_sat.append(windows)
         all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
     if not all_windows:
         return None
-    dfs = build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats),
+    dfs = build_outputs(all_windows, cfg, dt_list[0], t1_true, len(sats),
                         sat_params=sat_params)
     return {
         "dfs": dfs, "cfg": cfg, "n_sats": len(sats), "n_win": len(all_windows),
         "windows_by_sat": windows_by_sat, "sats": sats,
         "sat_params": sat_params,
         "sensor_warnings": sensor_warnings,
-        "t0": dt_list[0], "t1": dt_list[-1],
+        "t0": dt_list[0], "t1": t1_true,
     }
 
 
@@ -924,6 +954,7 @@ def main():
 
     # 3) 时间轴
     t, dt_list = make_time_array(ts, cfg["start_utc"], cfg["end_utc"], cfg["step_minutes"])
+    t1_true = dt_list[-1] + timedelta(seconds=int(cfg["step_minutes"]) * 60)
     print(f"时间轴：{dt_list[0]} ~ {dt_list[-1]}（UTC），步长 {cfg['step_minutes']} 分钟，"
           f"共 {len(dt_list)} 步")
 
@@ -945,7 +976,8 @@ def main():
                 f"  {sat.name}（NORAD {norad}，{tag}）：幅宽不适用，"
                 f"已按视场半角 {fov_back}° 计算")
         sat_params.append({"name": sat.name, **info})
-        windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg)
+        windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg,
+                                        period_end=t1_true)
         all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
         if windows:
             print(f"  {sat.name}: {len(windows)} 个覆盖窗口")
@@ -953,7 +985,7 @@ def main():
         print(w)
 
     # 5) 输出（CSV 四件套 + 文字摘要 + 图 + 元信息）
-    build_outputs(all_windows, cfg, dt_list[0], dt_list[-1], len(sats),
+    build_outputs(all_windows, cfg, dt_list[0], t1_true, len(sats),
                   sat_params=sat_params)
 
 

@@ -18,7 +18,8 @@ target_radius_km = 5.0
 # ---------- 分析时段（UTC，北京时间 = UTC+8） ----------
 start_utc = "2026-08-03 00:00:00"
 end_utc = "2026-08-03 08:00:00"
-step_minutes = 1
+step_minutes = 1          # 输出/选星时间片（分钟）；检测步长与它解耦，见 coarse_step_seconds
+coarse_step_seconds = 10  # 检测步长（秒）：10s 粗筛不漏检短窗口（Q161/P1）
 
 # ---------- 传感器参数（全局默认） ----------
 # 逐星覆盖：见 data/sensor_params.toml（只按 NORAD 匹配；未设置用这里的默认值；

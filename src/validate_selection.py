@@ -326,8 +326,26 @@ def main():
               r_a["algo"] == "ilp" and len(r_a["compare_rows"]) >= 3
               and any("贪心" in str(x.get("口径", "")) for x in r_a["compare_rows"]),
               f"{len(r_a['compare_rows'])} 行")
+        check("精确评估：最终指标为窗口级（exact=True，空窗含秒）",
+              r_a["eval"].get("exact") is True
+              and all("duration_s" in g for g in r_a["gaps"]),
+              f"gaps={len(r_a['gaps'])}")
+        r_d2 = ss.run_selection(res8["sats"], res8["windows_by_sat"],
+                                res8["t0"], res8["t1"],
+                                step_minutes=2, k_min=1, mrt_minutes=2.0,
+                                method="both", req_mode="any", objective="min_max_gap",
+                                n_sats_limit=3)
+        check("P2 修复：step>1 的 min_max_gap 正常出解",
+              r_d2["eval"]["mrt_actual_minutes"] >= 0
+              and r_d2["eval"].get("exact") is True,
+              f"algo={r_d2['algo']} 空窗={r_d2['eval']['mrt_actual_minutes']:.1f}分")
     except Exception as _ex:
         check("新算法回归（中国遥感全量）", False, str(_ex))
+
+    print("== 9. 健壮性：circle_overlap_ratio 纯 float 输入 ==")
+    _r = cov.circle_overlap_ratio(50.0, 30.0, 20.0)
+    check("float 输入部分相交不崩", isinstance(_r, float) and 0.0 <= _r <= 1.0,
+          f"r={_r}")
 
     print("========================================")
     print(f"结果：{PASS} 项通过，{FAIL} 项失败")

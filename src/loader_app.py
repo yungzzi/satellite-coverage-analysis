@@ -1025,7 +1025,7 @@ if tab_analysis.open:
     st.subheader("覆盖分析")
     st.caption("选好收藏夹（卫星来源）后，设置目标区域与时间直接开算；"
                "覆盖判定参数沿用已拍板默认值（视场半角 10°=视线张角假设、最小仰角 10°、"
-               "1 分钟步长 + 10 秒精化；幅宽为逐星可选，默认不生效）。")
+               "10 秒检测 + 1 秒边界精化、选星按 1 分钟片；幅宽为逐星可选，默认不生效）。")
     all_cols = sl.load_all_collections()
     cov_names = [_collection_label(x) for x in all_cols]
 
@@ -1141,8 +1141,10 @@ if tab_analysis.open:
         p3, p4 = st.columns(2)
         cov_step = p3.number_input("时间步长(分钟)", value=1, min_value=1, step=1,
                                    key="cov_step")
-        cov_refine = p4.number_input("边界精化(秒)", value=10, min_value=0, step=5,
-                                     key="cov_refine")
+        cov_refine = p4.number_input("边界精化(秒)", value=1, min_value=0, step=1,
+                                     key="cov_refine",
+                                     help="窗口边界精化步长（默认 1 秒，P1）；"
+                                          "检测步长为 10 秒（config.toml 可改 coarse_step_seconds）")
         st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。"
                    "结果会同时保存到 output/ 目录。")
 
@@ -1554,6 +1556,8 @@ if tab_analysis.open:
                     else:
                         _algo_txt += f"（选中 {_gn} 颗）"
                 st.caption(_algo_txt)
+                st.caption("覆盖率/空窗为窗口级精确值（秒级）；选星搜索在 1 分钟片上做，"
+                           "最终指标用覆盖窗口精确回算，分钟内的短空窗不会被吞。")
                 if not sel_res["eval"]["satisfied"]:
                     if sel_res["req_mode"] == "continuous":
                         _fb = sel_res.get("feasibility", {})

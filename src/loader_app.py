@@ -1128,7 +1128,7 @@ if tab_analysis.open:
         cov_fov = p1.number_input("视场半角(°)", value=10.0, min_value=1.0, max_value=89.0,
                                   step=1.0, key="cov_fov",
                                   help="视线张角（天底圆锥半角，假设值 10°）：普通成像星约 1°~10°，"
-                                       "宽幅任务约 30°（Q147）")
+                                       "宽幅任务约 30°")
         cov_elev = p2.number_input("最小仰角(°)", value=10.0, min_value=0.0, max_value=85.0,
                                    step=1.0, key="cov_elev",
                                    help="经典标准值 10°（过境/覆盖分析常用）；不需要该限制就填 0")
@@ -1489,14 +1489,15 @@ if tab_analysis.open:
             sel_min_ev = st.number_input("单次最短窗口(分钟, 0=不限)", value=0.0, min_value=0.0,
                                          step=1.0, key="sel_min_ev")
             sel_fine = st.checkbox(
-                "选星决策矩阵用 10 秒（高精度，仅贪心）", value=False, key="sel_fine",
-                help="默认 1 分钟决策（可用整数规划精确最优）；打开后决策矩阵 10 秒、只允许贪心"
-                     "（10 秒下整数规划规模过大，见 Q170 实测）。对严格连续覆盖/短空窗需求更贴合，"
-                     "最终指标仍按秒级窗口精确回算。")
+                "按 10 秒精细判定覆盖（更精确，仅用贪心算法）", value=False, key="sel_fine",
+                help="选星时把分析时段切成小段、逐段统计哪些卫星在覆盖：段越短判定越精细。"
+                     "默认每 1 分钟一段（可用整数规划求最优）；打开后每 10 秒一段，"
+                     "更贴合\"连续覆盖/尽量没有短空窗\"的需求，但计算量过大，"
+                     "整数规划自动跳过、改用贪心算法。最终覆盖率/空窗始终按秒级精确统计。")
             sel_method = st.selectbox("算法", ["两者对照（推荐）", "贪心（快）", "整数规划（精确）"],
                                       key="sel_method", disabled=sel_fine)
             if sel_fine:
-                st.caption("10 秒决策矩阵：整数规划自动跳过，使用贪心（Q173）。")
+                st.caption("10 秒精细判定：整数规划计算量过大，自动使用贪心算法。")
             st.caption("算法说明：贪心=每步选当前收益最大的星，快、能处理几千颗，但不保证全局最优；"
                        "整数规划（ILP）=把选星写成 0/1 优化问题，可证明最优"
                        "（卫星数 ≤1500 时使用，超出自动退回贪心；任务⑤平均空窗为分式目标，用贪心）。")
@@ -1565,8 +1566,8 @@ if tab_analysis.open:
                     else:
                         _algo_txt += f"（选中 {_gn} 颗）"
                 st.caption(_algo_txt)
-                st.caption("覆盖率/空窗为窗口级精确值（秒级）；选星搜索在 1 分钟片上做，"
-                           "最终指标用覆盖窗口精确回算，分钟内的短空窗不会被吞。")
+                st.caption("最终覆盖率/空窗按秒级精确统计；选星搜索按 1 分钟一段进行，"
+                           "分钟内的短空窗不会被漏掉。")
                 if not sel_res["eval"]["satisfied"]:
                     if sel_res["req_mode"] == "continuous":
                         _fb = sel_res.get("feasibility", {})

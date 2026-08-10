@@ -788,7 +788,8 @@ def run_selection(sats, windows_by_sat, t0, t1, step_minutes=1, k_min=1,
     fine = decision_step_seconds > 0
     dec_step = decision_step_seconds / 60.0 if fine else float(step_minutes)
     # 高精度决策（Q173）：决策矩阵 10s，只允许贪心（ILP 规模过大，见 Q170 实测）
-    fine_note = ("决策矩阵 10 秒（高精度）：整数规划规模过大，自动使用贪心。" if fine else "")
+    fine_note = ("覆盖判定粒度 10 秒（精细）：计算量过大，整数规划自动跳过，使用贪心算法。"
+                 if fine else "")
     if fine and method in ("both", "ilp"):
         method = "greedy"
     dt_list = []
@@ -1046,9 +1047,9 @@ def _summary_text(res):
         "min_avg_gap": f"给定 {res.get('n_sats_limit') or 0} 颗最小化平均空窗（MART）",
     }
     obj_label = obj_map.get(res["objective"], res["objective"])
-    _step_txt = (f"决策步长 {res['decision_step_seconds']} 秒（高精度，仅贪心）"
+    _step_txt = (f"覆盖判定粒度：{res['decision_step_seconds']} 秒（精细，仅贪心）"
                  if res.get("decision_step_seconds")
-                 else f"步长 {res['step_minutes']} 分钟")
+                 else f"覆盖判定粒度：{res['step_minutes']} 分钟")
     lines = [
         f"需求模式：{req_label}（K={res['k_min']}，{_step_txt}）",
         f"目标模式：{obj_label}",
@@ -1091,7 +1092,8 @@ def main(argv=None):
     ap.add_argument("--end", required=True, help="结束时间 UTC")
     ap.add_argument("--step", type=int, default=1, help="时间步长（分钟）")
     ap.add_argument("--decision-step-seconds", type=int, default=0,
-                    help="选星决策矩阵步长（秒）：0=用 --step 分钟；10=高精度决策矩阵（仅贪心，Q173）")
+                    help="覆盖判定粒度（秒）：0=按 --step 分钟判定（默认）；"
+                         "10=按 10 秒精细判定（计算量大，仅用贪心算法）")
     ap.add_argument("--fov", type=float, default=30.0, help="视场半角（度）")
     ap.add_argument("--elev", type=float, default=10.0, help="最小仰角（度）")
     ap.add_argument("--grid", type=float, default=0.2, help="网格间距（度）")
@@ -1203,8 +1205,8 @@ def export_selection_xlsx(res, path, region_name="", extra_meta=None):
         "分析地区": region_name or "",
         "分析时段(UTC)": f"{res['t0']:%Y-%m-%d %H:%M:%S} ~ {res['t1']:%Y-%m-%d %H:%M:%S}",
         "时间步长(分钟)": res["step_minutes"],
-        "决策步长": (f"{res['decision_step_seconds']} 秒（高精度，仅贪心）"
-                  if res.get("decision_step_seconds") else f"{res['step_minutes']} 分钟"),
+        "覆盖判定粒度": (f"{res['decision_step_seconds']} 秒（精细，仅贪心）"
+                      if res.get("decision_step_seconds") else f"{res['step_minutes']} 分钟"),
         "需求模式": req_label,
         "目标模式": obj_label,
         "需求-K(最少同时可见)": (res["k_min"]

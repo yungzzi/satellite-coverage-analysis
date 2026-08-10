@@ -1488,8 +1488,15 @@ if tab_analysis.open:
                 sel_p = 100.0
             sel_min_ev = st.number_input("单次最短窗口(分钟, 0=不限)", value=0.0, min_value=0.0,
                                          step=1.0, key="sel_min_ev")
+            sel_fine = st.checkbox(
+                "选星决策矩阵用 10 秒（高精度，仅贪心）", value=False, key="sel_fine",
+                help="默认 1 分钟决策（可用整数规划精确最优）；打开后决策矩阵 10 秒、只允许贪心"
+                     "（10 秒下整数规划规模过大，见 Q170 实测）。对严格连续覆盖/短空窗需求更贴合，"
+                     "最终指标仍按秒级窗口精确回算。")
             sel_method = st.selectbox("算法", ["两者对照（推荐）", "贪心（快）", "整数规划（精确）"],
-                                      key="sel_method")
+                                      key="sel_method", disabled=sel_fine)
+            if sel_fine:
+                st.caption("10 秒决策矩阵：整数规划自动跳过，使用贪心（Q173）。")
             st.caption("算法说明：贪心=每步选当前收益最大的星，快、能处理几千颗，但不保证全局最优；"
                        "整数规划（ILP）=把选星写成 0/1 优化问题，可证明最优"
                        "（卫星数 ≤1500 时使用，超出自动退回贪心；任务⑤平均空窗为分式目标，用贪心）。")
@@ -1507,11 +1514,13 @@ if tab_analysis.open:
                     step_minutes=res["cfg"].get("step_minutes", 1),
                     k_min=int(sel_k), mrt_minutes=float(sel_mrt),
                     min_event_minutes=float(sel_min_ev),
-                    method={"两者对照（推荐）": "both", "贪心（快）": "greedy",
-                            "整数规划（精确）": "ilp"}[sel_method],
+                    method=("greedy" if sel_fine else
+                            {"两者对照（推荐）": "both", "贪心（快）": "greedy",
+                             "整数规划（精确）": "ilp"}[sel_method]),
                     req_mode=_req, objective=_obj,
                     n_sats_limit=int(sel_n) if sel_n else None,
-                    coverage_pct=float(sel_p))
+                    coverage_pct=float(sel_p),
+                    decision_step_seconds=10 if sel_fine else 0)
                 sel_res["region_name"] = res["cfg"].get("region_name", "")
                 sel_res["fov"] = res["cfg"].get("fov_half_angle_deg", 10.0)
                 sel_res["elev"] = res["cfg"].get("min_elevation_deg", 10.0)

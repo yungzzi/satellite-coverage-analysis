@@ -176,7 +176,7 @@ def evaluate_windows_exact(sats, windows_by_sat, selected, t0, t1, k_min,
     covered_s = 0.0
     gaps_raw = []
     cov = 0
-    gap_start = t0s if k_min > 0 else None   # 初始未覆盖：空窗从 t0 开始
+    gap_start = None
     prev = t0s
     for ts_ in sorted(delta):
         # 区间 [prev, ts_) 的状态由 cov 决定（应用 ts_ 处事件之前）
@@ -186,7 +186,8 @@ def evaluate_windows_exact(sats, windows_by_sat, selected, t0, t1, k_min,
         if cov >= k_min:
             # 覆盖开始：闭合空窗
             if gap_start is not None:
-                gaps_raw.append((gap_start, ts_))
+                if ts_ > gap_start:
+                    gaps_raw.append((gap_start, ts_))
                 gap_start = None
         else:
             # 覆盖结束：开启空窗
@@ -196,7 +197,10 @@ def evaluate_windows_exact(sats, windows_by_sat, selected, t0, t1, k_min,
     if cov >= k_min:
         covered_s += (t1s - prev)
     else:
-        gaps_raw.append((gap_start if gap_start is not None else prev, t1s))
+        if gap_start is None:
+            gap_start = prev
+        if t1s > gap_start:
+            gaps_raw.append((gap_start, t1s))
 
     gaps = [{
         "start_utc": datetime.fromtimestamp(s, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
@@ -1094,7 +1098,10 @@ def main(argv=None):
     ap.add_argument("--decision-step-seconds", type=int, default=0,
                     help="选星决策粒度（秒）：0=按 --step 分钟做选星决策（默认）；"
                          "10=按 10 秒精细做选星决策（计算量大，仅用贪心算法）")
-    ap.add_argument("--fov", type=float, default=30.0, help="视场半角（度）")
+    ap.add_argument("--sensor-params", default=None,
+                    help="逐星传感器参数表（TOML）；不指定则自动读 data/sensor_params.toml"
+                         "（存在才生效）")
+    ap.add_argument("--fov", type=float, default=10.0, help="视场半角（度，全局默认）")
     ap.add_argument("--elev", type=float, default=10.0, help="最小仰角（度）")
     ap.add_argument("--grid", type=float, default=0.2, help="网格间距（度）")
     ap.add_argument("--k-min", type=int, default=1, help="最少同时可见数 K")
@@ -1113,6 +1120,10 @@ def main(argv=None):
                     help="预算型目标的给定颗数 N")
     ap.add_argument("--list-optimal", action="store_true",
                     help="在命令行打印全部最优方案")
+    ap.add_argument("--xlsx", action="store_true",
+                    help="同时导出选星 Excel（写到 --out 目录）")
+    ap.add_argument("--save-as", metavar="名称",
+                    help="把推荐卫星保存为虚拟星座收藏夹（固定编号快照）")
     ap.add_argument("--out", default=str(PROJECT_ROOT / "output"), help="输出目录")
     args = ap.parse_args(argv)
 
@@ -1134,12 +1145,22 @@ def main(argv=None):
         print("收藏夹没有解析到卫星。")
         return 1
     sats = sl.records_to_satellites(recs)
+    # 逐星传感器参数（与覆盖分析 CLI 一致）：只按 NORAD 匹配，未设置用全局默认
+    _sp_path = args.sensor_params
+    sensor_overrides = sl.load_sensor_params(_sp_path) if _sp_path else sl.load_sensor_params()
+    if sensor_overrides:
+        print(f"已加载逐星传感器参数表：{_sp_path or 'data/sensor_params.toml'}"
+              f"（{len(sensor_overrides)} 条覆盖）")
+    swath_enabled = sl.load_sensor_swath_enabled(_sp_path)
+    if swath_enabled:
+        print("幅宽（逐星）生效开关：已开启（只对参数表中填了幅宽的星生效，"
+              "且高轨/静止星会自动回退视场半角）。")
     cfg = {
         "region_mode": args.mode,
         "fov_half_angle_deg": args.fov,
         "min_elevation_deg": args.elev,
         "step_minutes": args.step,
-        "refine_step_seconds": 10,
+        "refine_step_seconds": 1,
         "grid_spacing_deg": args.grid,
     }
     if args.mode == "circle":
@@ -1152,8 +1173,24 @@ def main(argv=None):
         region = {"mode": "polygon", "lats": glats, "lons": glons}
 
     windows_by_sat = []
+    sensor_warnings = []
+    sensor_override_count = 0
     for sat in sats:
-        windows_by_sat.append(cov.analyze_one_satellite(sat, t, dt_list, region, cfg))
+        norad = int(sat.model.satnum) if getattr(sat, "model", None) else None
+        sat_cfg, info = cov.resolve_sat_cfg(norad, sensor_overrides, cfg,
+                                            swath_enabled=swath_enabled)
+        if info.get("source") == "override":
+            sensor_override_count += 1
+        tag = cov.orbit_tag(sat)
+        if sat_cfg.get("swath_km") and tag in ("GEO/静止", "高轨"):
+            fov_back = sat_cfg.get("fov_half_angle_deg")
+            sat_cfg.pop("swath_km", None)
+            sensor_warnings.append(
+                f"  {sat.name}（NORAD {norad}，{tag}）：幅宽不适用，"
+                f"已按视场半角 {fov_back}° 计算")
+        windows_by_sat.append(cov.analyze_one_satellite(sat, t, dt_list, region, sat_cfg))
+    for w in sensor_warnings:
+        print(w)
     t0 = dt_list[0]
     t1 = dt_list[-1] + timedelta(minutes=args.step)   # 左闭右开：真实终点
     res = run_selection(sats, windows_by_sat, t0, t1,
@@ -1180,6 +1217,35 @@ def main(argv=None):
             print(f"  {g['start_utc']} ~ {g['end_utc']}  共 {g['duration_minutes']} 分钟")
     else:
         print("空窗：无（满足需求）")
+    if args.xlsx:
+        out_dir = Path(args.out)
+        out_dir.mkdir(exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = str(out_dir / f"selection_{stamp}.xlsx")
+        export_selection_xlsx(res, out_path,
+                              region_name=args.location or "",
+                              extra_meta={
+                                  "视场半角(°)": args.fov,
+                                  "最小仰角(°)": args.elev,
+                                  "边界精化(秒)": 1,
+                                  "逐星参数覆盖条数": sensor_override_count,
+                              })
+        print(f"  [完成] 已导出选星 Excel：{out_path}")
+    if args.save_as:
+        ids = [res["sats"][j].norad_id for j in res["selected"]]
+        _kpart = (f"K={res['k_min']} "
+                  if res["req_mode"] in ("continuous", "coverage_pct") else "")
+        desc = (f"选星虚拟星座：{args.location or ''} "
+                f"{res['t0']:%Y-%m-%d %H:%M}~{res['t1']:%H:%M} UTC "
+                f"{_kpart}MRT={res['mrt_minutes']:.0f} 分 "
+                f"（{res['algo']}，{len(ids)} 颗）")
+        if sl.create_collection(args.save_as, description=desc,
+                                kind="virtual_constellation"):
+            sl.add_entry(args.save_as, "norad_list", " ".join(str(i) for i in ids))
+            print(f"  [完成] 已保存虚拟星座「{args.save_as}」"
+                  f"（{len(ids)} 颗，带来自选星标识）")
+        else:
+            print(f"  [失败] 同名收藏夹已存在：{args.save_as}")
     return 0
 
 

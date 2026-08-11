@@ -89,6 +89,33 @@ circle 模式覆盖判据：卫星足印圆与目标圆**有交集**且圆心处
 
 优先级：**命令行参数 > config.toml（自动加载）> 代码默认值**。
 
+## CLI 数据管理（与 GUI ①~④页对齐）
+数据加载器 CLI（`src/satellite_loader.py`）覆盖 GUI ①②③④页的主要操作：
+
+```powershell
+# 搜索（含变体重查与拼写提示，可加 --country/--launch-year/--min-alt/--max-alt 筛选）
+.venv\Scripts\python src\satellite_loader.py --search "GAOFEN-1"
+.venv\Scripts\python src\satellite_loader.py --norad 25544
+# 收藏夹
+.venv\Scripts\python src\satellite_loader.py --create 我的夹 --add-entry norad_list --collection 我的夹 --value "25544 41194"
+.venv\Scripts\python src\satellite_loader.py --remove-norad 我的夹 41194   # 删单颗星
+.venv\Scripts\python src\satellite_loader.py --copy 我的夹 备份夹
+.venv\Scripts\python src\satellite_loader.py --move-entry 我的夹 1 备份夹
+# 星座导入：--constellation 预览；加 --collection 存为编号快照（星座收藏夹）
+.venv\Scripts\python src\satellite_loader.py --constellation GPS --collection 我的GPS
+# 常用地点 / 逐星传感器参数
+.venv\Scripts\python src\satellite_loader.py --save-location 杭州 30.25 120.15 5 --list-locations
+.venv\Scripts\python src\satellite_loader.py --sensor-set 25544 --fov 15 --swath 50 --sensor-list
+# 下载 / 自检
+.venv\Scripts\python src\satellite_loader.py --force-update 我的夹
+.venv\Scripts\python src\satellite_loader.py --selfcheck
+```
+
+选星 CLI（`src/satellite_selection.py`）也已对齐 GUI ⑤页：
+`--req-mode`（continuous/revisit/coverage_pct/any）、`--objective`、`--decision-step-seconds 10`、
+逐星传感器表（自动读 `data/sensor_params.toml`，可用 `--sensor-params` 指定其他表）、
+`--xlsx` 导出选星 Excel、`--save-as` 保存为虚拟星座收藏夹。
+
 ## 输出文件说明（output/）
 | 文件 | 内容 | 给谁看 |
 | --- | --- | --- |

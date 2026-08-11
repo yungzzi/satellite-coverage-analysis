@@ -1750,37 +1750,106 @@ def interactive_main():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="卫星数据加载器：搜索 / 收藏夹 / 下载缓存（阶段 1，独立模块）")
-    parser.add_argument("--search", metavar="关键字", help="按名字关键字搜索并打印结果")
+        description="卫星数据加载器：搜索 / 收藏夹 / 下载缓存 / 星座导入 / 常用地点 / 传感器参数"
+                    "（GUI 五个页面的 CLI 版）")
+    parser.add_argument("--search", metavar="关键字",
+                        help="按名字关键字搜索并打印结果（含变体重查与拼写提示；"
+                             "可配合 --country/--launch-year/--min-alt/--max-alt 筛选）")
     parser.add_argument("--norad", type=int, help="按 NORAD 编号查询单星")
     parser.add_argument("--catalog", action="store_true", help="列出所有收藏夹（内置+用户）")
     parser.add_argument("--create", metavar="名称", help="新建用户收藏夹")
     parser.add_argument("--rename", nargs=2, metavar=("旧名", "新名"), help="改用户收藏夹名")
     parser.add_argument("--delete", metavar="名称", help="删除用户收藏夹")
-    parser.add_argument("--import-file", metavar="路径", help="导入 TLE/编号文件（配合 --collection）")
-    parser.add_argument("--collection", metavar="名称", help="配合 --import-file 指定目标收藏夹")
+    parser.add_argument("--import-file", metavar="路径",
+                        help="导入 TLE/编号文件（配合 --collection；不给 --collection 则自动建夹）")
+    parser.add_argument("--collection", metavar="名称",
+                        help="配合 --import-file / --constellation / --add-entry 指定目标收藏夹")
     parser.add_argument("--add-entry", metavar="类型", choices=["norad_list"],
                         help="往 --collection 加编号清单条目（配合 --value）")
     parser.add_argument("--value", metavar="值", help="配合 --add-entry 的条目值")
     parser.add_argument("--resolve", metavar="名称", help="解析收藏夹并打印卫星数量")
     parser.add_argument("--offline", action="store_true", help="离线模式：只用缓存，不联网")
-    parser.add_argument("--force-update", action="store_true", help="强制重新下载编目")
+    parser.add_argument("--force-update", nargs="*", metavar="收藏夹",
+                        help="强制重新下载全集与选中收藏夹的星座分组缓存（编号清单随全集同步）")
+    parser.add_argument("--selfcheck", action="store_true",
+                        help="运行自检（等价 GUI ④页“运行自检”，联网部分需要网络）")
+    parser.add_argument("--country", metavar="代码", help="配合 --search：按所属国筛选（如 PRC）")
+    parser.add_argument("--launch-year", metavar="年份", help="配合 --search：按发射年份筛选")
+    parser.add_argument("--min-alt", type=float, help="配合 --search：最低高度 km")
+    parser.add_argument("--max-alt", type=float, help="配合 --search：最高高度 km")
+    parser.add_argument("--constellation", metavar="名称",
+                        help="预览星座成员；配合 --collection 导入为编号快照（星座收藏夹）")
+    parser.add_argument("--remove-norad", nargs="+", metavar=("夹名", "NORAD"),
+                        help="从夹的编号清单里删星：--remove-norad 夹名 25544 31490")
+    parser.add_argument("--copy", nargs=2, metavar=("源夹", "目标夹"),
+                        help="把源夹全部条目复制到目标夹（重复跳过）")
+    parser.add_argument("--move-entry", nargs=3, metavar=("源夹", "条目序号(1起)", "目标夹"),
+                        help="把源夹第 N 条移到目标夹")
+    parser.add_argument("--list-locations", action="store_true", help="列出内置+用户常用地点")
+    parser.add_argument("--save-location", nargs=4, metavar=("名称", "纬度", "经度", "半径km"),
+                        help="保存/更新用户常用地点")
+    parser.add_argument("--delete-location", metavar="名称", help="删除用户常用地点")
+    parser.add_argument("--sensor-list", action="store_true",
+                        help="列出逐星传感器参数表与幅宽开关")
+    parser.add_argument("--sensor-set", metavar="NORAD",
+                        help="设置/更新一颗星的传感器参数（配合 --fov/--elev/--swath，至少填一个）")
+    parser.add_argument("--sensor-del", metavar="NORAD", help="删除一颗星的传感器参数行")
+    parser.add_argument("--sensor-clear", action="store_true",
+                        help="清空传感器参数表并关闭幅宽开关")
+    parser.add_argument("--fov", type=float,
+                        help="配合 --sensor-set：视场半角（度，留空=全局默认）")
+    parser.add_argument("--elev", type=float,
+                        help="配合 --sensor-set：最小仰角（度，留空=全局默认）")
+    parser.add_argument("--swath", type=float,
+                        help="配合 --sensor-set：幅宽（km，留空=不用幅宽）")
+    parser.add_argument("--swath-enable", action="store_true", help="开启幅宽（逐星）生效开关")
+    parser.add_argument("--swath-disable", action="store_true", help="关闭幅宽（逐星）生效开关")
     args = parser.parse_args()
 
-    if args.offline and not (args.resolve or args.catalog):
-        print("提示：--offline 需配合 --resolve/--catalog 使用。")
-
     if args.search:
-        print(f"在线搜索：{args.search}")
-        recs = search_by_name_online(args.search, offline=args.offline)
-        print(f"找到 {len(recs)} 颗：")
-        for r in recs[:20]:
-            print(f"  {r['name']}  NORAD:{r['norad_id']}")
+        kw = args.search
+        print(f"在线搜索：{kw}")
+        rows = search_metadata(kw, country=args.country, launch_year=args.launch_year,
+                               min_alt_km=args.min_alt, max_alt_km=args.max_alt,
+                               offline=args.offline)
+        note = ""
+        if rows is None:
+            note = "数据下载失败（可能被数据源限流），请稍后重试。"
+            rows = []
+        elif not rows:
+            # 变体重查：连字符 <-> 空格（与 GUI ①页一致）
+            variant = kw.replace("-", " ").strip()
+            if variant and variant != kw:
+                rows_v = search_metadata(variant, country=args.country,
+                                         launch_year=args.launch_year,
+                                         min_alt_km=args.min_alt, max_alt_km=args.max_alt,
+                                         offline=args.offline)
+                if rows_v:
+                    note = f"原名「{kw}」未找到，已按变体「{variant}」查到 {len(rows_v)} 条。"
+                    rows = rows_v
+            if not rows:
+                sug = suggest_similar_names(kw, n=3, offline=True)
+                if sug:
+                    note = f"「{kw}」未找到。你是不是想找：{'、'.join(sug)}？"
+        if note:
+            print(note)
+        print(f"找到 {len(rows)} 条：")
+        if rows:
+            print_search_results(rows[:100])
+            if len(rows) > 100:
+                print(f"  ……仅显示前 100 条，共 {len(rows)} 条")
+        elif not note:
+            print("  没有找到匹配的卫星，换个关键字试试。")
     if args.norad:
-        recs = search_by_norad_online(args.norad, offline=args.offline)
-        print(f"NORAD {args.norad}：找到 {len(recs)} 条")
-        for r in recs[:5]:
-            print(f"  {r['name']}  NORAD:{r['norad_id']}")
+        print(f"按 NORAD 编号查询：{args.norad}")
+        rows = search_metadata_by_norad(args.norad, offline=args.offline)
+        if rows is None:
+            print("  数据下载失败（可能被数据源限流），请稍后重试。")
+        elif not rows:
+            print("  查不到该编号（可能已退役/保密/新发射）。")
+        else:
+            print(f"找到 {len(rows)} 条：")
+            print_search_results(rows)
     if args.catalog:
         print("收藏夹列表：")
         print_collections(load_all_collections())
@@ -1798,6 +1867,76 @@ def main():
             print("--add-entry 需要配合 --collection 和 --value。")
         else:
             add_entry(args.collection, args.add_entry, args.value)
+    if args.constellation:
+        cons = load_constellations()
+        c = next((x for x in cons if x["name"] == args.constellation), None)
+        if c is None:
+            print(f"未找到星座：{args.constellation}")
+            print("可用星座：" + "、".join(x["name"] for x in cons) or "（星座目录为空）")
+        else:
+            src = c["source"]
+            recs = resolve_collection(
+                {"entries": [{"type": src["type"], "value": src["value"]}]},
+                offline=args.offline)
+            seen: dict = {}
+            for r in recs:
+                seen.setdefault(r.get("norad_id"), r)
+            recs = list(seen.values())
+            print(f"「{c['name']}」解析到 {len(recs)} 颗卫星（按 NORAD 去重）。")
+            if args.collection:
+                col = args.collection
+                cur = find_collection(load_user_collections(), col)
+                if cur is None:
+                    create_collection(col, description=c.get("description", ""),
+                                      kind="constellation")
+                    cur = find_collection(load_user_collections(), col)
+                if cur is None:
+                    print("  [失败] 收藏夹创建失败，请重试。")
+                else:
+                    for idx in reversed([i for i, e in enumerate(cur["entries"])
+                                         if e["type"] == "norad_list"]):
+                        remove_entry(col, idx)
+                    ids = sorted({int(r["norad_id"]) for r in recs
+                                  if r.get("norad_id") is not None})
+                    if ids:
+                        add_entry(col, "norad_list", " ".join(map(str, ids)))
+                    print(f"  [完成] 已把「{c['name']}」的 {len(ids)} 颗星存为编号快照"
+                          f"（星座收藏夹「{col}」）")
+            else:
+                for r in recs[:50]:
+                    print(f"    {r['name']}  NORAD:{r['norad_id']}")
+                if len(recs) > 50:
+                    print(f"    ……共 {len(recs)} 颗（如需导入请加 --collection 收藏夹名）")
+    if args.remove_norad:
+        col = args.remove_norad[0]
+        for sid in args.remove_norad[1:]:
+            if not sid.isdigit():
+                print(f"  [失败] NORAD 需为纯数字：{sid}")
+            else:
+                remove_norad_from_collection(col, int(sid))
+    if args.copy:
+        src_name, dst_name = args.copy
+        src = find_collection(load_all_collections(), src_name)
+        dst = find_collection(load_user_collections(), dst_name)
+        if src is None:
+            print(f"  [失败] 未找到源收藏夹：{src_name}")
+        elif dst is None:
+            print(f"  [失败] 未找到目标用户收藏夹：{dst_name}")
+        else:
+            copied = sum(1 for e in src["entries"]
+                         if add_entry(dst_name, e["type"], e["value"]))
+            print(f"  [完成] 已复制 {copied} 条到「{dst_name}」（重复跳过）")
+    if args.move_entry:
+        src_name, idx_s, dst_name = args.move_entry
+        if not idx_s.isdigit():
+            print("  [失败] 条目序号需为数字（1 起）。")
+        else:
+            src = find_collection(load_user_collections(), src_name)
+            if src:
+                print(f"「{src_name}」现有条目：")
+                for i, e in enumerate(src["entries"], 1):
+                    print(f"  {i}. {_entry_label(e)}")
+            move_entry(src_name, int(idx_s) - 1, dst_name)
     if args.resolve:
         all_c = load_all_collections()
         c = find_collection(all_c, args.resolve)
@@ -1810,13 +1949,107 @@ def main():
                 print(f"  {r['name']}  NORAD:{r['norad_id']}")
             if recs:
                 save_resolved_tle(args.resolve, recs)
+    if args.force_update is not None:
+        n_req = force_refresh_collections(list(args.force_update))
+        print(f"强制更新完成：本次请求 {n_req} 次（全集 + 选中星座分组），"
+              f"编号清单已随全集同步。")
+    if args.list_locations:
+        locs = load_locations()
+        if not locs:
+            print("  （暂无常用地点）")
+        for x in locs:
+            src_tag = "内置" if x.get("source") == "builtin" else "用户"
+            print(f"  {x['name']}（{src_tag}）({x['lat']:.4f}, {x['lon']:.4f}) "
+                  f"半径{x.get('radius_km', 5.0)}km")
+    if args.save_location:
+        name, lat, lon, rad = args.save_location
+        save_user_location(name, float(lat), float(lon), float(rad))
+        print(f"  [完成] 已保存常用地点：{name} ({lat}, {lon}) 半径{rad}km")
+    if args.delete_location:
+        ok = delete_user_location(args.delete_location)
+        print(f"  [完成] 已删除用户地点：{args.delete_location}" if ok
+              else f"  [失败] 未找到用户地点：{args.delete_location}")
+    if args.sensor_list:
+        rows = load_sensor_params()
+        sw = load_sensor_swath_enabled()
+        print(f"幅宽（逐星）生效开关：{'开启' if sw else '关闭'}")
+        if not rows:
+            print("  （空表：全部卫星用全局默认 10°/10°）")
+        for r in rows:
+            fov = (f"{r['fov_half_angle_deg']:g}°"
+                   if r["fov_half_angle_deg"] is not None else "默认")
+            elev = (f"{r['min_elevation_deg']:g}°"
+                    if r["min_elevation_deg"] is not None else "默认")
+            swath = (f"{r['swath_km']:g}km"
+                     if r["swath_km"] is not None else "—")
+            print(f"  NORAD {r['norad']}：视场半角={fov} 最小仰角={elev} 幅宽={swath}")
+    if args.sensor_set:
+        try:
+            norad = int(args.sensor_set)
+        except ValueError:
+            print(f"  [失败] NORAD 需为纯数字：{args.sensor_set}")
+            norad = None
+        if norad is not None and (args.fov is None and args.elev is None
+                                  and args.swath is None):
+            print("  [失败] --sensor-set 需要至少填一个参数（--fov/--elev/--swath）。")
+        elif norad is not None:
+            ensure_sensor_params()
+            rows = [r for r in load_sensor_params() if r["norad"] != norad]
+            rows.append({"norad": norad,
+                         "fov_half_angle_deg": args.fov,
+                         "min_elevation_deg": args.elev,
+                         "swath_km": args.swath})
+            sw = load_sensor_swath_enabled()
+            save_sensor_params(rows, swath_enabled=sw)
+            print(f"  [完成] 已写入传感器参数表：NORAD {norad} "
+                  f"fov={args.fov} elev={args.elev} swath={args.swath}")
+    if args.sensor_del:
+        try:
+            norad = int(args.sensor_del)
+        except ValueError:
+            norad = None
+        if norad is None:
+            print(f"  [失败] NORAD 需为纯数字：{args.sensor_del}")
+        else:
+            rows = [r for r in load_sensor_params() if r["norad"] != norad]
+            sw = load_sensor_swath_enabled()
+            save_sensor_params(rows, swath_enabled=sw)
+            print(f"  [完成] 已删除传感器参数行：NORAD {norad}")
+    if args.sensor_clear:
+        save_sensor_params([], swath_enabled=False)
+        print("  [完成] 已清空传感器参数表并关闭幅宽开关。")
+    if args.swath_enable:
+        save_sensor_params(load_sensor_params(), swath_enabled=True)
+        print("  [完成] 幅宽（逐星）生效开关：开启。")
+    if args.swath_disable:
+        save_sensor_params(load_sensor_params(), swath_enabled=False)
+        print("  [完成] 幅宽（逐星）生效开关：关闭。")
+    if args.selfcheck:
+        import validate_loader
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+        results = validate_loader.run_all()
+        ok_n = sum(1 for _, ok, _ in results if ok)
+        print(f"自检结果：{ok_n} / {len(results)} 通过")
+        for name, ok, detail in results:
+            if not ok:
+                print(f"  [失败] {name}　{detail}")
+        return 0 if ok_n == len(results) else 1
 
     # 没有任何参数时进入交互模式
     if not any([args.search, args.norad, args.catalog, args.create, args.rename,
                 args.delete, args.import_file, args.add_entry,
-                args.resolve]):
+                args.resolve, args.constellation, args.remove_norad, args.copy,
+                args.move_entry, args.list_locations, args.save_location,
+                args.delete_location, args.sensor_list, args.sensor_set,
+                args.sensor_del, args.sensor_clear, args.swath_enable,
+                args.swath_disable, args.selfcheck,
+                args.force_update is not None]):
         interactive_main()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -116,6 +116,17 @@ circle 模式覆盖判据：卫星足印圆与目标圆**有交集**且圆心处
 逐星传感器表（自动读 `data/sensor_params.toml`，可用 `--sensor-params` 指定其他表）、
 `--xlsx` 导出选星 Excel、`--save-as` 保存为虚拟星座收藏夹。
 
+## 统一入口 sat 与交付版打包
+`src/cli.py` 是统一入口：`python src\cli.py <命令>`，无参数时弹出交互方式选择框。
+常用命令：`gui` / `menu` / `search` / `add 夹 编号…` / `resolve 夹` / `cons 星座 [夹]` /
+`select 夹 --start … --end …` / `run 夹`（一键：覆盖→连续覆盖选星→Excel→虚拟星座）。
+
+交付版（exe + 数据文件夹，不含源码/文档）由 `build_delivery.py` 构建：
+```powershell
+.venv\Scripts\python build_delivery.py
+```
+输出到 `D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖分析-交付版\`（原工程不动）。
+
 ## 输出文件说明（output/）
 | 文件 | 内容 | 给谁看 |
 | --- | --- | --- |

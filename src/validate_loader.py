@@ -9,6 +9,8 @@ validate_loader.py —— satellite_loader.py 的自检脚本（阶段 1）
   4. 收藏夹增删改移（用临时文件，不污染真实用户收藏）
   5. 收藏夹解析（编号清单 / 文件快照，旧式名字规则兼容）
   6. 离线模式（有缓存时可用）
+  7. 星座导入与搜索增强
+  8. CLI 入口冒烟（--help / --catalog，不写数据）
 
 运行：.venv\\Scripts\\python src\\validate_loader.py
 （联网测试部分需要网络；全部通过后退出码为 0）
@@ -16,7 +18,9 @@ validate_loader.py —— satellite_loader.py 的自检脚本（阶段 1）
 
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -219,6 +223,26 @@ def test_search_enhancements():
         check("TLE 推导倾角/高度", False, "缓存无 ISS")
 
 
+def test_cli_smoke():
+    print("\n== 8. CLI 入口冒烟（--help / --catalog，不写数据） ==")
+    root = Path(__file__).resolve().parent
+    py = sys.executable
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    for script in ("satellite_loader.py", "satellite_selection.py"):
+        r = subprocess.run([py, str(root / script), "--help"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=env)
+        ok = (r.returncode == 0 and "Traceback" not in r.stdout
+              and "usage:" in r.stdout)
+        check(f"CLI {script} --help 可用", ok,
+              f"exit={r.returncode}" + ("" if ok else r.stderr[-300:]))
+    r = subprocess.run([py, str(root / "satellite_loader.py"), "--catalog"],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", env=env)
+    ok = r.returncode == 0 and "Traceback" not in r.stdout and "收藏夹" in r.stdout
+    check("CLI --catalog 可用", ok, f"exit={r.returncode}")
+
+
 def run_all() -> list:
     """运行全部自检，返回 [(名称, 是否通过, 说明), ...]；CLI 和 GUI 共用。"""
     global PASS, FAIL, RESULTS
@@ -233,6 +257,7 @@ def run_all() -> list:
     test_resolve()
     test_multi_collection_merge()
     test_search_enhancements()
+    test_cli_smoke()
     return list(RESULTS)
 
 

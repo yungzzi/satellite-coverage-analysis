@@ -1500,15 +1500,15 @@ if tab_analysis.open:
             sel_min_ev = st.number_input("单次最短窗口(分钟, 0=不限)", value=0.0, min_value=0.0,
                                          step=1.0, key="sel_min_ev")
             sel_fine = st.checkbox(
-                "按 10 秒精细判定覆盖（更精确，仅用贪心算法）", value=False, key="sel_fine",
-                help="选星时把分析时段切成小段、逐段统计哪些卫星在覆盖：段越短判定越精细。"
+                "按 10 秒精细做选星决策（更精确，仅用贪心算法）", value=False, key="sel_fine",
+                help="做选星决策时把分析时段切成小段、逐段统计哪些卫星在覆盖：段越短决策越精细。"
                      "默认每 1 分钟一段（可用整数规划求最优）；打开后每 10 秒一段，"
                      "更贴合\"连续覆盖/尽量没有短空窗\"的需求，但计算量过大，"
                      "整数规划自动跳过、改用贪心算法。最终覆盖率/空窗始终按秒级精确统计。")
             sel_method = st.selectbox("算法", ["两者对照（推荐）", "贪心（快）", "整数规划（精确）"],
                                       key="sel_method", disabled=sel_fine)
             if sel_fine:
-                st.caption("10 秒精细判定：整数规划计算量过大，自动使用贪心算法。")
+                st.caption("10 秒精细选星决策：整数规划计算量过大，自动使用贪心算法。")
             st.caption("算法说明：贪心=每步选当前收益最大的星，快、能处理几千颗，但不保证全局最优；"
                        "整数规划（ILP）=把选星写成 0/1 优化问题，可证明最优"
                        "（卫星数 ≤1500 时使用，超出自动退回贪心；任务⑤平均空窗为分式目标，用贪心）。")
@@ -1577,8 +1577,11 @@ if tab_analysis.open:
                     else:
                         _algo_txt += f"（选中 {_gn} 颗）"
                 st.caption(_algo_txt)
-                st.caption("最终覆盖率/空窗按秒级精确统计；选星搜索按 1 分钟一段进行，"
-                           "分钟内的短空窗不会被漏掉。")
+                if sel_fine:
+                    st.caption("选星搜索按 10 秒一段进行；最终覆盖率/空窗按秒级精确统计。")
+                else:
+                    st.caption("选星搜索按 1 分钟一段进行；最终覆盖率/空窗按秒级精确统计，"
+                               "不受搜索粒度影响。")
                 if not sel_res["eval"]["satisfied"]:
                     if sel_res["req_mode"] == "continuous":
                         _fb = sel_res.get("feasibility", {})

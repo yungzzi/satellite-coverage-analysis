@@ -30,12 +30,19 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import satellite_loader as sl
 import satellite_selection as ss
+
+
+# PyInstaller 打包后 streamlit/config.py 的 __file__ 不含 "site-packages"，
+# 会被误判为开发模式（端口横幅显示 3000、CORS 警告、根路径 404）。
+# 必须在导入 streamlit 之前强制关闭开发模式。
+os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
 
 
 PROG = "sat"

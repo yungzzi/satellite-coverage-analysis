@@ -1096,8 +1096,29 @@ if tab_analysis.open:
         cov_t1 = d2.datetime_input("结束时间 (UTC)", value=_today0 + timedelta(hours=8),
                                    key="cov_t1")
         cov_sats = st.multiselect("卫星来源（收藏夹）", cov_names, key="cov_cols")
-        up = st.file_uploader(
+        def _cov_tle_uploaded():
+            # 回调在控件重建前执行，这里改 cov_cols 才不会报"控件已实例化"
+            f_up = st.session_state.get("cov_tle_up")
+            if f_up is None:
+                return
+            ukey = f"{f_up.name}|{f_up.size}"
+            if st.session_state.get("cov_tle_up_done") == ukey:
+                return
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = sl.USER_FILES_DIR / f"upload_{stamp}_{f_up.name}"
+            dest.write_bytes(f_up.getvalue())
+            col_name = f"上传TLE-{Path(f_up.name).stem}-{datetime.now():%H%M%S}"
+            if sl.create_collection(col_name, description=f"上传的 TLE 文件：{f_up.name}", kind=""):
+                sl.add_entry(col_name, "file", str(dest))
+                st.session_state["cov_tle_up_done"] = ukey
+                st.session_state["cov_cols"] = [_collection_label({"name": col_name, "kind": ""})]
+                flash(f"已按上传的 TLE 文件新建收藏夹「{col_name}」，并已自动选中，可直接开始覆盖分析。")
+            else:
+                flash(f"同名收藏夹已存在：{col_name}，请改名后再上传。", kind="warning")
+
+        st.file_uploader(
             "上传 TLE 文件（可选，作为卫星来源）", type=["tle", "txt"], key="cov_tle_up",
+            on_change=_cov_tle_uploaded,
             help="标准两行轨道根数（TLE）文件：每颗星 3 行（名称行 + 两行数字），可含多颗星，"
                  "纯文本 .txt/.tle。推荐流程：①页搜索卫星 → 加入收藏夹 → ④页'下载与自检'"
                  "（自动下载 TLE 缓存）→ 本页分析；也可从 CelesTrak（celestrak.org，免费无需注册）、"
@@ -1109,20 +1130,6 @@ if tab_analysis.open:
                     "2 58582   3.0457 313.8823 0014312 202.7838 294.2930  1.00266763  9805")
             st.caption("每颗星 3 行：第 1 行名称（可中文），第 2~3 行为两行轨道根数；"
                        "多颗星按此格式依次排列，一个文件可包含全部卫星。")
-        if up is not None:
-            ukey = f"{up.name}|{up.size}"
-            if st.session_state.get("cov_tle_up_done") != ukey:
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                dest = sl.USER_FILES_DIR / f"upload_{stamp}_{up.name}"
-                dest.write_bytes(up.getvalue())
-                col_name = f"上传TLE-{Path(up.name).stem}-{datetime.now():%H%M%S}"
-                if sl.create_collection(col_name, description=f"上传的 TLE 文件：{up.name}", kind=""):
-                    sl.add_entry(col_name, "file", str(dest))
-                    st.session_state["cov_tle_up_done"] = ukey
-                    st.session_state["cov_cols"] = [_collection_label({"name": col_name, "kind": ""})]
-                    st.rerun()
-                else:
-                    st.warning(f"同名收藏夹已存在：{col_name}，请改名后再上传。")
     with c2:
         p1, p2 = st.columns(2)
         cov_fov = p1.number_input("视场半角(°)", value=10.0, min_value=1.0, max_value=89.0,
@@ -1132,8 +1139,9 @@ if tab_analysis.open:
         cov_elev = p2.number_input("最小仰角(°)", value=10.0, min_value=0.0, max_value=85.0,
                                    step=1.0, key="cov_elev",
                                    help="经典标准值 10°（过境/覆盖分析常用）；不需要该限制就填 0")
+        st.session_state.setdefault("cov_sw_en", sl.load_sensor_swath_enabled())
         cov_sw_en = st.checkbox(
-            "幅宽（逐星）生效（默认关闭）", value=sl.load_sensor_swath_enabled(),
+            "幅宽（逐星）生效（默认关闭）",
             key="cov_sw_en",
             help="只对传感器参数表中填了幅宽的星生效：填了幅宽且开关开启 → 按该星自己的轨道高度"
                  "换算成等效视场半角计算；未填幅宽的星一律按默认视场半角（10°）计算。"
@@ -1207,18 +1215,21 @@ if tab_analysis.open:
                 else:
                     flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽（逐星）未生效——"
                           f"开关保持关闭），下一次分析生效。", kind="success")
-        if _b_reset.button("恢复默认模板", key="btn_sensor_reset"):
+        def _btn_sensor_reset():
+            # 回调在控件重建前执行，这里改 cov_sw_en 才不会报"控件已实例化"
             if st.session_state.get("sensor_confirm"):
                 sl.save_sensor_params([])
                 st.session_state["sensor_rows"] = []
                 st.session_state["sensor_confirm"] = False
                 st.session_state["cov_sw_en"] = False
                 flash("已恢复默认模板（无覆盖行）。", kind="success")
-                st.rerun()
             else:
                 st.session_state["sensor_confirm"] = True
                 flash("再点一次\"恢复默认模板\"确认覆盖（会清空当前所有条目）。",
                       kind="warning")
+
+        _b_reset.button("恢复默认模板", key="btn_sensor_reset",
+                        on_click=_btn_sensor_reset)
         with st.expander("从本次覆盖分析的卫星来源导入（去重）"):
             _src_names = [_strip_collection_label(n) for n in cov_sats]
             if not _src_names:

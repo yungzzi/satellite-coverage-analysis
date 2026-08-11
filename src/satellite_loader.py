@@ -41,7 +41,11 @@ from skyfield.api import EarthSatellite, load
 
 # ==================== 0. 路径与常量 ====================
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    # PyInstaller 打包后：以 exe 所在目录为项目根（数据目录随交付文件夹走，可整体拷贝）
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 CACHE_DIR = DATA_DIR / "tle_cache"          # 下载缓存（不入库）
 USER_FILES_DIR = DATA_DIR / "user_files"    # 用户导入文件的副本（程序管理，不入库）
@@ -1748,7 +1752,7 @@ def interactive_main():
 
 # ==================== 8. 命令行入口 ====================
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="卫星数据加载器：搜索 / 收藏夹 / 下载缓存 / 星座导入 / 常用地点 / 传感器参数"
                     "（GUI 五个页面的 CLI 版）")
@@ -1804,7 +1808,7 @@ def main():
                         help="配合 --sensor-set：幅宽（km，留空=不用幅宽）")
     parser.add_argument("--swath-enable", action="store_true", help="开启幅宽（逐星）生效开关")
     parser.add_argument("--swath-disable", action="store_true", help="关闭幅宽（逐星）生效开关")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.search:
         kw = args.search

@@ -228,3 +228,22 @@ ATK 无头 vs 自研引擎：覆盖星数 **133/133 一致**；窗口 **190 vs 1
 - CovMulti Compute 每批固定开销（2000 颗场景约 40s/批）：ATK 端行为，无法绕过；可缩时间窗、或按星座拆多 ATK 实例并行最后合并。
 - Cov_RM 报告生成（120KB 约 78s）：ATK 端报告引擎开销；可试 Access 报告类型是否更轻。
 - 结论：几百颗真实遥感规模已足够快（~17s）；2000 颗约 9 分钟可接受但不适合快速迭代；若坚持几千颗，推荐多实例并行 + 合并输出。
+### 9.9 批量设 TLE 的最终探索：atkExecuteScript 打通但大规模不可用（2026-08-12 追加）
+
+**目标**：找到"批量设 TLE/建传感器"的入口，减少 2000 颗时 6000 条逐条命令（约 132s）的开销。
+
+**已排除**：ImportTLEFile（无头 NACK，含无中文路径）、多行/分号命令（静默失败）、通配符 Assign（NACK）、ATKConsole（沙箱用户读不到注册表数据目录；真实用户桌面可能可用，未验证）、NewMulti 建传感器（无跨对象批量）。
+
+**突破：ctypes 直调 ATKConnectorDll.dll 的 atkExecuteScript**
+- 官方 Python SDK 是 ATKConnectorDll.dll 的 SWIG 包装，SWIG 把 `atkExecuteScript(std::string&, std::string&)` 的参数堵死（Python 侧无法构造 std::string）。用 ctypes 按 MSVC x64 std::string 布局（SSO 16B+size+cap；长字符串 ptr+size+cap）手工构造，成功调用 `?atkExecuteScript@@YAHAEAV?$basic_string@...@@0@Z`。
+- 输入是**连接器表达式**（ATK 脚本子集）：逐行 `atkOpen('127.0.0.1', 6655)` / `atkConnect(conID, 'New', '/ Scenario X')` / `atkClose(conID)`；**字符串必须单引号**（双引号会拆词报错）；**不支持 for 循环**（报 Unexpected ATK connector expression），只能展开；返回值在 out 参数里（GBK，需 surrogateescape 解码）。
+- 300 颗完整流程（NewMulti + 300 SetState + 600 传感器 + 覆盖 3 批 + 报告）展开 920 行/132KB：**单次调用 18.9s，报告 21KB 正常返回**（与 Python 逐条 16.5s 相当——底层仍是逐条 TCP，Python 层开销占比小）。
+- **2000 颗展开 6047 行/880KB：30 分钟未完成（超时）**——脚本引擎解释超大输入开销爆炸，大规模不可用。
+
+**结论（最终性能口径）**
+| 方案 | 300 颗 | 2000 颗 |
+|---|---|---|
+| Python 逐条（SWIG） | 16.5s | 555s ≈ 9.3 分钟 |
+| atkExecuteScript（ctypes 直调） | 18.9s | >30 分钟（不可用） |
+
+批量设 TLE **没有找到比逐条更快的通道**：ATK Connect 协议本质是逐条 TCP 往返（单条约 11.6ms），Python/SWIG 层仅占小头；2000 颗的 6000 条命令（132s）已是下限附近。真正的大头是 ATK 端 CovMulti Compute 分批固定开销（330s）和报告生成（78s），只能靠"多 ATK 实例并行 + 合并输出"或缩时间窗缓解。**几百颗真实遥感规模（约 17s）已足够快，可替代自研；几千颗需并行化。**

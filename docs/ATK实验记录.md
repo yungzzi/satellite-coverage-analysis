@@ -111,3 +111,15 @@
 - A 路线（C++ 辅助程序）：**只能用简单圆锥/矩形 + 固定指向**，满足不了老师复杂传感器建模的核心诉求
 - 全部传感器类型只有 Connect 模式（有 GUI 依赖 + 规模化问题）或自研才有
 - 待拍板：与老师确认所需复杂模型清单后，在"Connect 模式（接受 GUI+规模限制）"与"自研扩展"之间选择
+
+### 8.4 多层验证（2026-08-12 追加，排除"版本/封装遗漏"疑问）
+
+为排除"是不是没找对/版本旧"的疑问，做了五层交叉验证，结论一致：
+1. 全 ATK 安装仅 355 个 .h（都在 IntegratingWithATK/component/include），全量搜 Conical/SAR/HalfPower/Spinning/Targeted/GrazingAlt/External 零命中
+2. `ICEnum.h`：ESnPattern 仅 {SimpleConic, Rectangular}；ESnPointing 仅 {Fixed}
+3. `IAtkObject.dll` 导出符号：只有 ISnSimpleConicPattern / ISnRectangularPattern / ISnPtFixed（内部类也仅 AsCSensorSimpleCone / AsCSensorRectangular 两个）
+4. Python（339 类）与 Java（517 类）封装同样只有这两种模式
+5. 官方文档（覆盖到 v4.1）：Component 敏感器类只提供 SetPatternSimpleConic / SetPatternRectangular / SetPointingFixedEuler / SetPointingFixedQuat
+
+复杂类型（Conical/HalfPower/SAR 与 Spinning/Targeted/GrazingAlt/External）只存在于 Connect 命令层（AtConnector.dll 解析）与 GUI。
+结论：不是版本问题，是 Component SDK 的公开 API 缺口（4.1 文档同样）；未来版本可能补齐（ATK 4.0 已到 29 模块、迭代很快），但不能依赖。

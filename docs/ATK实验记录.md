@@ -123,3 +123,78 @@
 
 复杂类型（Conical/HalfPower/SAR 与 Spinning/Targeted/GrazingAlt/External）只存在于 Connect 命令层（AtConnector.dll 解析）与 GUI。
 结论：不是版本问题，是 Component SDK 的公开 API 缺口（4.1 文档同样）；未来版本可能补齐（ATK 4.0 已到 29 模块、迭代很快），但不能依赖。
+
+## 9. 无头 Connect 大规模实测：TLE→覆盖 全链路验证 + 规模上限绕开（2026-08-12）
+
+### 9.1 官方无头参数发现（重大）
+
+`ATK.exe --help` 官方用法（4.0.1-rc.5，`ATKConsole.exe --help` 同）：
+
+```
+Usage: ATK [options] ... scenario
+  -h, --help / -v, --version
+  -p, --port <int>          connect 端口（默认 0）
+      --new-scenario        启动时新建场景
+      --hide-startup / --hide-welcome / --no-crash-report
+      --no-connect          禁用 connect
+      --no-ui / --headless  无界面模式（headless 等价 no-ui）
+      --language / --theme / --experimental
+      --uiauto-file <文件> / --uiauto-action run|exit|none   官方 UI 自动化机制
+      scenario              打开场景文件
+```
+
+实测：`ATK.exe --headless --new-scenario --port 6655` 启动后 **6655 直接监听，无需 GUI、无需"集成→客户端"**，Python Connect SDK 可直连。这消除了 Connect 路线最大的部署摩擦。另有 `ATKConsole.exe -c "<脚本>"` 或 `.atks` 脚本文件入口（未验证）。
+
+### 9.2 TLE→覆盖 端到端命令序列（无头 Connect，全部成功）
+
+1. `New / Scenario` → `SetAnalysisTimePeriod * "t0" "t1"` → `Animate * Reset`
+2. 每颗星：`New / Satellite <名>` → `SetState <路径> TLE "行1" "行2" TimePeriod "t0" "t1"`
+3. 每颗星：`New / */Satellite/<名>/Sensor S45` → `Define <路径> SimpleCone 45`
+4. `New / Facility Hangzhou` → `SetPosition <路径> Geodetic 30.25 120.17 0.0`
+5. `Animate * Start` → `Animate * Reset`（星历惰性生成，必须先跑仿真再计算）
+6. 逐条：`Cov */Facility/Hangzhou Asset <传感器路径> Assign`
+7. 单次：`Cov */Facility/Hangzhou Access Compute "t0" "t1"`
+8. 单次取报告：`Cov_RM */Facility/Hangzhou Access Compute "Coverage" "t0" "t1"`（GBK 解码）
+
+**"无分析数据"排查真相**：早先 NORAD 40961 覆盖为空并非 bug——自研引擎确认该星在 2026-08-12 00:00–08:00 对杭州 45° 圆锥**物理上 0 窗口**（24h 仅 21:37 一次过境）。换真正过境的 4 颗吉林星（GAOFEN 3E / 3G / 2F、KUANFU 02B 2）后窗口与自研引擎偏差 <1s，与 GUI 模式对拍结论一致。
+
+### 9.3 大规模喂数据实测（无头，45° 圆锥 × 杭州 × 8h）
+
+| 规模 | 建星+传感器 | 逐条 Assign | 单次 Compute+报告 | 窗口（覆盖星数） | 报告 |
+|---|---|---|---|---|---|
+| 300（遥感） | 14.8s | 4.5s | 1.25s | 181（129） | — |
+| 311（遥感全量） | ~17s | ~5s | ~1s | 190（133） | — |
+| 1000（active.tle 前 1000） | 55.3s | 60.1s | 26.2s | 543（489） | 62KB |
+| 2000（active.tle 前 2000） | 132.2s | 524.3s | 106.3s | 1038（954） | 120KB |
+
+**无崩溃、无静默失效**。瓶颈是 Assign 随场景规模近似线性变慢（2000 条约 8.7 分钟）。
+
+### 9.4 关键机制：Assign vs Assets（崩溃根因与绕开）
+
+- 覆盖模型：**Objects**（被覆盖方，如地面站）← **Assets**（覆盖源，如卫星上的传感器）。
+- **Assign**：把单个资产登记到对象，追加语义：`Cov <ObjectPath> Asset <AssetPath> Assign`，单命令几十字节。
+- **CovMulti / Assets**：批量登记，要求"全部传感器路径拼成一条命令"。ATK 命令解析有未文档化长度上限：200 条 8.4KB 成功、303 条 12.5KB 静默失效（0 窗口）、1000 条 42KB 压崩进程；分批调用互相覆盖/错乱（之前记录 5.4 的根源）。
+- **绕开方案**：放弃 CovMulti / Assets，改逐条短命令 Assign（N 条），全部登记后**只发一次** `Cov Access Compute` + 一次 `Cov_RM`。2000 条 Assign 实测成功。报告是**累加**的（Assign 只增不减），所以无需"分批计算后叠加"——全量一次算即可，分批反而会重算前面资产、报告重复。
+
+### 9.5 正确性验证（311 颗遥感全量 × 杭州 × 8h × 45°）
+
+ATK 无头 vs 自研引擎：覆盖星数 **133/133 一致**；窗口 **190 vs 192**；仅 6 颗星 ±1 个短窗口差异（秒级边界 / 目标圆 vs 点判定，同 GUI 对拍结论）。逐颗对比数据在 `%TEMP%\atk_311.json` / `own_311.json`。
+
+### 9.6 与自研引擎性能对比
+
+| 场景 | 自研引擎 | ATK 无头 Connect |
+|---|---|---|
+| 303/311 颗 × 8h | 覆盖分析约 1~2s（10s 粗筛+1s 精化） | 建星+Assign 约 22s + Compute 1.25s |
+| 1000 颗 × 8h | 秒级 | 约 2.4 分钟（建星 55s + Assign 60s） |
+| 2000 颗 × 8h | 秒级 | 约 12.7 分钟（Assign 8.7 分钟） |
+| 10766 颗 × 1 天 | 27.6s | 未测（推算 Assign 40+ 分钟，不现实） |
+
+结论：ATK **纯计算**速度与自研同量级（300 颗 1.25s vs 自研 1~2s），但"建星 + Assign"的命令往返开销使**总流程慢 1–2 个数量级**；自研在大规模/快速迭代上完胜。ATK 的价值在于**复杂传感器建模**（SAR/Conical/Spinning 等仅命令层与 GUI 有）和交叉验证。
+
+### 9.7 遗留事项
+
+- `Point Targeted` 语法未调通（NACK；`Facility/Hangzhou` 与 `*/Facility/Hangzhou` 两种路径写法均试过）
+- 复杂传感器（Conical/SAR/Spinning）尚未与自研做窗口对拍（几何语义待验证）
+- `ATKConsole` .atks 脚本路径未验证（可能绕开逐条命令往返、进一步提升性能）
+- 4000+ 颗未测；Assign 线性变慢是主要瓶颈，可"按星座拆多场景并行 + 合并输出"缓解
+- 进程清理注意：kill 后必须确认 ATK 进程退出 + 6655 释放，否则下次测试连到残留实例产生 NACK 假象（本次踩坑两次）

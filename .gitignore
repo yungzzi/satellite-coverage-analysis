@@ -44,3 +44,7 @@ data/sensor_params.toml
 # PyInstaller 构建产物（交付版由 build_delivery.py 生成到项目外）
 build/
 dist/
+
+# ATK PoC 参考文档与实验脚本（不入库）
+reference/
+experiment/

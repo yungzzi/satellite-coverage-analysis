@@ -87,3 +87,27 @@
 - [ ] C++ `IAtkObjectCoverage` 的数据提取机制确认（头文件里 ICvAssetListElement 只有状态，窗口数据可能走报告 API）
 - [ ] 1000 颗资产注册方案（若 C++ 同样受限，需要另找路径）
 - [ ] 构建脚本（VS2022 cl.exe / VSCode 终端即可，无需开 VS IDE）
+## 8. 重要补充：Component C++ API 的传感器与区域能力上限（2026-08-12 调研）
+
+### 8.1 传感器（Component C++ 头文件实测）
+
+- 模式枚举 `ESnPattern` 只有两项：`eSnSimpleConic`（圆锥）、`eSnRectangular`（矩形）
+- 指向枚举 `ESnPointing` 只有一项：`eSnPtFixed`（固定，支持欧拉角/四元数）
+- **不存在**：Conical（复杂圆锥）、HalfPower（半功率）、SAR；Spinning（旋转）、Targeted（目标跟踪）、GrazingAlt（入射高度）、External（外部文件）
+- 卫星姿态 `EVeProfile` 只有标准廓线：Nadir 对齐（ECF/ECI）、速度对齐、太阳对齐——无任意旋转/指向目标
+- 复杂类型与动态指向**只在 Connect 命令库（Define/Point 命令）和 GUI 里**存在（AtConnector.dll 含 conical/halfpower/sar/spinning/targeted/grazingalt/external 解析字符串）
+- **结论：Component C++ 不满足老师"复杂传感器/姿态改变感知范围"的要求**
+
+### 8.2 区域（Component C++）
+
+- 点目标：Facility（地面站，AssignGeodetic）
+- 区域：CoverageDefinition 网格，边界类型 Global / LatLonRegion（经纬度矩形）/ Lat / LatLine / LonLine；分辨率 Area / Distance / LatLon
+- **无任意多边形**（AreaTarget 不在 Component 头文件里，仅 Connect/GUI 有）
+- 与我们的对比：点+半径（5km 圆+足印重叠）→ ATK 用点地面站或小矩形近似；GeoJSON 任意多边形 → ATK 只能外接矩形网格
+- 结论：区域能力"部分类似"（都有点目标和网格），但缺少任意多边形与目标圆语义
+
+### 8.3 对路线的影响（重要）
+
+- A 路线（C++ 辅助程序）：**只能用简单圆锥/矩形 + 固定指向**，满足不了老师复杂传感器建模的核心诉求
+- 全部传感器类型只有 Connect 模式（有 GUI 依赖 + 规模化问题）或自研才有
+- 待拍板：与老师确认所需复杂模型清单后，在"Connect 模式（接受 GUI+规模限制）"与"自研扩展"之间选择

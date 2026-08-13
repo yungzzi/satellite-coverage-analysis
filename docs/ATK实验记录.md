@@ -247,3 +247,29 @@ ATK 无头 vs 自研引擎：覆盖星数 **133/133 一致**；窗口 **190 vs 1
 | atkExecuteScript（ctypes 直调） | 18.9s | >30 分钟（不可用） |
 
 批量设 TLE **没有找到比逐条更快的通道**：ATK Connect 协议本质是逐条 TCP 往返（单条约 11.6ms），Python/SWIG 层仅占小头；2000 颗的 6000 条命令（132s）已是下限附近。真正的大头是 ATK 端 CovMulti Compute 分批固定开销（330s）和报告生成（78s），只能靠"多 ATK 实例并行 + 合并输出"或缩时间窗缓解。**几百颗真实遥感规模（约 17s）已足够快，可替代自研；几千颗需并行化。**
+### 9.10 重要修正：ImportTLEFile 完全可用（纯两行格式 + 正斜杠路径，无需 Rename）（2026-08-13）
+
+**此前误判**：9.9 节曾记录 ImportTLEFile 无头 NACK 不可用。经用户质疑复查，根因有二：
+1. **路径必须用正斜杠**（官方示例 `C:/Users/...`）；反斜杠路径直接 NACK。
+2. **TLE 文件必须纯两行格式（无名字行）**：三行格式（带名字行）导入后卫星星历无效（Position 全零、覆盖空）；纯两行格式导入星历正确（Position 与 SetState TLE 一致）。
+
+**完整可用流程（实测 100 颗 4.2s / 2000 颗 8.9 分钟）**
+1. TLE 文件整理为纯两行格式（去掉名字行）
+2. `ImportTLEFile * "C:/.../xxx.tle"`（一条命令导入全部，2000 颗约 15s）
+3. 导入后卫星名是乱名 `tle-<NORAD><密级>`（如 `tle-40961U`），**可带引号直接引用**：
+   - 建传感器：`New / "*/Satellite/tle-40961U/Sensor" S45`（`/` 在引号外！之前引号位置错误导致 NACK）
+   - 定义口径：`Define "*/Satellite/tle-40961U/Sensor/S45" SimpleCone 45`
+   - 登记资产：`Cov */Facility/Hangzhou Asset "*/Satellite/tle-40961U/Sensor/S45" Assign`
+4. 无需 Rename（Rename 2000 条实测 O(N²) 不可行：300 颗 172ms/条，2000 颗 30+ 分钟超时）
+5. CovMulti 分批 Assets + 每批 Compute（绕开单命令长度上限），报告缓存累计 = 全集
+
+**2000 颗实测（active.tle 前 2000，45° 圆锥 × 杭州 × 8h）**
+| 阶段 | 时间 |
+|---|---|
+| ImportTLEFile | 15.2s |
+| 传感器 4000 条（New+Define） | 118.4s |
+| CovMulti 分批（8 批） | 323.1s |
+| 报告 | 79.7s |
+| **总计** | **536s ≈ 8.9 分钟**（窗口 1038，与逐条 SetState 方案一致） |
+
+**对比**：ImportTLEFile 方案（536s）与 NewMulti+SetState 方案（555s）基本持平，略快；正确性一致（1038 窗口）。批量设 TLE 的结论修正为：**ImportTLEFile 是官方推荐入口，文件驱动更简洁；真正的性能大头仍是传感器逐条创建（4000 条 ~2 分钟）与 ATK 端分批计算（~5 分钟）**。

@@ -334,3 +334,35 @@ ATK 无头 vs 自研引擎：覆盖星数 **133/133 一致**；窗口 **190 vs 1
 - 用户 16GB 真实机器上 decide_max_inst 会自动给到 min(核数,13,12)；沙箱可用内存 6.3GB 导致只并行 5 片，真实机器会更快（预计全集 3 轮 ~3 分钟）。
 
 **相对自研**：4000 颗 ATK 53s vs 自研 339.8s（快 6.4 倍）；16091 颗 ATK 276s vs 自研线性外推 ~1400s（快 5 倍）。远超"最多慢 50%"要求。
+## 10. 复杂传感器覆盖窗口验证（2026-08-13，L1 口径对拍 + L2 三重验证）
+
+> 完整报告见 `docs/ATK传感器验证报告.md`；复现脚本 `experiment/atk/validate_sensor_windows.py` +
+> `validate_sensor_worker.py`。样本：24 颗中国遥感 LEO × 8h × 杭州点，2026-08-12 00:00-08:00 UTC。
+
+### 10.1 结论速览
+
+| 项目 | 结果 |
+| --- | --- |
+| 输出形态 | 所有可计算变体都输出标准覆盖时段报告（序号/开始/结束/时长/覆盖对象），320+ 窗口 0 格式异常 |
+| 退化一致 | Conical(0,45,0,360) ≡ SimpleCone45（69/69，边界差 0.01s） |
+| 物理合理 | Conical(20,45) 环形足印：88 窗/8382s，100% 落在 S45 内；Rectangular(45,45)：74 窗/13959s 更长；Spinning：大量短窗口（20~130 个跨实例不稳定，相位未锚定历元） |
+| L1 对拍 | S45 无约束 vs 自研 fov45/min0：69/70 匹配，最大 4s；地面站约束 Min10/Min30 vs 自研 min10/30：同样 69/70 匹配 |
+| **L1 决定性** | SimpleCone80 + 地面站约束 Min30 vs 自研 fov80/min30：80/77，**76 匹配，最大 28s**——证明地面站 ElevationAngle 约束 = 自研 min_elevation 口径 |
+| 新指标 | Cov_RM 5 种报告样式 + 16 种 FOM 均为独立可选；实测 CoverageTime=1819s、NAsset Max=1、NumberOfAccesses=9；不影响 Coverage 窗口形态 |
+| 区域目标 | 覆盖定义网格计算命令可跑，但 Connect 无窗口报告接口（Cov_RM/FOM 均 NACK）——列遗留，建议 GUI 验证或多地面站近似 |
+
+### 10.2 重要教训（写代码前必看）
+
+1. **仰角约束必须加在地面站（被覆盖方）上**：`SetConstraint */Facility/Hangzhou ElevationAngle Min X`；
+   加在传感器上时是传感器本地俯仰角（向下为负），`Min 10` 会把全部窗口滤光（实测 0 窗口）。
+2. **CovMulti/Assets 的对象路径不能带引号**（带引号 NACK）；`New/Define/Point/SetConstraint` 带引号正常。
+3. **资产登记用逐条 `Cov ... Asset ... Assign` 最可靠**，登记完只发一次 `CovMulti Access Compute` +
+   一次 `Cov_RM`；CovMulti/Assets 批量存在命令长度/静默失效坑。
+4. **SAR/HalfPower 在 Connect 无头 4.0.1-rc.5 算不出覆盖**（SensorQuery 确认配置成功，
+   Access/Cov 均"无分析数据"，宽口径也 0）——最大缺口，待官方确认 GUI 行为或升级版本。
+5. **Targeted 指向在 Connect 全 NACK**（所有语法变体），GUI 有该功能，命令库实现有缺口。
+6. **ATK 是启动器+子进程结构**：收尾必须 `netstat -ano` 找监听端口 PID 后杀进程树，
+   否则残留实例占端口、串场景（本日多次踩坑）。
+7. **ATKConnect 连接被杀会带崩同进程 Python Winsock**（WinError 10093）：
+   多场景验证必须一个场景一个子进程（worker 模式），不能在同进程连第二个场景。
+

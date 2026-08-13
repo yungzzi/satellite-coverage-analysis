@@ -48,3 +48,6 @@ dist/
 # ATK PoC 参考文档与实验脚本（不入库）
 reference/
 experiment/
+
+# ATK 并行工具实验输出（生成物，不入库）
+output_*/

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """并行调度器：TLE → 动态分片 → 多 headless ATK 实例并行覆盖 → 合并输出。
 
 用法：
@@ -69,10 +69,15 @@ def wait_port(port: int, timeout_s: float = 120) -> bool:
 
 
 def launch_atk(port: int):
+    # 隐藏 ATK 启动时弹出的使用协议/欢迎窗口（SW_HIDE）
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0
     return subprocess.Popen(
         [ATK_EXE, "--headless", "--new-scenario", "--port", str(port),
          "--hide-startup", "--hide-welcome", "--no-crash-report"],
-        cwd=ATK_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cwd=ATK_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        startupinfo=si)
 
 
 def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir):

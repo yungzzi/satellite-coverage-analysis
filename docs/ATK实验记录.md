@@ -366,3 +366,27 @@ ATK 无头 vs 自研引擎：覆盖星数 **133/133 一致**；窗口 **190 vs 1
 7. **ATKConnect 连接被杀会带崩同进程 Python Winsock**（WinError 10093）：
    多场景验证必须一个场景一个子进程（worker 模式），不能在同进程连第二个场景。
 
+
+### 10.3 重要修正与追加（2026-08-13 下午）
+
+1. **SAR/HalfPower 突破（修正 10.1 的"算不出"结论）**：
+   - 根因不是模型/版本不支持，而是 `Define` 命令在这版本对这两种模式**静默失效**（SensorQuery 显示
+     参数已写入，但 Access/Cov 均"无分析数据"）。
+   - **正确路线 = 场景 XML**：Connect 建场景 → `Save / * "x.atk"` → 手改 `<SensorType>` 与
+     `<Pattern>` 块 → 新实例 `Load / Scenario "x.atk"` → 计算覆盖。
+   - **SensorType 索引实测**：0=SimpleCone、3=Conical、4=HalfPower、5=SAR（与文档列表顺序有偏移，
+     之前按文档猜 4=SAR 是错的）。
+   - 实测（1 颗 LEO × 8h × 杭州）：SAR(12-70°,30/30,550km) **6 窗口**，其中一次过境被 MaxElev 70°
+     拆成 455s+395s 两段（天底孔洞，物理合理）；HalfPower(0.5GHz/0.35m) **5 窗口** ≈ SimpleCone60。
+   - 待办：把批量 worker 的传感器配置从 Define 改成"Save→改 XML→Load"路线，才能在大规模里用 SAR/HP。
+2. **性能**：传感器变体数量线性影响耗时（24 星：1 变体 6.1s / 9 变体 15.3s，约每变体每星 +0.4s）。
+3. **端口冲突**：runner.py 与 validate_sensor_windows.py 已改动态端口（`pick_free_ports()` bind 探测），
+   不再硬编码 6655+i；与其他软件端口冲突会自动避让。
+4. **Spinning 相位不可复现**：相同 XML（ThetaZero=45、6°/s、30° 锥）两次 Load 窗口时刻完全不同
+   （结构一致、相位偏移）——旋转初相未锚定场景历元，跨实例不可精确复现。
+5. **覆盖定义报告**：Connect 所有报告路径（Cov_RM/CovMulti_RM/FOMDefine/Exec_Report_RM）与
+   CovMulti Objects 全部 NACK；GUI 区域覆盖报告可用（内部模板）。覆盖定义分类在 Connect 命令库
+   只有 Cov Grid/Graphics/VO 三个命令，报告接口未开放。替代：区域网格转点阵地面站。
+6. **地面站 = 点**：Facility 无半径；"点+半径"需用覆盖定义网格（GUI）或多地面站点阵（Connect）近似。
+7. **地面站报告接口出处**：`6-Connect对象命令库/工具/覆盖性命令/Cov_RM Access.html`（在"工具→覆盖性命令"
+   分类，不在"地面站"分类）；语法 `Cov_RM <ObjectPath> Access Compute "<ReportStyle>" ...`。

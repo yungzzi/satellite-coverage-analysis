@@ -54,6 +54,29 @@ def decide_max_inst(requested: int | None) -> int:
     return hard
 
 
+def pick_free_ports(n: int, base: int = 6655, max_scan: int = 200) -> list[int]:
+    """动态挑选 n 个当前空闲的本地端口（避免与其他软件已占用端口冲突）。
+
+    用 bind 探测：能 bind 成功即空闲（ATK 启动后由 --port 监听同一端口）。
+    """
+    ports: list[int] = []
+    p = base
+    while len(ports) < n and p < base + max_scan:
+        s = socket.socket()
+        try:
+            s.bind(("127.0.0.1", p))
+            ports.append(p)
+        except OSError:
+            pass
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+        p += 1
+    return ports
+
+
 def wait_port(port: int, timeout_s: float = 120) -> bool:
     t0 = time.time()
     while time.time() - t0 < timeout_s:
@@ -169,7 +192,13 @@ def main():
     cfg = {**vars(args), "fov": args.fov}
     all_results = {}
     failed = []
-    port_pool = [args.port_base + i for i in range(max_inst)]
+    port_pool = pick_free_ports(max_inst, args.port_base)
+    if len(port_pool) < max_inst:
+        print(f"警告：只找到 {len(port_pool)} 个空闲端口（需要 {max_inst}）", flush=True)
+        max_inst = len(port_pool)
+        if max_inst == 0:
+            print("错误：无空闲端口，终止", flush=True)
+            sys.exit(1)
 
     t_wall = time.time()
     for round_no, start in enumerate(range(0, n_shards, max_inst)):

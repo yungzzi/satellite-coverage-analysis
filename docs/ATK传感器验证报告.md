@@ -68,10 +68,10 @@
 
 ## 5. 已知限制与遗留（重要）
 
-1. **SAR / HalfPower：Connect 无头模式算不出覆盖**。`SensorQuery` 确认参数已正确写入
-   （SAR: MinElev 12/MaxElev 70/FwdAft 30/Alt 550000；HalfPower: 14.5GHz/1m），
-   但 Access 与 Cov 两条计算路径都返回"无分析数据"，连宽口径（SAR 0–90°、60° 波束）也是 0 窗口。
-   疑似 4.0.1-rc.5 Connect 计算内核未实现这两种模式（GUI 是否可用待验证；建议向官方确认）。
+1. **SAR / HalfPower：`Define` 命令路线算不出覆盖，但场景 XML 路线完全可用（见 §7.1）**。
+   根因是 4.0.1-rc.5 的 Connect `Define` 命令对这两种模式静默失效（SensorQuery 显示参数已写入、
+   但 Access/Cov 均"无分析数据"），不是模型本身不行——把传感器写成场景 XML
+   （SensorType 5 = SAR、4 = HalfPower）后 Load，SAR 出 6 个窗口、HalfPower 出 5 个窗口，物理合理。
 2. **Targeted 指向：Connect 命令全部 NACK**（Tracking/Fixed 各变体，含 Receive/Transmit 模式、
    带不带 `*/`、带不带引号），GUI 中有该功能；命令库文档与实际实现存在缺口，列为遗留。
 3. **覆盖定义（区域网格）：计算命令能跑，但窗口报告接口未开放**。`New CoverageDefinition + Cov Grid`
@@ -90,7 +90,66 @@
 - 复杂传感器（Conical/Rectangular/Spinning）与约束（地面站仰角）**输出的仍然是标准覆盖窗口**，
   可以直接喂给现有选星模块；退化一致与物理合理性均通过。
 - "新指标"确实存在（FOM/每日/间隔等 5 种报告样式），但都是**独立可选**的，不影响 Coverage 窗口。
-- **SAR/HalfPower/Targeted 在 Connect 无头模式不可用**（配置成功但算不出/命令 NACK），
-  这是目前替代自研的最大缺口；若老师要求必须支持这三类，需要向 ATK 官方确认 GUI 行为或升级版本，
-  或接受"这几类暂用自研扩展建模"的混合方案。
+- **SAR/HalfPower 可用，但必须走场景 XML 路线**（SensorType 5/4 + Load），`Define` 命令路线
+  在这版本对这两种模式静默失效；**Targeted 指向在 Connect 仍不可用**（所有语法变体 NACK，GUI 有）。
+  若老师要求必须支持 Targeted，需向官方确认命令缺口或升级版本。
 
+
+## 7. 追加验证（2026-08-13 下午：SAR/HalfPower 突破 + 性能/端口/Spinning/覆盖定义/地面站）
+
+### 7.1 SAR / HalfPower 突破：场景 XML 路线（关键发现）
+
+- 方法：Connect 建场景（导入 TLE + 建 SimpleCone 传感器 + 地面站）→ `Save / * "xxx.atk"`
+  → 手改 XML 的 `<SensorType>` 与 `<Pattern>` 块 → 新实例 `Load / Scenario "xxx.atk"` → 计算覆盖。
+- **SensorType 索引实测**：0=SimpleCone、3=Conical、4=HalfPower、5=SAR（文档列表顺序与实现有偏移，
+  之前按文档猜 4=SAR 是错的）。SAR 块字段：`<MinElevAngle>/<MaxElevAngle>/<FwdExclAngle>/<AftExclAngle>/<Altitude>/<TrackParentAlt>`。
+- **结果（1 颗 LEO，2026-08-12 8h，杭州点）**：
+  - SAR(12°–70°, 前后排除 30°, 550km)：**6 个窗口**；其中 01:06–01:21 那次过境被拆成
+    455s+395s 两段（MaxElev 70° 排除近天顶 → 条带中间有孔洞，物理完全合理）；
+  - HalfPower(0.5GHz/0.35m ≈ 60° 波束)：**5 个窗口**，时长 759–805s，与 SimpleCone60 量级一致；
+  - 对照 SimpleCone45：5 个窗口（XML 路线与 Define 路线一致）。
+- **结论**：SAR/HalfPower 模型本身没问题，是 `Define` 命令在 4.0.1-rc.5 对这两种模式静默失效
+  （又一个"像 TLE 导入"的通道问题）。批量工具要支持它们，需把传感器配置改为
+  "Save→改 XML→Load" 路线（当前 worker 用 Define，暂不支持，列入下一步）。
+
+### 7.2 性能：传感器变体数量线性影响耗时
+
+- 实测（24 星 × 8h × 杭州点，worker 全流程墙钟）：1 变体 6.1s（该次 ATK 随机堆损坏崩溃，参考值）；
+  9 变体 15.3s、320 窗口。约每颗星每多一个变体 +0.4s（New+Define+Assign 命令往返）。
+- 几百颗真实遥感规模多几个变体影响很小；几千颗时传感器创建命令数仍是主要瓶颈（已知）。
+
+### 7.3 端口：已改动态分配，避免与别的软件冲突
+
+- 原 `runner.py` 是 `6655 + i` 硬编码递增；现改为 `pick_free_ports()`（bind 探测当前空闲端口），
+  `validate_sensor_windows.py` 同样按场景动态取端口。若 6655 被占用会自动往后找空闲端口。
+
+### 7.4 Spinning 相位：不可跨实例复现（含 XML 路线）
+
+- 相同命令/相同 XML（`<ThetaZero>45</ThetaZero>`、`<SpinRate>0.1047 rad/s` = 6°/s、ConeAngle 30°）
+  两次 Load，窗口时刻完全不同（如 01:12:38 vs 01:14:19）——旋转初相与实例初始化有关，
+  未锚定到场景历元。窗口数量/分布结构一致（8 个），相位偏移不定。
+- 影响：旋转扫描的"窗口时刻"不可复现；若老师要用 Spinning 出精确时刻表，需向官方确认
+  相位初始化机制（或接受该不确定性）。
+
+### 7.5 覆盖定义（区域网格）报告：Connect 无接口（GUI 可用）
+
+- 试过：`Cov_RM */CoverageDefinition/CD1 Access Compute "Coverage"`（通配符/全路径）、
+  `CovMulti_RM MultiFOMDefine`、`Cov_RM CD FOMDefine`、`Exec_Report_RM Style "覆盖时段报告"`，
+  全部 NACK；`CovMulti / Objects */CoverageDefinition/CD1` 也 NACK（地面站路径则正常）。
+- 结论：**Connect 命令库未开放覆盖定义的覆盖/报告接口**（覆盖定义分类下只有 Cov Grid/Graphics/VO
+  三个命令），GUI 区域覆盖工具走内部模板所以可用。替代：区域网格转点阵地面站（每个网格点一个
+  Facility，走已有的 `Cov_RM */Facility/...` 报告路径），或多地面站近似目标圆。
+
+### 7.6 地面站：只能是点，没有半径
+
+- Facility（地面站）就是点目标（Geodetic 经纬高），**没有半径概念**。自研的"5km 圆目标"与 ATK
+  点地面站的差异正是对拍 1~28s 边界偏差的来源。
+- 要表达"点+半径"：a) 覆盖定义小网格（GUI 可用，Connect 无报告接口）；b) 多地面站点阵近似圆
+  （Connect 可用，报告走 facility 路径）；c) 保留自研引擎做圆目标、ATK 做复杂传感器验证。
+
+### 7.7 地面站报告接口出处（用户询问）
+
+- 文档位置：`ATK安装目录/Help/html/二次开发教程/2-二次开发CONNECT模式/6-Connect对象命令库/工具/覆盖性命令/Cov_RM Access.html`
+  —— 在"工具→覆盖性命令"分类下（不在"地面站"或"覆盖定义"分类下，所以容易找不到）。
+- 语法：`Cov_RM <ObjectPath> Access Compute "<ReportStyle>" [{TimeIntervals} | UseObjectTimes]`，
+  示例：`Cov_RM */Satellite/Satellite1 Access Compute "Coverage" "14 Mar 2024 00:00:00.000" "15 Mar 2024 00:00:00.000"`。

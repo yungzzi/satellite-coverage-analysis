@@ -57,6 +57,24 @@ def self_windows(recs, fov, min_elev):
             pass
     return out
 
+def pick_free_port(base=6655, max_scan=200):
+    """挑一个当前空闲端口（bind 探测），避免与其他软件端口冲突。"""
+    import socket as _s
+    for p in range(base, base + max_scan):
+        s = _s.socket()
+        try:
+            s.bind(("127.0.0.1", p))
+            s.close()
+            return p
+        except OSError:
+            pass
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+    raise RuntimeError("无空闲端口")
+
 def kill_port_owner(port):
     """杀监听端口的进程树（ATK 是启动器+子进程结构，按端口找真身）。"""
     try:
@@ -83,7 +101,8 @@ def kill_port_owner(port):
 
 def run_worker(scenario, variants, facility_constraint=None):
     tle_path = os.path.join(tempfile.gettempdir(), "val_subset.tle")
-    cfg = {"port": PORT, "scenario": scenario, "tle": tle_path.replace("\\", "/"),
+    port = pick_free_port()
+    cfg = {"port": port, "scenario": scenario, "tle": tle_path.replace("\\", "/"),
            "t0": T0_ATK, "t1": T1_ATK, "lat": LAT, "lon": LON,
            "expected": SUBSET_N, "variants": variants,
            "facility_constraint": facility_constraint,
@@ -93,7 +112,7 @@ def run_worker(scenario, variants, facility_constraint=None):
         json.dump(cfg, f, ensure_ascii=False)
     last = None
     for attempt in range(3):
-        kill_port_owner(PORT)
+        kill_port_owner(port)
         subprocess.run([VENV_PY, os.path.join(HERE, "validate_sensor_worker.py"), cpath],
                        cwd=WS, timeout=900)
         if os.path.exists(cfg["out"]):

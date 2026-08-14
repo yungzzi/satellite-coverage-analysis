@@ -416,3 +416,23 @@ ATK 无头 vs 自研引擎：覆盖星数 **133/133 一致**；窗口 **190 vs 1
 ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告），语法见 6-Connect对象命令库。
 **XML 是什么**：ATK 场景保存文件（.atk）是带标签的 XML 文本，Save 命令把整个场景配置序列化进去；
 手工改标签再 Load 可配置 Define 命令搞不定的类型（SAR/HalfPower 即此路线）。
+
+### 10.5 Spinning 定案 + 覆盖定义最终证据（2026-08-14 上午）
+
+**Spinning 离散相位状态（完整控制变量实验，见验证报告 §7.4）**
+- 同一 XML（ThetaZero=45）反复实验：同一实例内完全确定（连续算/Load 两次/时段平移毫秒级一致）；
+  跨实例落在离散状态（3/7/8/9/10/11 窗口模式），同状态毫秒级可复现。
+- 已设置并验证：ThetaZero=45（SensorQuery 确认）、显式 AttitudeDefine（VVLH/ECF速度/ECI速度/Fixed，
+  类型改变窗口模式）、去掉 Load 后时段重置——均无法消除离散状态。
+- Connect 的 AddAttitude（Quat/YPR/CBFQuat）对 TLE 导入卫星全部 NACK，SetAttitude Standard 无效，
+  无法在 Connect 层显式固定体坐标姿态。
+- 结论：ATK 无头 Connect 的 Spinning 初始相位存在实例级离散状态（疑似 Legacy 姿态体坐标滚转初始化），
+  建议 GUI 复测 + 官方反馈。
+
+**覆盖定义最终证据（四轮，见验证报告 §7.5）**
+- 品质因子是 GUI 区域覆盖流程的必要部分（官方教程确认），但 Connect 端即使：自建 CD+FOM 子对象
+  （New /FigureOfMerit + Cov FOMDefine + Cov Interval + Assign + Compute 全部 ACK）、加载官方示例
+  （FomName=2/Compute=19/Enable=1）、把官方示例中文名改 ASCII 后 Load——`Cov_RM` 全部样式、
+  `CovMulti Objects CD`、`CovMulti_RM`、`QuickReport_RM GetList` 全部 NACK/空。
+- 二次开发案例无区域覆盖示例；综合案例区域覆盖全程 GUI 操作。结论：Connect 命令库未开放
+  覆盖定义报告接口；区域目标需点阵地面站近似（facility 报告路径）。

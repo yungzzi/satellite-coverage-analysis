@@ -487,3 +487,15 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
   不能带 `--new-scenario` 启动；官方示例 ASCII 化后 Load/计算 ACK 但 Report_RM 仍 NACK（待查）。
 - 网格配置：分两次 Grid 命令后区域变回全局网格（1008 点），合并选项写法待确认。
 
+### 10.9 用户方案验证：Start→Save→Load 不 Start（2026-08-14 晚）
+
+用户提出"新建场景 Start 生成星历 → 强制保存 → Load 后不 Start"的方案，实测结论：
+- **轨道星历可持久化，方案对 SimpleCone 成立**：XML 内含 24 卫星/24 传感器/1 地面站及
+  Position/Velocity 状态；Load（不带 `--new-scenario`）+ 不 Start 直接计算 = 69 窗口，
+  多次一致，与 A（新建+Start）相同。
+- **Spinning 相位仍不可复现，方案对 SPIN 不成立**：同一保存 XML 多轮 Load（不 Start），
+  窗口 20/124/129/43/125/123/126 都出现过；offset=45（ThetaZero）也锚不住；
+  偶尔连续 4 次都命中 20/00:17:45.822 属概率性，非可靠机制。
+- 结论修正：§7.4 曾认为"已物化 XML Load 5/5 一致"可作复现路径，现判定为**概率性命中同一
+  离散状态**，不能作为生产依据；Spinning 相位锚定仍需官方确认（疑似未暴露的初始化状态，
+  与 Legacy 姿态体坐标初始化相关）。

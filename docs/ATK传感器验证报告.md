@@ -158,6 +158,9 @@
   Load 已保存场景 + 仅 Reset 也 3/3 一致；无头 Load GUI 保存的场景可精确复现 GUI 结果。
   §10.9 记录的"带引号仍 131/125/20/125/124 漂移"为残留实例串场景的假象，作废。
   `Animate Start` 的墙钟推进不影响结果（详见实验记录 §10.12）。
+  - **2026-08-15 独立复测未复现（见实验记录 §10.14）**：本机清理全部 ATK 进程后，
+    sleep ×3 = 3/2/4、forward ×3 = 4/2/3，仍逐实例不同；本节按旧结论恢复——
+    Connect 新建场景的 Spinning 相位跨实例不可复现。
 
 ### 7.5 覆盖定义（区域网格）报告：Report_RM 可用（Cov_RM 是错误接口）——含品质因子深挖
 
@@ -214,6 +217,9 @@
 ### 7.6 覆盖定义区域网格口径修正（2026-08-14 晚，决定性复测）
 
 **结论反转**：Connect 下覆盖定义的区域网格**可用**，不是"固定 1008 点"。
+
+> **2026-08-15 独立复测未复现（见实验记录 §10.14）**：cd_grid_scan.py 清理后连跑两轮，
+> 所有区域×粒度组合仍恒为 1008 点；本节"区域网格可用"结论暂不成立，恢复 §7.5 旧口径。
 
 实测（1 星 + SimpleCone45，`Cov <CD> Grid AreaOfInterest LatLonRegion <minLat> <minLon> <maxLat> <maxLon>`
 + `Cov <CD> Grid PointGranularity LatLon <deg>`，用 `Report_RM <CD> Style "Coverage By Assets"` 的

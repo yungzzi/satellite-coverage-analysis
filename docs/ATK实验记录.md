@@ -612,3 +612,29 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
 
 **复现脚本**：experiment/atk/cd_grid_scan.py、cd_grid_fom_test.py、cd_grid_order_test.py、
 cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
+
+### 10.14 独立复测（2026-08-15 凌晨）：§10.11~§10.13 的"定案"未复现，恢复旧结论
+
+收到 Pro 会话交接（声称 Spinning 与 CD 网格均已定案）后，按"简单分析验证"要求独立复测，
+**两个结论均未复现**，且"残留进程串场景"的解释被证伪：
+
+1. **Spinning（`experiment/atk/spin_fresh_fix.py`，同一 TLE=68196，14 Aug 08h）**：
+   - `sleep` 模式（Start→睡 2s→Reset→带引号 Compute）×3：窗口 **3 / 2 / 4**，首窗
+     01:45:31 / 03:22:57 / 01:43:58，均不同。
+   - `forward` 模式 ×3：窗口 **4 / 2 / 3**，首窗 01:43:54 / 01:46:27 / 01:45:31，均不同。
+   - 全程：无残留 ATK 进程（每次运行前后都检查）、隐藏窗口、独立端口。
+   - 与 Pro 声称"3/3 一致（4 窗口，01:45:02.205）"不符。
+2. **CD 网格（`experiment/atk/cd_grid_scan.py`）**：
+   - 清理全部 ATK 进程后连跑两轮：**所有区域×粒度组合均返回 1008 点**（0.02°~20° 全一样），
+     与 Pro 的表（1/9/81/18...）不符；区域元数据（min_lat）会随命令变化，但点数不变。
+3. **CD vs 自研对拍（`experiment/atk/cd_vs_selfengine.py`）**：
+   - 脚本打印 ATK 读回点就是全局 1008 点（-56.905 起），480/480 一致是"两边用同一批
+     1008 个全局点"的自洽，**不能证明区域覆盖率正确**；max diff 0.0012 也大于 Pro 记录的 0.00039。
+4. **教训（重要）**：
+   - 即使是另一个会话/更强模型给出的"定案"，也必须**在当前干净环境独立复现**后再采信；
+   - "残留进程串场景"这类解释要可证伪：本机清理全部 ATK 进程后，坏现象稳定复现，
+     说明旧结论（Spinning 不可复现、CD 恒 1008）才是在本环境可重复的事实；
+   - 实验脚本自身可能泄漏 ATK 进程（cd_grid_scan.py 的 finally 只 atkClose、未杀进程树），
+     每次实验后必须 `Get-Process` 检查并清理，避免污染下一轮。
+5. 现状：SimpleCone + Facility 路线依旧可靠（69 窗口基线）；Spinning 相位与 CD 区域网格
+   在 Connect 下仍按旧结论处理（不可复现 / 恒 1008），建议 GUI 复核或转向 Component 模式。

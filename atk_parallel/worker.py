@@ -54,7 +54,7 @@ def main():
 
     cmd("New", "/ Scenario W" + str(port))
     cmd("SetAnalysisTimePeriod", f'* "{t0}" "{t1}"')
-    # 唯一动画命令：只 Reset 不 Start（Animate Start 会按墙钟快进，漂移 Spinning 相位）
+    # 初始化动画状态；新建场景的星历物化仍需下方 Start（见注释）
     cmd("Animate", "* Reset")
 
     t0_ = time.time()
@@ -86,8 +86,8 @@ def main():
     cmd("New", "/ Facility Hangzhou")
     cmd("SetPosition", f"*/Facility/Hangzhou Geodetic {lat} {lon} 0.0")
     # 新建场景必须先 Start 生成星历（仅 Reset/Step/Save-Load 都无法物化）。
-    # Start 期间的墙钟推进不影响结果：只要 Access Compute 时间参数带引号，就会按分析时段重算，
-    # Spinning 相位与 SimpleCone 一样跨实例可复现（2026-08-14 定案）。
+    # 注意：Spinning 相位在 Connect 新建场景下跨实例仍不可复现（离散初始化状态，
+    # 2026-08-15 独立复测确认；SimpleCone 不受影响）。
     cmd("Animate", "* Start")
     cmd("Animate", "* Reset")
 

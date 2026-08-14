@@ -123,22 +123,40 @@
 - 原 `runner.py` 是 `6655 + i` 硬编码递增；现改为 `pick_free_ports()`（bind 探测当前空闲端口），
   `validate_sensor_windows.py` 同样按场景动态取端口。若 6655 被占用会自动往后找空闲端口。
 
-### 7.4 Spinning 相位：不可跨实例复现（含 XML 路线）
+### 7.4 Spinning 相位：实例内确定可复现，跨实例不可复现（控制变量实验结论）
 
-- 相同命令/相同 XML（`<ThetaZero>45</ThetaZero>`、`<SpinRate>0.1047 rad/s` = 6°/s、ConeAngle 30°）
-  两次 Load，窗口时刻完全不同（如 01:12:38 vs 01:14:19）——旋转初相与实例初始化有关，
-  未锚定到场景历元。窗口数量/分布结构一致（8 个），相位偏移不定。
-- 影响：旋转扫描的"窗口时刻"不可复现；若老师要用 Spinning 出精确时刻表，需向官方确认
-  相位初始化机制（或接受该不确定性）。
+控制变量实验（同一 XML：SimpleCone20 + Spinning 0 -90 30 Continuous 6 45，即 ThetaZero=45）：
+1. **同一实例连续算两次**：7 窗口逐窗口完全一致 → 计算本身确定性，无随机。
+2. **同一实例 Load 两次同一 XML**：10 窗口完全一致 → 实例内完全可复现。
+3. **分析时段从 00–08h 平移到 02–10h**：落在共同时段的窗口**毫秒级吻合**
+   （如 02:50:09.507 vs 02:50:09.510）→ 相位锚定场景内固定参考，随场景时间平移。
+4. **ThetaZero=0/45/90/180 窗口模式都不同** → 参数生效，但只是相对偏移。
+5. **两个实例并行同时启动（启动差 2s），Load 同一 XML**：7 窗口 vs 8 窗口，首窗差 11s
+   → **跨实例每次启动的基准相位不同（同时启动也不同），与墙钟无关**。
 
-### 7.5 覆盖定义（区域网格）报告：Connect 无接口（GUI 可用）
+结论：不是用法/变量没控制好；ATK 每次实例化旋转传感器时基准相位未定义（实例内确定，
+跨实例随机偏移约几十秒量级、窗口结构相似）。若需要精确可复现的 Spinning 时刻表，
+需向官方确认相位初始化机制；可接受的做法是"同一实例内连续计算可复现，跨实例只保证
+窗口数量级/分布结构"。
 
-- 试过：`Cov_RM */CoverageDefinition/CD1 Access Compute "Coverage"`（通配符/全路径）、
-  `CovMulti_RM MultiFOMDefine`、`Cov_RM CD FOMDefine`、`Exec_Report_RM Style "覆盖时段报告"`，
-  全部 NACK；`CovMulti / Objects */CoverageDefinition/CD1` 也 NACK（地面站路径则正常）。
-- 结论：**Connect 命令库未开放覆盖定义的覆盖/报告接口**（覆盖定义分类下只有 Cov Grid/Graphics/VO
-  三个命令），GUI 区域覆盖工具走内部模板所以可用。替代：区域网格转点阵地面站（每个网格点一个
-  Facility，走已有的 `Cov_RM */Facility/...` 报告路径），或多地面站近似目标圆。
+### 7.5 覆盖定义（区域网格）报告：Connect 无接口（GUI 可用）——含品质因子深挖
+
+- 用户提示 GUI 教程里覆盖定义必须添加品质因子才有分析结果。核实官方《11-区域覆盖案例》：
+  操作流程确实是"创建覆盖定义（网格）→ 创建品质因子（选择覆盖定义1）→ 类型=覆盖时间/计算=每日最大
+  → 区域覆盖工具计算 → 覆盖时段报告 + 品质因子报告"。
+- Connect 实验（逐项排除）：
+  a) 自建 CD + `New / */CoverageDefinition/CD1/FigureOfMerit FOM1`（子对象）+ `Cov FOMDefine` 配置
+     → 创建/配置都 ACK，但 `Cov_RM CD ...` 仍 NACK；
+  b) 直接 Load 官方示例 `11-区域覆盖案例/区域覆盖案例.atk`（含品质因子1，FomName=2/Compute=19/Enable=1）
+     → 中文对象名导致 Connect 命令 NACK（Rename 也 NACK）；
+  c) 把官方示例 XML 的中文名改成 ASCII（覆盖定义1→CD1、品质因子1→FOM1、卫星2→SAT2）后 Load
+     → 全部对象正常加载，Assign/Compute ACK，但 `Cov_RM`（Coverage/Coverage Gaps/Satisfaction/
+     Daily Coverage/FOMDefine 全部样式）、`CovMulti Objects CD`、`CovMulti_RM` **全部 NACK**。
+- 结论：**品质因子是 GUI 区域覆盖出结果流程的一部分（确认），但 Connect 命令库确实没有开放
+  覆盖定义的窗口/报告接口**——不是品质因子缺失的问题。品质因子对象本身可创建配置（命令见上），
+  但报告命令只对地面站等对象有效。
+- 替代：区域网格转点阵地面站（每个网格点一个 Facility，走 `Cov_RM */Facility/...` 报告路径），
+  或多地面站近似目标圆；区域目标如需精确网格报告，只能 GUI 或等官方开放接口。
 
 ### 7.6 地面站：只能是点，没有半径
 

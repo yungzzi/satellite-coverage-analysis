@@ -390,3 +390,29 @@ ATK 无头 vs 自研引擎：覆盖星数 **133/133 一致**；窗口 **190 vs 1
 6. **地面站 = 点**：Facility 无半径；"点+半径"需用覆盖定义网格（GUI）或多地面站点阵（Connect）近似。
 7. **地面站报告接口出处**：`6-Connect对象命令库/工具/覆盖性命令/Cov_RM Access.html`（在"工具→覆盖性命令"
    分类，不在"地面站"分类）；语法 `Cov_RM <ObjectPath> Access Compute "<ReportStyle>" ...`。
+
+### 10.4 Spinning 控制变量实验 + 覆盖定义品质因子深挖（2026-08-14）
+
+**Spinning 相位（控制变量实验，结论：实例内确定、跨实例不可复现）**
+1. 同一实例连续算两次：窗口逐窗口一致（无随机）。
+2. 同一实例 Load 两次同一 XML：一致。
+3. 分析时段 00-08h → 02-10h 平移：共同时段窗口毫秒级吻合（相位锚定场景内固定参考）。
+4. ThetaZero=0/45/90/180 窗口模式不同（参数生效，只做相对偏移）。
+5. 两实例并行同时启动（差 2s）Load 同一 XML：7 vs 8 窗口，首窗差 11s → 跨实例基准相位未定义，
+   与墙钟无关、不是用法错误。
+→ 生产建议：同一实例内连续计算可复现；跨实例只保证窗口数量级/结构，精确时刻需官方确认。
+
+**覆盖定义 + 品质因子（用户提示：GUI 区域覆盖必须先建品质因子）**
+- 官方《11-区域覆盖案例》确认：创建覆盖定义 → 创建品质因子（选择覆盖定义）→ 类型=覆盖时间/计算=每日最大
+  → 区域覆盖工具计算 → 覆盖时段报告 + 品质因子报告。
+- Connect 实验：a) 自建 CD + `New / */CoverageDefinition/CD1/FigureOfMerit FOM1` + `Cov FOMDefine`
+  配置（均 ACK）→ Cov_RM 仍 NACK；b) Load 官方示例（中文名）→ Connect 命令全 NACK（中文对象名问题）；
+  c) 官方示例 XML 中文名改 ASCII 后 Load → 对象正常、Assign/Compute ACK，但 Cov_RM 全部样式、
+  CovMulti Objects CD、CovMulti_RM 全部 NACK。
+- 结论：品质因子是 GUI 流程必要条件（确认），但 **Connect 命令库未开放覆盖定义报告接口**（不是品质因子
+  缺失）。替代：区域网格转点阵地面站（facility 报告路径）。
+
+**Connect 机制确认**：命令即字符串，Python SDK（ATKConnectModule）atkConnect(con, 命令, 参数串) 发送到
+ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告），语法见 6-Connect对象命令库。
+**XML 是什么**：ATK 场景保存文件（.atk）是带标签的 XML 文本，Save 命令把整个场景配置序列化进去；
+手工改标签再 Load 可配置 Define 命令搞不定的类型（SAR/HalfPower 即此路线）。

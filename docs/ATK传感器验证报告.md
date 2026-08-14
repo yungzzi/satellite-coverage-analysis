@@ -161,6 +161,9 @@
   - **2026-08-15 独立复测未复现（见实验记录 §10.14）**：本机清理全部 ATK 进程后，
     sleep ×3 = 3/2/4、forward ×3 = 4/2/3，仍逐实例不同；本节按旧结论恢复——
     Connect 新建场景的 Spinning 相位跨实例不可复现。
+  - **2026-08-15 最终定论（§10.18）**：GUI 完全重启 ×3 同样漂移（4/1/3 窗口）；
+    根因 = ATK 未初始化初始相位（ASLR 绑定，沙箱掩盖），Offset/ThetaZero 仅相对偏移、
+    相位不入 XML、Legacy/VVLH 均非根因、Component 无 Spinning → 定性 ATK 4.0.1-rc.5 缺陷。
 
 ### 7.5 覆盖定义（区域网格）报告：Report_RM 可用（Cov_RM 是错误接口）——含品质因子深挖
 
@@ -220,6 +223,9 @@
 
 > **2026-08-15 独立复测未复现（见实验记录 §10.14）**：cd_grid_scan.py 清理后连跑两轮，
 > 所有区域×粒度组合仍恒为 1008 点；本节"区域网格可用"结论暂不成立，恢复 §7.5 旧口径。
+>
+> **2026-08-15 标准路线（§10.18）**：统一采用 XML 注入（建 CD → Save → 改 `<Grid>` → Load），
+> 绕开 `Cov Grid`；我方已验证点数随区域变化（0.5°×0.5°/0.5° → 1 点，min_lat=30.000）。
 
 实测（1 星 + SimpleCone45，`Cov <CD> Grid AreaOfInterest LatLonRegion <minLat> <minLon> <maxLat> <maxLon>`
 + `Cov <CD> Grid PointGranularity LatLon <deg>`，用 `Report_RM <CD> Style "Coverage By Assets"` 的

@@ -531,6 +531,8 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
 
 ### 10.12 Spinning 不可复现最终定案：根因是"Compute 缺引号"，带引号后完全确定（2026-08-14 晚）
 
+> **2026-08-15 作废**：本节"带引号即可复现"已被 §10.14/§10.18 推翻（沙箱掩盖 ASLR 假象）。
+
 **结论反转（最终版）**：Spinning 相位**可复现**，根因只有一个——`Cov ... Access Compute` 的
 时间参数**必须带引号**。§10.9/§10.10 记录的"带引号仍 131/125/20/125/124 漂移"是假象，
 大概率是当时残留 ATK 实例串场景/陈旧状态导致。
@@ -559,6 +561,9 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
   spin_conn_probe.py（留档）。
 
 ### 10.13 覆盖定义（区域网格）vs 自研引擎逐分钟对拍：100% 一致（2026-08-14 晚，任务 B）
+
+> **2026-08-15 修正**：该对拍使用 Pro 环境"有效"的 Cov Grid 区域网格；我方环境 Cov Grid 失效，
+> 已改用 XML 注入标准路线（§10.17/§10.18），区域口径结论以新路线复测为准。
 
 - 方法：ATK CD 用 `LatLonRegion 30 120 31 121` + `PointGranularity LatLon 0.5` 生成 9 个真实网格点，
   读回这 9 个点；自研引擎 `compute_covered_series` 用**同一批 9 个点**跑多边形模式，
@@ -681,3 +686,27 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 - **用户决策**：反对自研旋转扫描模型，继续 ATK 二次开发；自研仅作交叉验证。
 - Spinning 剩余可选路径：①单长驻 ATK 进程（进程内确定，跨重启不定）；②GUI 跨进程测试
   （待用户）；③retry-until-match（需参考状态）；④官方反馈。
+
+### 10.18 Spinning 收口定论 + CD 标准路线 + 项目决策（2026-08-15，最终版）
+
+**Spinning 根因锁定（GUI 分水岭 + 沙箱/提权对照）**
+- 用户 GUI 完全重启 ×3：窗口 4（216.486s）/ 1（91.282s）/ 3（99.859s），首窗各异 →
+  **GUI 跨进程同样漂移**，不是 Connect 独有；此前"GUI 两遍一致"是同进程内一致。
+- Pro 对照实验（同一 spin_vvlh_xml_test.py，仅改权限）：沙箱内 Load ×5 = 1/1/1/1/1；
+  提权（非沙箱）Load ×5 = 4/4/1/4/3 → **Spinning 初始相位 = ATK 未初始化变量（ASLR 绑定）**，
+  沙箱压稳内存布局掩盖了随机性，真机/提权环境暴露真实随机。
+- 四路全堵：Point Spinning 的 Offset/ThetaZero 只是相对偏移；相位不序列化入 XML；
+  Legacy/VVLH 姿态均不是根因；Component 无 Spinning（ESnPattern 仅 SimpleCone/Rectangular）。
+- **定性：ATK 4.0.1-rc.5 缺陷（未初始化初始相位）**，建议附用户 3 次 GUI 结果反馈官方。
+
+**CD 区域网格标准路线（双方统一）**
+- 一律走 **XML 注入**：Connect 建 CD → Save → 改 `<Grid>` 的
+  MinLat/MaxLat/MinLon/MaxLon/ValueGranularity → Load → 计算。
+  绕开两环境不一致的 `Cov Grid` 命令（我方失效、Pro 有效，不再追差异）。
+
+**项目决策**
+- 生产兜底：**单长驻 ATK 进程** + 输出时标注"初始相位未指定，结果为一次代表性实现"；
+  优先输出**相位不变量**（总覆盖时长、覆盖率%、重访 MRT）；相位敏感量（窗口起止/时长）加注；
+  "多进程取范围/聚合"记入待办暂不做。
+- SimpleCone + Facility 路线照常推进（确定可靠，69 窗口基线）。
+- Spinning 挂起：等官方回复或用户最终拍板（用户当前否决自研旋转模型）。

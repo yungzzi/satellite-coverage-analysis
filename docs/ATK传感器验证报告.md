@@ -138,12 +138,17 @@
 | XML 显式 AttitudeDefine（VVLH/ECF速度/ECI速度/Fixed） | 类型改变窗口模式；**显式 VVLH 的 4 个干净实例仍落在两个离散状态**（实例1&3=9 窗口毫秒级一致，实例2&4=3 窗口毫秒级一致） |
 | 去掉 Load 后的 SetAnalysisTimePeriod（微控制） | 仍落在 8/7/3/3 不同状态 |
 
-结论：**无头 Connect 下 Spinning 传感器的初始相位存在离散的实例级状态**（观察到 3/7/8/9/10/11
-窗口等模式），同状态内毫秒级可复现，跨实例不可控；ThetaZero（初始偏差角）与卫星显式姿态
-（AttitudeDefine VVLH 等）都已设置验证，无法消除。卫星体坐标/Legacy 姿态的滚转初始化很可能是
-随机源，但 Connect 的 AddAttitude/SetAttitude 对 TLE 导入卫星无效（NACK/无效果），无法在
-Connect 层修复。建议：a) GUI 里建相同场景测试是否可复现（GUI 初始化路径可能不同）——若 GUI
-可复现，对比 GUI 保存 XML 与 Connect 保存 XML 的差异找缺失字段；b) 向官方反馈该缺陷。
+最终结论（所有可控参数逐一排除，2026-08-14 上午追加）：
+- 从 AtAttitude.dll 提取到**真实有效的姿态类型名**：`AttitudeVVLH`/`AttitudeVVLHCBI`/`AttitudeVVLHCBF`/
+  `AttitudeEcfAligndVel`/`AttitudeEciAligndVel`/`AttitudeFixedInCBF` 等（此前猜的 AttitudeSatelliteVVLH
+  无效会被静默忽略）。改用正确的 `<AttitudeDefine Type="AttitudeVVLH"/>` 后 GetAttitude 确认
+  "Nadir alignment with ECI velocity constraint"（姿态已显式确定）。
+- 但**显式 VVLH + ThetaZero=45 + 星历步长 1s + SetAnimation CurrentTime 锚定时钟**的 4 个干净实例，
+  窗口仍落在不同状态（如 3/11/7/3、3/3/8/8、3/3/3/7）——姿态、星历采样、时钟、初始偏差角、
+  实例卫生全部排除，**相位差异来自 ATK 内部未暴露的实例级初始化**（疑似旋转相位基准值未初始化）。
+- 实用缓解：**同一实例内（含同实例重新 Load）相位保持不变、结果毫秒级自洽**——生产上应使用
+  单个长驻实例跑完整分析（不要为每个场景/分片重启实例），保证一次分析内部自洽；跨实例
+  复现需 GUI 测试（GUI 初始化路径可能不同）或官方反馈。
 
 ### 7.5 覆盖定义（区域网格）报告：Connect 无接口（GUI 可用）——含品质因子深挖
 

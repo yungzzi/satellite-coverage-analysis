@@ -436,3 +436,16 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
   `CovMulti Objects CD`、`CovMulti_RM`、`QuickReport_RM GetList` 全部 NACK/空。
 - 二次开发案例无区域覆盖示例；综合案例区域覆盖全程 GUI 操作。结论：Connect 命令库未开放
   覆盖定义报告接口；区域目标需点阵地面站近似（facility 报告路径）。
+
+### 10.6 Spinning 最终定案：所有可控参数逐一排除（2026-08-14 下午）
+
+- 从 AtAttitude.dll 提取到真实姿态类型名：AttitudeVVLH / AttitudeVVLHCBI / AttitudeVVLHCBF /
+  AttitudeEcfAligndVel / AttitudeEciAligndVel / AttitudeFixedInCBF 等（此前 AttitudeSatelliteVVLH
+  无效会被静默忽略）。AttitudeVVLH 生效已由 GetAttitude 确认（"Nadir alignment with ECI velocity
+  constraint"）。
+- 逐项排除清单（每项 4 个干净实例）：ThetaZero=45（SensorQuery 确认）→ 仍 3/3/7/8；
+  正确 VVLH 姿态 → 3/11/7/3；星历步长 60→1s → 3/3/3/7；不重设时段 → 8/7/3/3；
+  Point Spinning 重设 → 不改变；SetAnimation CurrentTime 锚定 → 3/3/8/8；不调用 Animate → 无法计算。
+- 结论：相位差异来自 ATK 内部未暴露的实例级初始化（疑似旋转相位基准未初始化），非参数可控。
+- 实用缓解：同一实例内（含同实例重新 Load）相位不变、结果毫秒级自洽；生产上用单个长驻实例
+  跑完整分析；跨实例复现需 GUI 测试或官方反馈。

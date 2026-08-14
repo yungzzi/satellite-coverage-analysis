@@ -638,3 +638,17 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
      每次实验后必须 `Get-Process` 检查并清理，避免污染下一轮。
 5. 现状：SimpleCone + Facility 路线依旧可靠（69 窗口基线）；Spinning 相位与 CD 区域网格
    在 Connect 下仍按旧结论处理（不可复现 / 恒 1008），建议 GUI 复核或转向 Component 模式。
+
+### 10.15 GUI XML 模板路线复测（2026-08-15 凌晨）：同一 XML 跨进程仍落离散状态
+
+- 拿到用户 GUI 保存的场景 `D:\研究生学习资料\02_课题组工作\长期项目\Test for spinning bug.atk`
+  （卫星 YAOGAN-50 02__68196、传感器1=SimpleCone20+Spinning 单位四元数/ThetaZero=0）。
+- 无头 Connect Load（对象名 ASCII 化：SAT68196/Sensor1/Facility2）+ 仅 Reset + 带引号 Compute ×5：
+  - 3 次**精确复现 GUI**：1 窗口 01:43:44.322→01:45:15.604，91.282s；
+  - 2 次落在另一离散状态：4 窗口，首窗 01:45:02.861 / 01:45:02.862，两两毫秒一致。
+- Load + Start→Reset ×5：窗口 4/1/1/3/1，首窗出现 83.166s、16.915s、29.722s 等更多状态。
+- 结论：**离散状态与 XML 内容无关**（同一 XML 跨进程落不同状态），属 Connect 进程级初始化
+  （疑似未初始化内存/ASLR）；用户 GUI"两遍一致"为同进程内一致，**跨进程 GUI 一致性未验证**。
+- 建议下一步：a) 用户完全关闭 ATK 后重启 GUI 再算 3 次，验证 GUI 跨进程是否一致（分水岭）；
+  b) 若 GUI 也跨进程漂移 → 属于 ATK 进程级初始化，评估 retry-until-match 或 Component 模式；
+  c) 脚本留档 experiment/atk/gui_xml_template_test.py。

@@ -1,4 +1,4 @@
-﻿# ATK 二次开发实验记录（codex/atk-poc）
+# ATK 二次开发实验记录（codex/atk-poc）
 
 > 本文件记录 ATK 二次开发 PoC 的问题、进展与结论，供后续决策与交接使用。
 > 最后更新：2026-08-12
@@ -464,3 +464,26 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
 - 附带确认：卫星位置/速度跨实例逐位一致（无轨道低级错误）；显式 AttitudeVVLH 保持推荐。
 - 待办：把 atk_parallel/worker.py 的 Animate Start→Reset 流程改为"仅 Reset + 带引号 Compute"，
   并回归 SimpleCone 对拍（69/70）确认无回归。
+
+### 10.8 回归修正 + 覆盖定义 Report_RM 突破（2026-08-14 下午）
+
+**worker 流程修正（SimpleCone 回归 69/70 通过）**
+- 控制变量矩阵实测：新建场景**必须 `Animate * Start` 生成星历**，仅 Reset / Step Forward /
+  Save→Load 都无法物化（全部 0 窗口）；`Compute` 时间参数带引号与不带引号结果一致（69 窗口）。
+- 因此 worker.py / validate_sensor_worker.py 保留 Start→Reset，Compute 改为带引号
+  `CovMulti / Access Compute "t0" "t1"`；validate_sensor_windows.py 对 0 窗口场景自动重试。
+- 回归：L1a/L1B/L1C 69/70 匹配 69（max 4s，avg 1.3s）；L1E 80/77 匹配 76（max 28s）；
+  D80 无约束 102（与自研 84 不直接对拍，属已知行为）；SPIN 130（跨实例不稳定区间内）。
+- SPIN 可复现性边界：**新建场景**因 Start 墙钟依赖跨实例不可复现（V10 的
+  SetAnimation CurrentTime 只拨时钟、不锚定相位）；**已物化 XML Load 的小场景**可复现（5/5）。
+
+**覆盖定义报告接口突破（此前"无接口"结论错误）**
+- 正确接口：`Report_RM <CDPath> Style "<样式>" TimePeriod "t0" "t1"`（官方 Report_RM.html
+  明确"包括覆盖定义对象"）。实测可用：Access Duration / Gap Duration / Percent Coverage /
+  Coverage By Assets / Grid Point Visible Assets / Global Coverage。
+- 错误接口（全部 NACK）：`Cov_RM <CD> Access Compute ...`（4 种样式）、
+  `Cov_RM <CD> FOMDefine ...`、`CovMulti Objects/Assets/Access`、`CovMulti_RM`。
+- 坑：`Exec_Report_RM * GetList` 会挂死（勿用）；`Load` 必须 `Load / Scenario "文件"` 且
+  不能带 `--new-scenario` 启动；官方示例 ASCII 化后 Load/计算 ACK 但 Report_RM 仍 NACK（待查）。
+- 网格配置：分两次 Grid 命令后区域变回全局网格（1008 点），合并选项写法待确认。
+

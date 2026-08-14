@@ -1,4 +1,4 @@
-﻿# ATK 复杂传感器覆盖窗口验证报告（2026-08-13）
+# ATK 复杂传感器覆盖窗口验证报告（2026-08-13）
 
 > 目的：回答"复杂传感器算出来的东西，还是不是我们熟悉的覆盖窗口？有没有新的输出方式/新指标？
 > 约束会不会带来新的输出方式和指标？"
@@ -74,10 +74,9 @@
    （SensorType 5 = SAR、4 = HalfPower）后 Load，SAR 出 6 个窗口、HalfPower 出 5 个窗口，物理合理。
 2. **Targeted 指向：Connect 命令全部 NACK**（Tracking/Fixed 各变体，含 Receive/Transmit 模式、
    带不带 `*/`、带不带引号），GUI 中有该功能；命令库文档与实际实现存在缺口，列为遗留。
-3. **覆盖定义（区域网格）：计算命令能跑，但窗口报告接口未开放**。`New CoverageDefinition + Cov Grid`
-   （LatLonRegion + PointGranularity 0.1°）+ `Cov ... Asset ... Assign` + `Access Compute` 均 ACK，
-   但 `Cov_RM */CoverageDefinition/... Access Compute "Coverage"` 与 FOM 报告都 NACK。
-   点目标（地面站）路径完全可用；区域目标建议 GUI 验证或走"网格点转多地面站"近似。
+3. **覆盖定义（区域网格）：报告接口是 `Report_RM`，不是 `Cov_RM`（2026-08-14 已修正）**。
+   `Cov_RM` 系列（Access Coverage/Gaps/Daily/Satisfaction、FOMDefine、CovMulti_RM）对覆盖定义全部 NACK，
+   是错误接口；`Report_RM <CD> Style "<样式>" TimePeriod ...` 可用（见 §7.5）。
 4. **Spinning 相位不稳定**：同一命令跨 ATK 实例窗口数 20~130 不等（旋转初相未锚定历元），
    需要显式相位控制（Offset 参数/固定起转时刻）才能复现；不影响"输出形态仍是窗口"的结论。
 5. **工程性踩坑记录**（已写进脚本注释与实验记录 §10）：
@@ -154,12 +153,32 @@
   显式 AttitudeVVLH（真实类型名，GetAttitude 确认）保持推荐（消除 Legacy 姿态的潜在歧义）；
   问题与墙钟/启动时间无关，是 Start 的 Forward 快进被墙钟延迟放大。
 
-### 7.5 覆盖定义（区域网格）报告：Connect 无接口（GUI 可用）——含品质因子深挖
+### 7.5 覆盖定义（区域网格）报告：Report_RM 可用（Cov_RM 是错误接口）——含品质因子深挖
 
 - 用户提示 GUI 教程里覆盖定义必须添加品质因子才有分析结果。核实官方《11-区域覆盖案例》：
   操作流程确实是"创建覆盖定义（网格）→ 创建品质因子（选择覆盖定义1）→ 类型=覆盖时间/计算=每日最大
   → 区域覆盖工具计算 → 覆盖时段报告 + 品质因子报告"。
-- Connect 实验（四轮，逐项排除）：
+- Connect 复查（2026-08-14 下午，**修正此前"无接口"的结论——是命令用错了**）：
+  - `Load` 命令要点：必须带对象路径与类别（`Load / Scenario "文件"`），且 ATK 带 `--new-scenario`
+    启动时已有打开场景，Load 会 NACK；加载场景需不带 `--new-scenario` 启动。
+  - 自建 CD 全链路：`New / */CoverageDefinition CD1` → `New / */CoverageDefinition/CD1/FigureOfMerit FOM1`
+    → `Cov <CD> Grid ...` → `Cov <CD> Interval "t0" "t1"` → `Cov <CD> FOMDefine Definition CoverageTime Compute Total`
+    → `Cov <CD> Asset <传感器> Assign` → `Animate Start/Reset` → `Cov <CD> Access Compute "t0" "t1"`，全部 ACK。
+  - **正确报告接口 = `Report_RM <CDPath> Style "<报告样式>" TimePeriod "t0" "t1"`**
+    （官方 `Report_RM.html` 明确"包括覆盖定义对象"，并给出覆盖定义示例）。实测可用样式：
+    | 样式 | 返回内容 |
+    | --- | --- |
+    | `Access Duration` | CD 覆盖时段报告：覆盖时长分布（时长/低于比例/高于比例） |
+    | `Gap Duration` | CD 间隔时段报告：间隔时长分布 |
+    | `Percent Coverage` | 区域覆盖率报告：按分钟（时间/相对时间/覆盖率%/累计覆盖率%） |
+    | `Coverage By Assets` | 逐资产覆盖率统计（min/max/平均/累计%） |
+    | `Grid Point Visible Assets` | 网格点可见目标分析报告 |
+    | `Global Coverage` / `Gaps in Global Coverage` | 全局覆盖时段报告（单资产场景实测"无分析数据"，需多资产/配置） |
+  - 仍 NACK / 挂起：`Grid Stats`、`Grid Stats Over Time`、`Value By Grid Point`、
+    `Value By Grid Point At Time` → NACK；`Exec_Report_RM * GetList` → **挂死**（勿用）。
+  - 官方示例 ASCII 化（覆盖定义1→CD1、品质因子1→FOM1、卫星2→SAT2）Load 后：Load/Assign/Compute ACK，
+    但 `Report_RM` 仍 NACK（待查，可能与示例 CD 的 FOM 配置/网格有关；自建 CD 路线不受影响）。
+- 历史结论（四轮 Cov_RM 实验，结论本身仍成立但指向错误接口）：
   a) 自建 CD + `New / */CoverageDefinition/CD1/FigureOfMerit FOM1`（子对象）+ `Cov FOMDefine` 配置
      + `Cov Interval` + `Cov Asset Assign` + `Cov Access Compute` → 创建/配置/计算都 ACK，
      但 `Cov_RM CD ...` 全部样式 NACK；`QuickReport_RM GetList` 为空；
@@ -167,20 +186,22 @@
      → 中文对象名导致 Connect 命令 NACK（Rename 也 NACK，中文名是 Connect 命令解析的坑）；
   c) 把官方示例 XML 的中文名改成 ASCII（覆盖定义1→CD1、品质因子1→FOM1、卫星2→SAT2）后 Load
      → 全部对象正常加载，Assign/Compute ACK，但 `Cov_RM`（Coverage/Coverage Gaps/Satisfaction/
-     Daily Coverage/FOMDefine 全部样式）、`CovMulti Objects CD`、`CovMulti_RM` **全部 NACK**；
+     Daily Coverage/FOMDefine 全部样式）、`CovMulti Objects CD`、`CovMulti_RM` **全部 NACK**
+     （这些命令本就不是给覆盖定义用的报告接口）；
   d) 二次开发案例目录确认无"区域覆盖"案例（只有地面站覆盖案例）；综合案例《灾害监测星座》
      的区域覆盖步骤全为 GUI 操作（右键→区域覆盖→计算→报告模板）。
-- 结论：**品质因子是 GUI 区域覆盖出结果流程的一部分（确认），但 Connect 命令库确实没有开放
-  覆盖定义的窗口/报告接口**——不是品质因子缺失的问题。品质因子对象本身可创建配置（命令见上），
-  但报告命令只对地面站等对象有效。
-- 替代：区域网格转点阵地面站（每个网格点一个 Facility，走 `Cov_RM */Facility/...` 报告路径），
-  或多地面站近似目标圆；区域目标如需精确网格报告，只能 GUI 或等官方开放接口。
+- 结论：**覆盖定义的报告接口在 Connect 中是有的，正确命令是 `Report_RM`（不是 Cov_RM）**；
+  品质因子仍是 GUI 流程的一部分（确认），但 Connect 自建 CD 不依赖 FOM 也能出部分报告。
+- 网格配置注意：分两次 `Cov <CD> Grid`（AreaOfInterest + PointGranularity）实测区域会变回全局网格
+  （网格点数量 1008、纬度 -56.9 起），需要后续确认单条命令合并选项的写法。
+- 替代：自建 CD + `Report_RM ... "Percent Coverage"` 可直接得到分钟级区域覆盖率；
+  需要逐窗口起止时间时优先点阵地面站（facility 报告路径）或自研引擎。
 
-### 7.6 地面站：只能是点，没有半径
+地面站：只能是点，没有半径
 
 - Facility（地面站）就是点目标（Geodetic 经纬高），**没有半径概念**。自研的"5km 圆目标"与 ATK
   点地面站的差异正是对拍 1~28s 边界偏差的来源。
-- 要表达"点+半径"：a) 覆盖定义小网格（GUI 可用，Connect 无报告接口）；b) 多地面站点阵近似圆
+- 要表达"点+半径"：a) 覆盖定义小网格（GUI / Connect `Report_RM` 均可用）；b) 多地面站点阵近似圆
   （Connect 可用，报告走 facility 路径）；c) 保留自研引擎做圆目标、ATK 做复杂传感器验证。
 
 ### 7.7 地面站报告接口出处（用户询问）

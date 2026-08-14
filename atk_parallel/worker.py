@@ -85,8 +85,9 @@ def main():
 
     cmd("New", "/ Facility Hangzhou")
     cmd("SetPosition", f"*/Facility/Hangzhou Geodetic {lat} {lon} 0.0")
-    # 新建场景必须先 Start 生成星历（仅 Reset/Step/Save-Load 都无法物化）；
-    # Start 会按墙钟推进仿真时间（Spinning 相位因此跨实例不可复现，SimpleCone 不受影响）
+    # 新建场景必须先 Start 生成星历（仅 Reset/Step/Save-Load 都无法物化）。
+    # Start 期间的墙钟推进不影响结果：只要 Access Compute 时间参数带引号，就会按分析时段重算，
+    # Spinning 相位与 SimpleCone 一样跨实例可复现（2026-08-14 定案）。
     cmd("Animate", "* Start")
     cmd("Animate", "* Reset")
 

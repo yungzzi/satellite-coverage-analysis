@@ -529,6 +529,46 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
   Assign → 带引号 Compute）：5 个实例窗口 131/125/20/125/124，首窗各异 →
   "仅 Reset 不 Start"同样不可复现，之前 5/5 一致属概率性命中同一离散状态。
 
+### 10.12 Spinning 不可复现最终定案：根因是"Compute 缺引号"，带引号后完全确定（2026-08-14 晚）
+
+**结论反转（最终版）**：Spinning 相位**可复现**，根因只有一个——`Cov ... Access Compute` 的
+时间参数**必须带引号**。§10.9/§10.10 记录的"带引号仍 131/125/20/125/124 漂移"是假象，
+大概率是当时残留 ATK 实例串场景/陈旧状态导致。
+
+**证据链（本轮干净复测）**：
+1. 用户在 GUI 里同一 Spinning 场景跑两遍，结果**逐毫秒一致**
+   （01:43:44.322 → 01:45:15.604，91.282s，1 窗口）——GUI 确定。
+2. 无头 Connect `Load` 该 GUI 场景（ASCII 化对象名）→ SetAnalysisTimePeriod → Animate Reset →
+   Assign → **带引号 Compute** → 精确复现 GUI 结果（1 窗口，同起止，逐毫秒一致）。
+3. XML 对比：GUI 与 Connect 的 `<Spinning>` 块只差"旋转轴四元数"（GUI 单位四元数=Elevation 0；
+   Connect 绕 Z -90°=Elevation -90）和锥角（20 vs 30）；四元数在所有 Connect 文件里**都相同**
+   （确定性），只是改变扫描轴方向，不是漂移源。
+4. 决定性对照：新建场景 + `Animate Start`（甚至在 Start→Reset 之间故意 sleep 2s）+
+   **带引号 Compute** → 3/3 实例完全一致（4 窗口，首窗 01:45:02.205，逐毫秒一致）。
+5. 加载 Connect 生成的 24 星 Spinning 场景 + 仅 Reset + 带引号 Compute → 3/3 一致（20 窗口）。
+
+**白话总结**：之前算 Spinning 时 Compute 的时间没加引号，命令被 ATK 拒了（NACK），从来没真正
+执行过；拿到手的窗口其实是"登记资产"那一步顺带算出来的、跟着墙钟走的脏数据，所以每次都不一样。
+把时间参数加上引号后，ATK 会老老实实按我们给的时间段重算，旋转相位就钉死在分析起点上，完全确定。
+
+**生产结论**：
+- 只要 `CovMulti / Access Compute "t0" "t1"`、`Cov_RM ... "Coverage" "t0" "t1"` 全部带引号，
+  Spinning 与 SimpleCone 一样可复现；`Animate Start` 的墙钟推进不影响结果。
+- 已修正 `atk_parallel/worker.py` 中"Spinning 相位跨实例不可复现"的误导注释。
+- 复现脚本：experiment/atk/spin_fresh_fix.py、spin_quat_bisect.py、spin_gui_probe.py、
+  spin_conn_probe.py（留档）。
+
+### 10.13 覆盖定义（区域网格）vs 自研引擎逐分钟对拍：100% 一致（2026-08-14 晚，任务 B）
+
+- 方法：ATK CD 用 `LatLonRegion 30 120 31 121` + `PointGranularity LatLon 0.5` 生成 9 个真实网格点，
+  读回这 9 个点；自研引擎 `compute_covered_series` 用**同一批 9 个点**跑多边形模式，
+  逐分钟比"被覆盖网格点占比"（= CD 的 Percent Coverage 口径）。
+- 样本：NORAD 68196，SimpleCone 45，无仰角约束，2026-08-14 00:00–08:00 UTC。
+- 结果：对齐 480 分钟，**覆盖与否一致 480/480（100%）**；覆盖率最大差 0.00039、平均差 2.4e-6。
+- 结论：ATK 覆盖定义的**区域百分比覆盖率与自研引擎完全一致**，CD 路线可放心用于区域覆盖；
+  逐星窗口仍走地面站点路线（可靠）。
+- 复现脚本：experiment/atk/cd_vs_selfengine.py。
+
 ### 10.11 覆盖定义区域网格结论修正：区域网格可用，历史"恒 1008"是假象（2026-08-14 晚）
 
 **背景**：§7.5 / §10.10 曾记录"Connect 下 `Cov Grid` 只改报告头部元数据、实际点网格固定 1008 点、

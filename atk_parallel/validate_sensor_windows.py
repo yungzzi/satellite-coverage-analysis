@@ -111,17 +111,18 @@ def run_worker(scenario, variants, facility_constraint=None):
     with open(cpath, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False)
     last = None
-    for attempt in range(3):
+    for attempt in range(4):
         kill_port_owner(port)
+        time.sleep(2)
         subprocess.run([VENV_PY, os.path.join(HERE, "validate_sensor_worker.py"), cpath],
                        cwd=WS, timeout=900)
         if os.path.exists(cfg["out"]):
             with open(cfg["out"], encoding="utf-8") as f:
                 last = json.load(f)
-            if last.get("ok"):
+            if last.get("ok") and last.get("windows"):
                 return last
-        print(f"  [{scenario}] 尝试 {attempt + 1} 失败，重试", flush=True)
-        time.sleep(3)
+        print(f"  [{scenario}] 尝试 {attempt + 1} 失败（窗口={last.get('windows') if last else '?'}），重试", flush=True)
+        time.sleep(4)
     raise RuntimeError(f"场景 {scenario} 连续失败: {last}")
 
 def parse_asset(asset):

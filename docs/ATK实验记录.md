@@ -449,3 +449,18 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
 - 结论：相位差异来自 ATK 内部未暴露的实例级初始化（疑似旋转相位基准未初始化），非参数可控。
 - 实用缓解：同一实例内（含同实例重新 Load）相位不变、结果毫秒级自洽；生产上用单个长驻实例
   跑完整分析；跨实例复现需 GUI 测试或官方反馈。
+
+### 10.7 Spinning 根因找到：Animate Start 快进 + Compute 缺引号（2026-08-14 下午，重大修正）
+
+- **结论反转：Spinning 完全可复现，物理确定，ATK 无随机缺陷——是我们命令用法错了。**
+- 根因 1：`Animate * Start`（默认 Forward）让仿真按墙钟狂推进度，旋转相位随 Start 期间推进的
+  仿真时间漂移。sleep 实验：Start→Reset 墙钟耗时 0.037s → 10 窗口；0.534s → 3 窗口；
+  2.035s → 7 窗口。`Animate * Reset` 只重置时钟显示，不重置旋转相位。
+- 根因 2：`Cov ... Access Compute <t0> <t1>` 时间参数必须带引号（`"T0" "T1"`）。此前一直未带
+  引号 → Compute 返回 NACK 从未执行，覆盖数据来自 Assign 隐式计算，同样受墙钟影响。
+- 正确可复现流程（5/5 实例毫秒级一致，3 窗口 02:50:15.211）：
+  Load → SetAnalysisTimePeriod → Animate * Reset（唯一动画命令）→ Assign → 
+  Cov Access Compute "T0" "T1"（带引号）→ Cov_RM "Coverage"；**不调用 Animate * Start**。
+- 附带确认：卫星位置/速度跨实例逐位一致（无轨道低级错误）；显式 AttitudeVVLH 保持推荐。
+- 待办：把 atk_parallel/worker.py 的 Animate Start→Reset 流程改为"仅 Reset + 带引号 Compute"，
+  并回归 SimpleCone 对拍（69/70）确认无回归。

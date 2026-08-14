@@ -125,14 +125,20 @@ def main():
                     nack.append((sat, vname, "Point", rr))
     result["nack"].extend(nack)
 
-    cmd("Animate", "* Start")
-    cmd("Animate", "* Reset")
+    # 新建场景必须先 Start 生成星历（仅 Reset/Step/Save-Load 都无法物化）
+    rr_start = cmd("Animate", "* Start")
+    rr_reset = cmd("Animate", "* Reset")
+    for tag, rr in (("start", rr_start), ("reset", rr_reset)):
+        if rr and "NACK" in rr:
+            result["nack"].append((tag, "", rr[:200]))
     # 逐条 Assign（可靠路径）+ 一次 Compute + 一次报告
     for sat in names:
         for vname, _, _ in variants:
             cmd("Cov", f"*/Facility/Hangzhou Asset */Satellite/{sat}/Sensor/{vname} Assign")
     cmd("CovMulti", "/ Objects */Facility/Hangzhou")
-    cmd("CovMulti", "/ Access Compute")
+    rr_compute = cmd("CovMulti", f'/ Access Compute "{t0}" "{t1}"')
+    if rr_compute and "NACK" in rr_compute:
+        result["nack"].append(("compute", "", rr_compute[:200]))
     r = C.atkConnect(con, "Cov_RM", f'*/Facility/Hangzhou Access Compute "Coverage" "{t0}" "{t1}"')
     text = decode_report(r if isinstance(r, str) else str(r))
     result["raw_report"] = text
@@ -149,4 +155,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

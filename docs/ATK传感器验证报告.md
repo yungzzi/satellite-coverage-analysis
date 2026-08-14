@@ -138,17 +138,21 @@
 | XML 显式 AttitudeDefine（VVLH/ECF速度/ECI速度/Fixed） | 类型改变窗口模式；**显式 VVLH 的 4 个干净实例仍落在两个离散状态**（实例1&3=9 窗口毫秒级一致，实例2&4=3 窗口毫秒级一致） |
 | 去掉 Load 后的 SetAnalysisTimePeriod（微控制） | 仍落在 8/7/3/3 不同状态 |
 
-最终结论（所有可控参数逐一排除，2026-08-14 上午追加）：
-- 从 AtAttitude.dll 提取到**真实有效的姿态类型名**：`AttitudeVVLH`/`AttitudeVVLHCBI`/`AttitudeVVLHCBF`/
-  `AttitudeEcfAligndVel`/`AttitudeEciAligndVel`/`AttitudeFixedInCBF` 等（此前猜的 AttitudeSatelliteVVLH
-  无效会被静默忽略）。改用正确的 `<AttitudeDefine Type="AttitudeVVLH"/>` 后 GetAttitude 确认
-  "Nadir alignment with ECI velocity constraint"（姿态已显式确定）。
-- 但**显式 VVLH + ThetaZero=45 + 星历步长 1s + SetAnimation CurrentTime 锚定时钟**的 4 个干净实例，
-  窗口仍落在不同状态（如 3/11/7/3、3/3/8/8、3/3/3/7）——姿态、星历采样、时钟、初始偏差角、
-  实例卫生全部排除，**相位差异来自 ATK 内部未暴露的实例级初始化**（疑似旋转相位基准值未初始化）。
-- 实用缓解：**同一实例内（含同实例重新 Load）相位保持不变、结果毫秒级自洽**——生产上应使用
-  单个长驻实例跑完整分析（不要为每个场景/分片重启实例），保证一次分析内部自洽；跨实例
-  复现需 GUI 测试（GUI 初始化路径可能不同）或官方反馈。
+最终定案（2026-08-14 下午，根因找到，Spinning 完全可复现）：
+- **根因（两个叠加的用法错误，不是软件随机）**：
+  1) `Animate * Start`（默认 Forward）会让仿真按**墙钟**持续快进，旋转相位随 Start 期间推进的
+     仿真时间漂移——sleep 实验：Start→Reset 墙钟耗时 0.037s→10 窗口、0.534s→3 窗口、
+     2.035s→7 窗口；`Animate * Reset` 只重置时钟显示、不重置旋转相位。
+  2) `Cov <对象> Access Compute <t0> <t1>` 的时间参数**必须带引号**（`"T0" "T1"`）；之前一直
+     没带引号导致 Compute 返回 NACK、从未真正执行，覆盖数据来自 `Cov ... Asset ... Assign`
+     的隐式计算，同样受墙钟影响。
+- **正确可复现流程（5/5 实例毫秒级一致）**：
+  `Load 场景 → SetAnalysisTimePeriod → Animate * Reset（唯一动画命令）→
+   Cov ... Asset ... Assign → Cov ... Access Compute "T0" "T1"（带引号）→ Cov_RM "Coverage"`，
+  **全程不调用 Animate * Start**。
+- 补充验证：卫星位置/速度跨实例逐位一致（-5807495.450431 ... 10.094486 ...），轨道无低级错误；
+  显式 AttitudeVVLH（真实类型名，GetAttitude 确认）保持推荐（消除 Legacy 姿态的潜在歧义）；
+  问题与墙钟/启动时间无关，是 Start 的 Forward 快进被墙钟延迟放大。
 
 ### 7.5 覆盖定义（区域网格）报告：Connect 无接口（GUI 可用）——含品质因子深挖
 

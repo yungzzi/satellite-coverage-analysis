@@ -54,6 +54,7 @@ def main():
 
     cmd("New", "/ Scenario W" + str(port))
     cmd("SetAnalysisTimePeriod", f'* "{t0}" "{t1}"')
+    # 唯一动画命令：只 Reset 不 Start（Animate Start 会按墙钟快进，漂移 Spinning 相位）
     cmd("Animate", "* Reset")
 
     t0_ = time.time()
@@ -84,6 +85,8 @@ def main():
 
     cmd("New", "/ Facility Hangzhou")
     cmd("SetPosition", f"*/Facility/Hangzhou Geodetic {lat} {lon} 0.0")
+    # 新建场景必须先 Start 生成星历（仅 Reset/Step/Save-Load 都无法物化）；
+    # Start 会按墙钟推进仿真时间（Spinning 相位因此跨实例不可复现，SimpleCone 不受影响）
     cmd("Animate", "* Start")
     cmd("Animate", "* Reset")
 
@@ -93,7 +96,7 @@ def main():
         lo, hi = b + 1, min(b + BS, sats)
         assets = " ".join(f'*/Satellite/{names[i - 1]}/Sensor/S45' for i in range(lo, hi + 1))
         cmd("CovMulti", f"/ Assets {assets}")
-        cmd("CovMulti", "/ Access Compute")
+        cmd("CovMulti", f'/ Access Compute "{t0}" "{t1}"')
     timing["cov"] = round(time.time() - t0_, 1)
 
     t0_ = time.time()

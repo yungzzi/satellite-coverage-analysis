@@ -528,3 +528,47 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
 - 用户指定流程复测（加载已保存 XML → SetAnalysisTimePeriod → **仅 Reset**（不 Start）→
   Assign → 带引号 Compute）：5 个实例窗口 131/125/20/125/124，首窗各异 →
   "仅 Reset 不 Start"同样不可复现，之前 5/5 一致属概率性命中同一离散状态。
+
+### 10.11 覆盖定义区域网格结论修正：区域网格可用，历史"恒 1008"是假象（2026-08-14 晚）
+
+**背景**：§7.5 / §10.10 曾记录"Connect 下 `Cov Grid` 只改报告头部元数据、实际点网格固定 1008 点、
+`Percent Coverage` 是全局口径"。本轮用干净单星场景做决定性复测，结论**反转**。
+
+**实测（1 星 + SimpleCone45，`Cov <CD> Grid AreaOfInterest LatLonRegion ...` +
+`Cov <CD> Grid PointGranularity LatLon <deg>`，读数来自 `Report_RM <CD> Style "Coverage By Assets"`）**：
+
+| 区域跨度 | 粒度(°) | 网格点数量 |
+| --- | --- | --- |
+| 0.02° | 0.1 | 1 |
+| 0.02° | 0.01 | 9 |
+| 0.1° | 0.01 | 81 |
+| 0.1° | 0.05 | 9 |
+| 0.5° | 0.5 | 1 |
+| 0.5° | 0.1 | 18 |
+| 1° | 0.5 | 9 |
+| 1° | 0.1 | 81 |
+| 5° | 0.5 | 81 |
+| 10° | 1 | 81 |
+| 20° | 2 | 81 |
+| Global | 1 | 43424 |
+
+**关键结论**：
+1. `Cov <CD> Grid AreaOfInterest LatLonRegion <minLat> <minLon> <maxLat> <maxLon>` +
+   `Cov <CD> Grid PointGranularity LatLon <deg>` 能正确生成区域点网格。
+2. 点数 ≈ (跨度/粒度 + 1)²，单维上限 9（小区域最多 81 点）；Global 1° 约 4.3 万点。
+   0.5°/0.1° 得 18（非 36）是浮点取整边界抖动。
+3. `Report_RM <CD> Style "Percent Coverage"` 返回**区域覆盖率**（0.5°×0.5° 单点区域 8h 单星
+   max=100%、mean≈4.37% ≈ 21 分钟总覆盖），不是全局覆盖率。
+4. Save→Load 正确持久化区域网格（XML `<Grid>`：GridType=1、MinLat/MaxLat/MinLon/MaxLon、
+   PointGranularity=2、ValueGranularity=0.5）。
+5. 历史"1008 点"无法复现：四组对照（网格设在 Animate 前/后 × 有无 FOM）全部 1 点；
+   判定为当时残留实例串场景/陈旧状态的假象，不是真实网格行为。
+
+**生产口径修正**：
+- 逐星覆盖窗口 → Facility 点路线（可靠，不变）。
+- 区域百分比覆盖率 → CD 区域网格（现确认可用）；"点+半径"可用细粒度小网格近似
+  （如 0.1° 跨度、0.05° 粒度 → 9 点）。
+- 早先"固定 1008 / 全局口径"记录作废。
+
+**复现脚本**：experiment/atk/cd_grid_scan.py、cd_grid_fom_test.py、cd_grid_order_test.py、
+cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。

@@ -195,11 +195,11 @@
      的区域覆盖步骤全为 GUI 操作（右键→区域覆盖→计算→报告模板）。
 - 结论：**覆盖定义的报告接口在 Connect 中是有的，正确命令是 `Report_RM`（不是 Cov_RM）**；
   品质因子仍是 GUI 流程的一部分（确认），但 Connect 自建 CD 不依赖 FOM 也能出部分报告。
-- 网格配置注意（2026-08-14 晚再证）：`Cov <CD> Grid` 的 AreaOfInterest/PointGranularity
-  只改报告头部元数据，**实际点网格固定 1008 点**（小区域/宽区域/Global 均 1008）；
-  `Percent Coverage` 数值近似全局覆盖率（24 颗 45° 锥每分钟 5~8%），不能当小区域覆盖率用。
-- 替代：自建 CD + `Report_RM ... "Percent Coverage"` 可直接得到分钟级区域覆盖率；
-  需要逐窗口起止时间时优先点阵地面站（facility 报告路径）或自研引擎。
+- **网格配置口径（重要修正，2026-08-14 晚，详见 §7.6）**：早先记录的"实际点网格固定 1008 点、
+  `Percent Coverage` 是全局口径"已被干净单星复测推翻。`Cov <CD> Grid AreaOfInterest LatLonRegion`
+  + `PointGranularity LatLon` 能正确生成区域网格，`Percent Coverage` 是区域覆盖率（单点区域覆盖时
+  max=100%）。旧"1008"结论疑似当时残留实例串场景/陈旧状态的假象。
+- 逐窗口起止时间 → 点地面站（facility 报告路径）或自研引擎；区域百分比覆盖率 → CD 区域网格。
 
 地面站：只能是点，没有半径
 
@@ -207,6 +207,38 @@
   点地面站的差异正是对拍 1~28s 边界偏差的来源。
 - 要表达"点+半径"：a) 覆盖定义小网格（GUI / Connect `Report_RM` 均可用）；b) 多地面站点阵近似圆
   （Connect 可用，报告走 facility 路径）；c) 保留自研引擎做圆目标、ATK 做复杂传感器验证。
+
+### 7.6 覆盖定义区域网格口径修正（2026-08-14 晚，决定性复测）
+
+**结论反转**：Connect 下覆盖定义的区域网格**可用**，不是"固定 1008 点"。
+
+实测（1 星 + SimpleCone45，`Cov <CD> Grid AreaOfInterest LatLonRegion <minLat> <minLon> <maxLat> <maxLon>`
++ `Cov <CD> Grid PointGranularity LatLon <deg>`，用 `Report_RM <CD> Style "Coverage By Assets"` 的
+"网格点数量"读数）：
+
+| 区域跨度 | 粒度(°) | 网格点数量 |
+| --- | --- | --- |
+| 0.02° | 0.1 | 1 |
+| 0.02° | 0.01 | 9 |
+| 0.1° | 0.01 | 81 |
+| 0.1° | 0.05 | 9 |
+| 0.5° | 0.5 | 1 |
+| 0.5° | 0.1 | 18 |
+| 1° | 0.5 | 9 |
+| 1° | 0.1 | 81 |
+| 5° | 0.5 | 81 |
+| 10° | 1 | 81 |
+| 20° | 2 | 81 |
+| Global | 1 | 43424 |
+
+- 规律：点数 ≈ (跨度/粒度 + 1)²，单维上限 9（小区域最多 81 点）；Global 1° 约 4.3 万点。
+  0.5°/0.1° 得 18（非 36）是浮点取整的边界抖动，不影响结论。
+- `Percent Coverage` 是区域口径：0.5°×0.5° 单点区域 8h 单星 max=100%、mean≈4.37%
+  （≈21 分钟总覆盖，物理合理）。
+- Save→Load 正确持久化区域网格（XML `<Grid>`：GridType=1、MinLat/MaxLat/MinLon/MaxLon、
+  PointGranularity=2、ValueGranularity=0.5）。
+- 复现脚本：experiment/atk/cd_grid_scan.py、cd_grid_fom_test.py、cd_grid_order_test.py、
+  cd_grid_xml_probe.py。
 
 ### 7.7 地面站报告接口出处（用户询问）
 

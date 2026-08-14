@@ -666,3 +666,18 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
     （-60~70°），我方 `Cov Grid` 命令无法覆盖它；
   - 待 Pro 回贴其环境完整原文与环境细节（whoami/版本/数据目录/注册表/默认模板内容）逐字段核对。
 - 待办：用户 GUI 完全重启跨进程测试（×3）仍未做，是 Spinning 判断的最后分水岭。
+
+### 10.17 CD 网格 XML 注入打通 + VVLH 未锚定 + Component 无 Spinning（2026-08-15）
+
+- **CD 网格 XML 注入成功**：Connect 建 CD（默认网格 1008 点 / min_lat=-60）→ `Save` → 手工改
+  `<Grid>` 的 MinLat/MaxLat/MinLon/MaxLon/ValueGranularity → `Load` → 网格点数变为区域值
+  （0.5°×0.5°/0.5° 粒度 → 1 点，min_lat=30.000）。**绕过了失效的 `Cov Grid` 命令**，
+  CD 区域网格在 ATK 内可用（与 SAR/HalfPower 的 XML 路线同款）。
+  - 脚本：experiment/atk/cd_grid_xml_inject.py。
+- **VVLH 显式姿态未锚定 Spinning**：把 XML 的 AttitudeDefine 改为 AttitudeVVLH 后
+  Load ×5 = 4 次命中 91.291s（1 窗口）+ 1 次漂到 4 窗口（86.719s）→ 姿态类型不是根因。
+- **Component 模式确认无 Spinning**：官方枚举 `ESnPattern` 只有 eSnSimpleConic/eSnRectangular，
+  `ESnPointing` 只有 eSnPtFixed；C++ 头文件搜不到 Spinning → ATK 路线只剩 Connect/GUI。
+- **用户决策**：反对自研旋转扫描模型，继续 ATK 二次开发；自研仅作交叉验证。
+- Spinning 剩余可选路径：①单长驻 ATK 进程（进程内确定，跨重启不定）；②GUI 跨进程测试
+  （待用户）；③retry-until-match（需参考状态）；④官方反馈。

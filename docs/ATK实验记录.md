@@ -652,3 +652,17 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 - 建议下一步：a) 用户完全关闭 ATK 后重启 GUI 再算 3 次，验证 GUI 跨进程是否一致（分水岭）；
   b) 若 GUI 也跨进程漂移 → 属于 ATK 进程级初始化，评估 retry-until-match 或 Component 模式；
   c) 脚本留档 experiment/atk/gui_xml_template_test.py。
+
+### 10.16 Pro 撤回 + 双方收敛 + CD 网格差异待查（2026-08-15）
+
+- Pro 已撤回 Spinning"定案"，双方一致：Connect 的 Spinning 相位是**进程级离散初始化状态**
+  （疑似 ASLR/未初始化内存），无锚定命令；其本环境短时稳定（5/5 一致）是"一段一段稳定"的假象。
+- 策略共识：不再押宝 ATK 修复；并行准备**自研旋转扫描确定性模型**（锥轴绕天底匀速旋转，
+  瞬时足印=圆锥，覆盖窗口=扫描锥与目标几何判定），ATK 退化为 SimpleCone 交叉验证。
+- CD 网格仍系统性不一致（我方全 1008 / Pro 随区域×粒度 1/9/81...）：
+  - 我方已提供完整原始报告 + 启动参数（--headless、提权 whoami=yungzzi\lenovo、动态端口）；
+  - 我方顺序对照四组（Animate 前/后 × FOM 有无）全 1008；
+  - 发现 ATK 默认 CD 模板 `AstroData\Default\DefaultCoverageDefinition.atk` 即全球网格
+    （-60~70°），我方 `Cov Grid` 命令无法覆盖它；
+  - 待 Pro 回贴其环境完整原文与环境细节（whoami/版本/数据目录/注册表/默认模板内容）逐字段核对。
+- 待办：用户 GUI 完全重启跨进程测试（×3）仍未做，是 Spinning 判断的最后分水岭。

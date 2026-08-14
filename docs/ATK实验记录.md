@@ -499,3 +499,29 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
 - 结论修正：§7.4 曾认为"已物化 XML Load 5/5 一致"可作复现路径，现判定为**概率性命中同一
   离散状态**，不能作为生产依据；Spinning 相位锚定仍需官方确认（疑似未暴露的初始化状态，
   与 Legacy 姿态体坐标初始化相关）。
+
+### 10.10 无头弹窗修复 + 覆盖定义网格口径 + Spinning 漂移再证（2026-08-14 晚）
+
+**无头弹窗修复**
+- 实测：`--headless`（等同 `--no-ui`）只关 2D/3D 视图，**ATK 主窗口仍然可见**（标题为版本号），
+  这就是"一直弹窗口"的原因。
+- 修复：新增 `atk_parallel/headless.py`，启动后枚举本次新起的 ATK 进程并 `ShowWindow(SW_HIDE)`
+  隐藏其可见顶层窗口；只隐藏新增进程，不影响用户手动打开的 GUI。已验证隐藏后
+  AllInstanceNames / SetAnalysisTimePeriod 等 Connect 命令正常。
+- validate_sensor_worker.py 改用 `launch_headless()`。
+
+**覆盖定义网格口径（重要）**
+- `Cov <CD> Grid AreaOfInterest LatLonRegion ...` 与 `PointGranularity LatLon ...`
+  只改变报告头部元数据（最小/最大纬度、网格精度），**实际点网格固定为 1008 点**：
+  2km×2km 小区域、20°×40° 宽区域、Global 均显示 1008 点。
+- 因此 `Percent Coverage` 的数值近似"全局覆盖率"（24 颗 SimpleCone45 每分钟 5~8%，
+  与 24 个大足迹覆盖地球比例吻合），**不能当作小区域覆盖率使用**；与地面站 69 窗口对比
+  无法对齐（地面站是点口径，可靠）。
+- 结论：Connect 下覆盖定义的区域报告口径不可控/不可信，区域目标建议：
+  点阵地面站近似（可靠）或 GUI 复核网格设置。
+
+**Spinning 漂移再证（固定 Start 时长）**
+- 固定 `Animate Start` 与 `Reset` 之间墙钟 0.5s，5 个干净实例窗口 35/113/92/20/20，
+  首窗各异 → **漂移不是墙钟时长造成的**，是实例级离散初始化状态。
+- 结合 offset=45、Save→Load 均无法锚定：建议 GUI 复测 Spinning 相位，或向官方反馈
+  （疑似未暴露的相位初始化状态）。

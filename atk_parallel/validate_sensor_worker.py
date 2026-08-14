@@ -25,9 +25,11 @@ ATK_EXE = os.path.join(ATK_ROOT, "ATK.exe")
 PYMOD = os.path.join(ATK_ROOT, "IntegratingWithATK", "connect", "Python")
 WS = r"D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析-atk-experiment"
 sys.path.insert(0, PYMOD)
+sys.path.insert(0, WS)
 sys.path.insert(0, os.path.join(WS, "atk_parallel"))
 import ATKConnectModule as C
 from report_parser import decode_report, parse_coverage_report
+from atk_parallel.headless import launch_headless
 
 def wait_port(port, timeout=120):
     t0 = time.time()
@@ -78,12 +80,9 @@ def main():
     result = {"ok": False, "scenario": cfg["scenario"], "sats": 0, "windows": [],
               "raw_report": "", "nack": [], "error": None}
     kill_port_owner(port)
-    si = subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow = 0
-    proc = subprocess.Popen([ATK_EXE, "--headless", "--new-scenario", "--port", str(port),
-                             "--hide-startup", "--hide-welcome", "--no-crash-report"],
-                            cwd=ATK_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            startupinfo=si)
-    if not wait_port(port):
+    try:
+        proc = launch_headless(port, new_scenario=True)
+    except RuntimeError:
         result["error"] = "ATK 端口未就绪"
         with open(cfg["out"], "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False)

@@ -195,8 +195,9 @@
      的区域覆盖步骤全为 GUI 操作（右键→区域覆盖→计算→报告模板）。
 - 结论：**覆盖定义的报告接口在 Connect 中是有的，正确命令是 `Report_RM`（不是 Cov_RM）**；
   品质因子仍是 GUI 流程的一部分（确认），但 Connect 自建 CD 不依赖 FOM 也能出部分报告。
-- 网格配置注意：分两次 `Cov <CD> Grid`（AreaOfInterest + PointGranularity）实测区域会变回全局网格
-  （网格点数量 1008、纬度 -56.9 起），需要后续确认单条命令合并选项的写法。
+- 网格配置注意（2026-08-14 晚再证）：`Cov <CD> Grid` 的 AreaOfInterest/PointGranularity
+  只改报告头部元数据，**实际点网格固定 1008 点**（小区域/宽区域/Global 均 1008）；
+  `Percent Coverage` 数值近似全局覆盖率（24 颗 45° 锥每分钟 5~8%），不能当小区域覆盖率用。
 - 替代：自建 CD + `Report_RM ... "Percent Coverage"` 可直接得到分钟级区域覆盖率；
   需要逐窗口起止时间时优先点阵地面站（facility 报告路径）或自研引擎。
 

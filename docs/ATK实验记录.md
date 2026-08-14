@@ -525,3 +525,6 @@ ATK 的 Connect 服务端口，ATK 解析执行返回（ACK/NACK/数据/报告�
   首窗各异 → **漂移不是墙钟时长造成的**，是实例级离散初始化状态。
 - 结合 offset=45、Save→Load 均无法锚定：建议 GUI 复测 Spinning 相位，或向官方反馈
   （疑似未暴露的相位初始化状态）。
+- 用户指定流程复测（加载已保存 XML → SetAnalysisTimePeriod → **仅 Reset**（不 Start）→
+  Assign → 带引号 Compute）：5 个实例窗口 131/125/20/125/124，首窗各异 →
+  "仅 Reset 不 Start"同样不可复现，之前 5/5 一致属概率性命中同一离散状态。

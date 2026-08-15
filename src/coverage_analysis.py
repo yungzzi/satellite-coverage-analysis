@@ -693,6 +693,7 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total, sat_params=None):
         "grid_spacing_deg": cfg["grid_spacing_deg"],
         "sensor_override_count": sum(1 for p in (sat_params or [])
                                      if p.get("source") == "override"),
+        "engine": cfg.get("engine", "self"),
         "n_satellites_total": n_sats_total,
         "n_satellites_covered": int(len(df_summary)),
     }
@@ -795,7 +796,7 @@ def orbit_tag(sat):
 # ==================== 6. 主流程 ====================
 
 def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=None,
-                                sensor_params=None, swath_enabled=None):
+                                sensor_params=None, swath_enabled=None, engine="self"):
     """解析卫星 → 逐颗覆盖分析 → 组装结果（GUI 与测试共用的同一入口）。
 
     2026-08-07 新增：把⑤页"开始覆盖分析"的运行逻辑抽成纯函数，
@@ -817,6 +818,16 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
         sensor_params = sl.load_sensor_params()   # 文件不存在则空表 = 全用全局默认
     if swath_enabled is None:
         swath_enabled = sl.load_sensor_swath_enabled()
+    if engine == "atk":
+        import atk_engine as ae
+        cfg["engine"] = "atk"
+        _atk_cfg = cfg.get("atk") or {}
+        return ae.run_atk_windows(
+            recs, region, cfg, start_str, end_str, progress=progress,
+            sensor_overrides=sensor_params, swath_enabled=bool(swath_enabled),
+            sensor_type=cfg.get("sensor_type", "SimpleCone"),
+            sensor_params=cfg.get("sensor_params"),
+            atk_root=cfg.get("atk_root") or _atk_cfg.get("root"))
     all_windows = []
     windows_by_sat = []
     sat_params = []

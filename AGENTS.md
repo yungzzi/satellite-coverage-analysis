@@ -45,6 +45,13 @@
    （工作树路径：`D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析-atk-experiment`），
    main 不受影响。已调研结论、实测结果、PoC 验收标准见 `docs/ATK二次开发实验交接.md`。
    PoC 结论出来前，本条与第 1 条"弃用 ATK"并存；结论出来后由用户拍板更新。
+6. **ATK 可选覆盖引擎（2026-08-15 拍板）**：主流程默认自研引擎（免依赖、已充分验证），
+   同时接入本机 ATK 作为可选引擎（⑤页"覆盖引擎"单选 / CLI `--engine atk`，仅支持点+半径口径，
+   按圆心点判定；SAR/HalfPower 等复杂传感器只能走 ATK）。atk_parallel 收编在
+   `src/atk_parallel/`（源自实验仓库 codex/atk-poc）；ATK 安装目录可用 config `[atk] root`
+   或环境变量 ATK_ROOT 指定。303 全量对拍：逐分钟"有覆盖"480/480 一致、覆盖星数一致；
+   差异仅两类——点/圆边缘窗口切分、自研对高轨宽视场的保守近似（ATK 物理更正确）。
+   详见 docs/ATK引擎对拍报告.md。
 
 ## 5. 覆盖判定默认约定（导师 2026-08-04 已拍板）
 - 目标区域表示：支持两类（已实现，`region_mode` 切换）——① **点 + 半径**（导师要求先按
@@ -328,4 +335,4 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 - [x] 开发待办清单（2026-08-10）：docs/开发待办清单.md 集中全部待修复项（P1 粗筛 10s/精化决策、P2 ilp_select_min_max_gap 传参、P3 时间栅格端点、P3 circle_overlap_ratio float、Cordeau 预印本待补），含证据位置、修复建议与验证要求；开发对话开工前必读
 - [x] P1/P2/P3 全部修复 + 窗口级精确评估（2026-08-10，Q171）：检测步长 10s（coarse_step_seconds）+ 精化 1s（跳过横跨全时段窗口 + 内部空隙切分）；选星新增 evaluate_windows_exact（最终覆盖率/空窗/连续判定按窗口精确回算到秒，搜索仍 1 分钟片）；P2 ilp_select_min_max_gap 传 mid*step_minutes；P3 时间栅格统一左闭右开 + circle_overlap_ratio 改 np.clip；validate_selection 42/42（新增精确评估/P2 step>1/float 用例）、validate_china_remote（P1 断言 10s粗筛+1s精化 vs 10s细算 96=96、偏差 0.32%）、validate_loader 43/43、validate_sensor_params 33/33、validate_n2yo_crosscheck 通过；文献 6 篇 PDF 已提交（Q167）
 - [x] 高精度决策开关（2026-08-10，Q173/Q175）：run_selection 增 decision_step_seconds（0=默认 1 分钟决策；10=决策矩阵 10s 仅贪心，ILP 自动跳过并注明原因）；GUI ⑤页加"决策矩阵用 10 秒（高精度，仅贪心）"复选框（打开时算法下拉禁用），CLI 增 --decision-step-seconds；summary/Excel 显示"决策步长 10 秒（高精度，仅贪心）"；validate_selection 44/44、CLI 冒烟通过、默认路径行为不变
-- [x] 用户可见文案去 Q 编号 + 行话改白话（2026-08-10，Q176）：GUI/CLI 不再出现 Q 编号（Q 仅内部注释/文档）；"选星决策矩阵"改"按 10 秒精细判定覆盖（更精确，仅用贪心算法）"，"决策步长"改"覆盖判定粒度"，帮助文字用白话解释"把时段切成小段逐段统计、段越短越精细"；README 同步；validate_selection 44/44、validate_sensor_params 33/33
+- [x] 用户可见文案去 Q 编号 + 行话改白话（2026-08-10，Q176）：GUI/CLI 不再出现 Q 编号（Q 仅内部注释/文档）；"选星决策矩阵"改"按 10 秒精细判定覆盖（更精确，仅用贪心算法）"，"决策步长"改"覆盖判定粒度"，帮助文字用白话解释"把时段切成小段逐段统计、段越短越精细"；README 同步；validate_selection 44/44、validate_sensor_params 33/33- [x] ATK 可选覆盖引擎（2026-08-15）：⑤页覆盖引擎单选 + CLI select/run --engine self|atk；303 全量对拍逐分钟 480/480 一致、覆盖星数一致（docs/ATK引擎对拍报告.md）；自研默认不变

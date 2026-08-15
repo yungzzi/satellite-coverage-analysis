@@ -1098,6 +1098,9 @@ def main(argv=None):
     ap.add_argument("--decision-step-seconds", type=int, default=0,
                     help="选星决策粒度（秒）：0=按 --step 分钟做选星决策（默认）；"
                          "10=按 10 秒精细做选星决策（计算量大，仅用贪心算法）")
+    ap.add_argument("--engine", choices=["self", "atk"], default="self",
+                    help="覆盖引擎：self=自研（默认）；atk=本机 ATK（需安装注册，"
+                         "仅支持点+半径目标，目标按圆心点判定）")
     ap.add_argument("--sensor-params", default=None,
                     help="逐星传感器参数表（TOML）；不指定则自动读 data/sensor_params.toml"
                          "（存在才生效）")
@@ -1172,27 +1175,51 @@ def main(argv=None):
         glats, glons = cov.make_grid_points(polygon, args.grid)
         region = {"mode": "polygon", "lats": glats, "lons": glons}
 
-    windows_by_sat = []
-    sensor_warnings = []
-    sensor_override_count = 0
-    for sat in sats:
-        norad = int(sat.model.satnum) if getattr(sat, "model", None) else None
-        sat_cfg, info = cov.resolve_sat_cfg(norad, sensor_overrides, cfg,
-                                            swath_enabled=swath_enabled)
-        if info.get("source") == "override":
-            sensor_override_count += 1
-        tag = cov.orbit_tag(sat)
-        if sat_cfg.get("swath_km") and tag in ("GEO/静止", "高轨"):
-            fov_back = sat_cfg.get("fov_half_angle_deg")
-            sat_cfg.pop("swath_km", None)
-            sensor_warnings.append(
-                f"  {sat.name}（NORAD {norad}，{tag}）：幅宽不适用，"
-                f"已按视场半角 {fov_back}° 计算")
-        windows_by_sat.append(cov.analyze_one_satellite(sat, t, dt_list, region, sat_cfg))
-    for w in sensor_warnings:
-        print(w)
-    t0 = dt_list[0]
-    t1 = dt_list[-1] + timedelta(minutes=args.step)   # 左闭右开：真实终点
+    if args.engine == "atk":
+        if args.mode != "circle":
+            print("ATK 引擎只支持点+半径（circle）目标；多边形请用自研引擎（默认）。")
+            return 1
+        cfg["region_name"] = args.location or \
+            f"圆心({args.lat:.4f},{args.lon:.4f}) 半径{args.radius}km"
+        cfg["tle_file"] = f"收藏夹：{args.collection}"
+        cov_result = cov.analyze_collection_pipeline(
+            recs, region, cfg, args.start, args.end,
+            sensor_params=sensor_overrides, swath_enabled=swath_enabled,
+            engine="atk")
+        if cov_result is None:
+            print("该时段内没有卫星覆盖目标区域（无窗口）。")
+            return 1
+        sats = cov_result["sats"]
+        windows_by_sat = cov_result["windows_by_sat"]
+        t0 = cov_result["t0"]
+        t1 = cov_result["t1"]
+        sensor_override_count = sum(
+            1 for p in (cov_result.get("sat_params") or [])
+            if p.get("source") == "override")
+        for w in cov_result.get("sensor_warnings") or []:
+            print(w)
+    else:
+        windows_by_sat = []
+        sensor_warnings = []
+        sensor_override_count = 0
+        for sat in sats:
+            norad = int(sat.model.satnum) if getattr(sat, "model", None) else None
+            sat_cfg, info = cov.resolve_sat_cfg(norad, sensor_overrides, cfg,
+                                                swath_enabled=swath_enabled)
+            if info.get("source") == "override":
+                sensor_override_count += 1
+            tag = cov.orbit_tag(sat)
+            if sat_cfg.get("swath_km") and tag in ("GEO/静止", "高轨"):
+                fov_back = sat_cfg.get("fov_half_angle_deg")
+                sat_cfg.pop("swath_km", None)
+                sensor_warnings.append(
+                    f"  {sat.name}（NORAD {norad}，{tag}）：幅宽不适用，"
+                    f"已按视场半角 {fov_back}° 计算")
+            windows_by_sat.append(cov.analyze_one_satellite(sat, t, dt_list, region, sat_cfg))
+        for w in sensor_warnings:
+            print(w)
+        t0 = dt_list[0]
+        t1 = dt_list[-1] + timedelta(minutes=args.step)   # 左闭右开：真实终点
     res = run_selection(sats, windows_by_sat, t0, t1,
                         step_minutes=args.step, k_min=args.k_min,
                         mrt_minutes=args.mrt, min_event_minutes=args.min_event,

@@ -1155,6 +1155,12 @@ if tab_analysis.open:
                                           "检测步长为 10 秒（config.toml 可改 coarse_step_seconds）")
         st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。"
                    "结果会同时保存到 output/ 目录。")
+        cov_engine = st.radio(
+            "覆盖引擎", ["自研（默认，无需外部软件）", "ATK（需本机安装并注册）"],
+            key="cov_engine", horizontal=True,
+            help="自研=纯 Python 几何判定（默认，免依赖）；ATK=调用本机安装的 ATK 计算，"
+                 "支持更多传感器类型，当前只支持点+半径目标（按圆心点判定）。"
+                 "ATK 安装目录可用环境变量 ATK_ROOT 指定（默认 D 盘实验安装路径）。")
 
     with st.expander("传感器参数表（可选，逐星覆盖）"):
         sl.ensure_sensor_params()
@@ -1325,8 +1331,11 @@ if tab_analysis.open:
 
     if st.button("开始覆盖分析", key="btn_cov_run", type="primary"):
         real_cols = [_strip_collection_label(n) for n in cov_sats]
+        cov_engine_sel = "atk" if cov_engine.startswith("ATK") else "self"
         if not real_cols:
             st.warning("请至少选择一个收藏夹作为卫星来源。")
+        elif cov_engine_sel == "atk" and cov_mode != "点+半径":
+            st.warning("ATK 引擎当前只支持点+半径（圆）目标；多边形目标请改用自研引擎。")
         elif cov_t1 <= cov_t0:
             st.warning("结束时间需晚于开始时间。")
         else:
@@ -1365,14 +1374,22 @@ if tab_analysis.open:
                     grid_lats, grid_lons = cov.make_grid_points(polygon, grid_spacing)
                     region = {"mode": "polygon", "lats": grid_lats, "lons": grid_lons}
                     cfg["region_name"] = cov_geo
-                cov_result = cov.analyze_collection_pipeline(
-                    recs, region, cfg,
-                    cov_t0.strftime("%Y-%m-%d %H:%M:%S"),
-                    cov_t1.strftime("%Y-%m-%d %H:%M:%S"),
-                    progress=lambda frac, msg: bar.progress(min(frac, 1.0), text=msg),
-                    sensor_params=sl.load_sensor_params(),
-                    swath_enabled=bool(cov_sw_en))
-                if cov_result is None:
+                _atk_err = None
+                try:
+                    cov_result = cov.analyze_collection_pipeline(
+                        recs, region, cfg,
+                        cov_t0.strftime("%Y-%m-%d %H:%M:%S"),
+                        cov_t1.strftime("%Y-%m-%d %H:%M:%S"),
+                        progress=lambda frac, msg: bar.progress(min(frac, 1.0), text=msg),
+                        sensor_params=sl.load_sensor_params(),
+                        swath_enabled=bool(cov_sw_en),
+                        engine=cov_engine_sel)
+                except RuntimeError as _e:
+                    _atk_err = str(_e)
+                    cov_result = None
+                if _atk_err:
+                    st.error(_atk_err)
+                elif cov_result is None:
                     st.warning("该时段内没有卫星覆盖目标区域（无窗口）。可尝试：更长时段、"
                                "更大的目标区域，或更大的视场角。")
                 else:
@@ -1384,9 +1401,11 @@ if tab_analysis.open:
     if res:
         dfs = res["dfs"]
         df_windows, df_summary, df_state, df_gaps = dfs
-        st.success(f"分析完成：卫星池 {res['n_sats']} 颗（全部导入）参与分析，"
-                   f"{len(df_summary)} 颗有覆盖，共 {res['n_win']} 个窗口"
-                   f"（目标：{res['cfg']['region_name']}）")
+        _eng_label = {"self": "自研", "atk": "ATK"}.get(
+            res.get("engine", "self"), res.get("engine", "self"))
+        st.success(f"分析完成（引擎：{_eng_label}）：卫星池 {res['n_sats']} 颗"
+                   f"（全部导入）参与分析，{len(df_summary)} 颗有覆盖，"
+                   f"共 {res['n_win']} 个窗口（目标：{res['cfg']['region_name']}）")
         _sp = res.get("sat_params") or []
         _n_ov = sum(1 for p in _sp if p.get("source") == "override")
         _warns = res.get("sensor_warnings") or []

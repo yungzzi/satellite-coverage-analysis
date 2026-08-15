@@ -784,3 +784,23 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   `area_summary.json`（网格点数/资产/覆盖分钟/均值/最大值）。
 - 实测（6 星，30~31°N / 120~121°E，0.5°）：SimpleCone45 → 9 网格点、72/481 覆盖分钟、
   最大 100%；SAR(12,70,30,30,550km) → 232/481 覆盖分钟、assets 正确列出 6 颗。
+
+### 10.22 真正无头（隐藏桌面）+ GUI 复杂传感器（2026-08-15，codex/gui-atk-sensors-headless）
+
+**真正无头：独立非交互桌面**
+- 老问题：`--headless` 只关 2D/3D 视图，ATK 主窗口仍会创建；旧机制（SW_HIDE + 启动后
+  EnumWindows 隐藏）在窗口创建到隐藏之间会闪窗，且不稳定。
+- 修复：`atk_parallel/headless.py` 新增 `launch_on_hidden_desktop()`——用
+  `CreateDesktopW` 建独立非交互桌面，`CreateProcessW` 的 `lpDesktop` 指向该桌面，
+  ATK 所有窗口都开在用户看不到的桌面上，**从根上不闪窗**；进程退出后由守护线程
+  自动 `CloseDesktop` 防泄漏。桌面创建失败时回退旧机制。
+- runner 的 `launch_atk`（产品主路径）与 `launch_headless`（SAR/HalfPower XML 路线、
+  CD 区域）都走隐藏桌面；根 `atk_parallel/` 与 `src/atk_parallel/` 两份同步。
+
+**GUI 复杂传感器（⑤页）**
+- 选"覆盖引擎=ATK"后出现"传感器类型"下拉：SimpleCone / Rectangular / HalfPower /
+  Conical / SAR，按类型显示参数输入（矩形双半角、半功率频率+天线直径、复杂圆锥
+  内外锥角+时钟角、SAR 入射仰角范围+前后向排除角+父高度）。
+- 复杂传感器用统一参数；逐星视场半角/幅宽仅对 SimpleCone 生效；上方"最小仰角"
+  仍是额外地面站约束（SAR 想只用自身仰角范围就填 0）。
+- 结果区与 analysis_meta.json 记录 sensor_type / sensor_params。

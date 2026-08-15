@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse, csv, ctypes, json, os, re, socket, subprocess, sys, tempfile, time
 from datetime import datetime
 
-from .headless import get_atk_root
+from .headless import get_atk_root, launch_on_hidden_desktop
 
 ATK_ROOT = get_atk_root()
 ATK_EXE = os.path.join(ATK_ROOT, "ATK.exe")
@@ -101,14 +101,17 @@ def wait_port(port: int, timeout_s: float = 120) -> bool:
 
 
 def launch_atk(port: int, new_scenario: bool = True):
-    # 隐藏 ATK 启动时弹出的使用协议/欢迎窗口（SW_HIDE）
-    si = subprocess.STARTUPINFO()
-    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    si.wShowWindow = 0
+    # 真正无头：启动到独立非交互桌面（不闪窗）；失败时回退 SW_HIDE
     args = [ATK_EXE, "--headless", "--port", str(port),
             "--hide-startup", "--hide-welcome", "--no-crash-report"]
     if new_scenario:
         args.insert(2, "--new-scenario")
+    proc = launch_on_hidden_desktop(args, ATK_ROOT)
+    if proc is not None:
+        return proc
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0
     return subprocess.Popen(
         args, cwd=ATK_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         startupinfo=si)

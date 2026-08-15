@@ -157,7 +157,8 @@ CSV 是"数据底座"，Excel 是"展示层"：程序读 CSV，人看 Excel。
 
 默认用自研引擎（纯 Python，免依赖）。本机安装并注册 ATK 后，可切换用 ATK 计算覆盖：
 
-- GUI：⑤页"覆盖引擎"选"ATK（需本机安装并注册）"（只支持点+半径目标，按圆心点判定）
+- GUI：⑤页"覆盖引擎"选"ATK（需本机安装并注册）"（只支持点+半径目标，按圆心点判定）；
+  选 ATK 后可再选传感器类型（矩形/半功率/复杂圆锥/SAR，自研引擎仅支持视场半角）
 - CLI：`sat select 夹 --engine atk ...` 或 `sat run ... --engine atk`
 - ATK 安装目录：环境变量 `ATK_ROOT`，或 config.toml 里 `[atk] root = "..."`（默认 D 盘实验安装路径）
 

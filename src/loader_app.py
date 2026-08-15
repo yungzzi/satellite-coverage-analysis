@@ -1161,6 +1161,66 @@ if tab_analysis.open:
             help="自研=纯 Python 几何判定（默认，免依赖）；ATK=调用本机安装的 ATK 计算，"
                  "支持更多传感器类型，当前只支持点+半径目标（按圆心点判定）。"
                  "ATK 安装目录可用环境变量 ATK_ROOT 指定（默认 D 盘实验安装路径）。")
+        cov_sensor_type = "SimpleCone（默认）"
+        _sensor_type = "SimpleCone"
+        _sensor_params = None
+        if cov_engine.startswith("ATK"):
+            cov_sensor_type = st.selectbox(
+                "传感器类型（ATK 引擎）",
+                ["SimpleCone（默认）", "Rectangular（矩形）", "HalfPower（半功率）",
+                 "Conical（复杂圆锥）", "SAR"],
+                key="cov_sensor_type",
+                help="自研引擎只支持视场半角（视线张角）；ATK 引擎支持更多类型。"
+                     "SAR/HalfPower 自动走 XML 路线（ATK 4.0.1 的 Define 命令对这两类静默失效，已绕过）。")
+            _sensor_type = {
+                "SimpleCone（默认）": "SimpleCone",
+                "Rectangular（矩形）": "Rectangular",
+                "HalfPower（半功率）": "HalfPower",
+                "Conical（复杂圆锥）": "Conical",
+                "SAR": "SAR",
+            }[cov_sensor_type]
+            if cov_sensor_type == "Rectangular（矩形）":
+                _c1, _c2 = st.columns(2)
+                _v = _c1.number_input("垂直半角(°)", value=40.0, min_value=0.1, max_value=89.0,
+                                      step=1.0, key="cov_sensor_vh")
+                _h = _c2.number_input("水平半角(°)", value=60.0, min_value=0.1, max_value=89.0,
+                                      step=1.0, key="cov_sensor_hh")
+                _sensor_params = [_v, _h]
+            elif cov_sensor_type == "HalfPower（半功率）":
+                _c1, _c2 = st.columns(2)
+                _f = _c1.number_input("频率(GHz)", value=14.5, min_value=0.01, step=0.1,
+                                      key="cov_sensor_freq",
+                                      help="半功率波束宽度由频率与天线直径计算")
+                _d = _c2.number_input("天线直径(m)", value=1.0, min_value=0.01, step=0.1,
+                                      key="cov_sensor_diam")
+                _sensor_params = [_f, _d]
+            elif cov_sensor_type == "Conical（复杂圆锥）":
+                _c1, _c2, _c3, _c4 = st.columns(4)
+                _inner = _c1.number_input("内锥半角(°)", value=0.0, min_value=0.0,
+                                          max_value=89.0, step=1.0, key="cov_sensor_inner")
+                _outer = _c2.number_input("外锥半角(°)", value=45.0, min_value=0.1,
+                                          max_value=89.0, step=1.0, key="cov_sensor_outer")
+                _minc = _c3.number_input("最小时钟角(°)", value=0.0, min_value=0.0,
+                                         max_value=360.0, step=5.0, key="cov_sensor_minc")
+                _maxc = _c4.number_input("最大时钟角(°)", value=360.0, min_value=0.0,
+                                         max_value=360.0, step=5.0, key="cov_sensor_maxc")
+                _sensor_params = [_inner, _outer, _minc, _maxc]
+            elif cov_sensor_type == "SAR":
+                _c1, _c2, _c3 = st.columns(3)
+                _mel = _c1.number_input("最小入射仰角(°)", value=12.0, min_value=0.0,
+                                        max_value=89.0, step=1.0, key="cov_sensor_mel")
+                _xel = _c2.number_input("最大入射仰角(°)", value=70.0, min_value=0.0,
+                                        max_value=89.0, step=1.0, key="cov_sensor_xel")
+                _alt = _c3.number_input("父高度(m)", value=550000.0, min_value=0.0,
+                                        step=1000.0, key="cov_sensor_alt")
+                _c4, _c5 = st.columns(2)
+                _fwd = _c4.number_input("前向排除角(°)", value=30.0, min_value=0.0,
+                                        max_value=89.0, step=1.0, key="cov_sensor_fwd")
+                _aft = _c5.number_input("后向排除角(°)", value=30.0, min_value=0.0,
+                                        max_value=89.0, step=1.0, key="cov_sensor_aft")
+                _sensor_params = [_mel, _xel, _fwd, _aft, _alt]
+            st.caption("复杂传感器用统一参数（逐星视场半角/幅宽仅对 SimpleCone 生效）；"
+                       "上方\"最小仰角\"作为额外地面站约束（SAR 想只用自己的仰角范围就填 0）。")
 
     with st.expander("传感器参数表（可选，逐星覆盖）"):
         sl.ensure_sensor_params()
@@ -1363,6 +1423,10 @@ if tab_analysis.open:
                     "save_plots": False,
                     "max_gantt_rows": 15,
                 }
+                if cov_engine_sel == "atk":
+                    cfg["sensor_type"] = _sensor_type
+                    if _sensor_params is not None:
+                        cfg["sensor_params"] = _sensor_params
                 if cov_mode == "点+半径":
                     region = {"mode": "circle", "lat": float(cov_lat),
                               "lon": float(cov_lon), "radius_km": float(cov_rad)}
@@ -1422,6 +1486,10 @@ if tab_analysis.open:
             st.caption(f"传感器参数：全部使用全局默认（{_gdesc}、"
                        f"最小仰角 {res['cfg'].get('min_elevation_deg', 10.0)}°"
                        f"{'，幅宽生效中' if cov_sw_en else ''}）。")
+        if res.get("engine") == "atk" and res["cfg"].get("sensor_type", "SimpleCone") != "SimpleCone":
+            st.caption(f"ATK 传感器类型：{res['cfg']['sensor_type']}，参数："
+                       f"{res['cfg'].get('sensor_params')}"
+                       "（上方\"最小仰角\"作为额外约束，设 0 可取消）。")
         if "cov_xlsx" not in st.session_state:
             meta = {
                 "region_name": res["cfg"].get("region_name", ""),

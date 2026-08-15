@@ -91,6 +91,8 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
   完成时先把未入库内容（experiment/、reference/、output_* 等 gitignore 内容）归档复制到
   主工作树，再 --no-ff 合并回 main、删除临时分支、`git worktree remove` 删除实验工作树。
   禁止在主工作树另开分支绕过实验树流程（2026-08-15 曾因此在两个工作树间造成功能错位）。
+- 开发工作树内流程（2026-08-15）：在 codex/dev 上开发时，先新建功能分支 codex/<功能名>，
+  提交完成后 --no-ff 合并回 codex/dev；不要在 codex/dev 上直接提交功能改动。
 - 提交信息中文，前缀风格：feat: / fix: / docs: / chore:。
 
 ## 9. 目录结构

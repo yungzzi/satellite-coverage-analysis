@@ -804,3 +804,45 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 - 复杂传感器用统一参数；逐星视场半角/幅宽仅对 SimpleCone 生效；上方"最小仰角"
   仍是额外地面站约束（SAR 想只用自身仰角范围就填 0）。
 - 结果区与 analysis_meta.json 记录 sensor_type / sensor_params。
+
+### 10.23 传感器指向 + 约束（2026-08-15，codex/atk-pointing-constraints）
+
+**指向（Pointing）**
+- Fixed：Connect `Point <sensor> Fixed <方法> <参数>` 生效，支持 YPR / Euler /
+  Quaternion / AzEl / matrix 全方法（GUI ⑤页"传感器指向"折叠区全部提供）。
+  实测：SimpleCone 天底 1 窗口 → Fixed YPR 俯仰 30° = 6 窗口（侧摆扩大感知，确定性两遍一致）。
+- Targeted：**Connect `Point ... Targeted ...` 在 4.0.1-rc.5 全 NACK**（与 SAR/HalfPower
+  Define 同类通道问题）；改走 **XML 注入**：`<PointType>3</PointType>` +
+  `<Targeted><TargetMode>0</TargetMode><TrackingMode>2</TrackingMode>
+  <AssignedTargets>Facility/Hangzhou</AssignedTargets>`。实测 SimpleCone 1→6 窗口、
+  SAR 5→7 窗口，确定性两遍一致。Targeted 自动走 XML 双实例路线（与 SAR/HalfPower 共用）。
+- GrazingAlt：`Point <sensor> GrazingAlt <方位角> <入射高度>` 生效（天底 1 → 2 窗口）。
+- External：透传外部指向文件路径（GUI 上传 .sp 到 data/user_files/），需要用户自备
+  ATK 格式指向文件，未单独验证。
+- Spinning：仍禁用（等官方回复）。
+
+**约束（SetConstraint）**
+- 作用对象：facility（地面站=目标点）/ sensor（每颗星传感器）/ satellite（每颗星）。
+- GUI 常用表单：太阳高度角（SunGroundElevAngle Min）、方位角（AzimuthAngle Min/Max）、
+  距离（Range Min/Max，km 自动转 m）、视线开关（LineOfSight On）。
+- 高级 JSON 透传：`[{"object":"facility|sensor|satellite","name":"约束名","params":"参数串"}]`，
+  params 与官方 SetConstraint 命令参数一致，原样转发给 ATK（覆盖速率/高度/传播延迟/
+  月球/太阳排除/地形遮蔽等全部约束）。
+- 实测：SunGroundElevAngle Min 80（杭州夏季太阳高度上限约 75°）→ 0 窗口；
+  Range ≤100 km → 0 窗口；Min 5 / 宽松距离 → 基线 1 窗口。
+
+**验证矩阵（6 星 × 8h × 杭州 5km，ATK 引擎）**
+
+| 配置 | 窗口数（两遍） |
+| --- | --- |
+| 天底基线（SimpleCone45） | 1 / 1 |
+| Fixed YPR 俯仰 30° | 6 / 6 |
+| Targeted 目标跟踪 | 6 / 6 |
+| GrazingAlt(90°, 10km) | 2 |
+| SAR(12,70,30,30,550km) 天底 | 5 / 5 |
+| SAR + Targeted | 7 / 7 |
+| SunGroundElevAngle Min 80 | 0 |
+| SunGroundElevAngle Min 5 | 1 |
+| Range ≤100km | 0 |
+
+注意：Targeted 走 XML 路线时 SimpleCone 用全局半角（逐星视场半角表不参与）。

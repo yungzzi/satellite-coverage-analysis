@@ -79,6 +79,47 @@ def build_define(sensor_type: str, params) -> str:
     return f"{sensor_type} " + " ".join(str(x) for x in params)
 
 
+def build_point_cmd(pointing) -> str:
+    """构造 Point 命令参数串（官方语法见 Help/传感器/Point *.html）。"""
+    t = pointing.get("type", "Fixed")
+    if t == "Fixed":
+        method = pointing.get("method", "YPR")
+        params = pointing.get("params") or []
+        return f"Fixed {method} " + " ".join(str(x) for x in params)
+    if t == "Targeted":
+        target = pointing.get("target", "*/Facility/Hangzhou")
+        if pointing.get("mode", "Tracking") == "Tracking":
+            extra = pointing.get("extra")
+            s = f"Targeted Tracking {target}"
+            return s + (f" {extra}" if extra else "")
+        method = pointing.get("method", "YPR")
+        params = pointing.get("params") or []
+        return f"Targeted Fixed {target} {method} " + " ".join(str(x) for x in params)
+    if t == "GrazingAlt":
+        return f"GrazingAlt {pointing['azimuth']} {pointing['altitude']}"
+    if t == "External":
+        return f'External "{pointing["file"]}"'
+    raise ValueError(f"暂不支持的指向类型：{t}（Spinning 等官方回复）")
+
+
+def constraint_cmds(constraints, facility="*/Facility/Hangzhou", sat=None, sensor=None):
+    """约束列表 → SetConstraint 参数串列表（官方语法见 Help/.../Set Constraint.html）。"""
+    out = []
+    for c in constraints or []:
+        obj = c.get("object", "facility")
+        if obj == "facility":
+            path = facility
+        elif obj == "satellite" and sat:
+            path = sat
+        elif obj == "sensor" and sensor:
+            path = sensor
+        else:
+            continue
+        params = c.get("params", "")
+        out.append(f"{path} {c['name']} {params}".rstrip())
+    return out
+
+
 def build_pattern_block(sensor_type: str, params) -> str:
     """构造 XML <Pattern> 块（SAR/HalfPower 用，§7.1 / 参考 xml_sar5.atk / xml_hp4.atk）。"""
     idx = SENSOR_TYPE_INDEX[sensor_type]
@@ -115,8 +156,32 @@ def patch_sensor_patterns(xml_path: str, sensor_type: str, params, out_path: str
     return out_path.replace("\\", "/")
 
 
+def patch_pointing_xml(xml_path: str, pointing: dict, out_path: str) -> str:
+    """把场景 XML 的 <Pointing> 改为目标指向（Targeted，PointType=3）。
+
+    Connect 的 Point ... Targeted 命令在 4.0.1-rc.5 返回 NACK（与 SAR/HalfPower
+    Define 同类通道问题），实测 XML 注入 PointType=3 + AssignedTargets 生效。"""
+    with open(xml_path, "rb") as f:
+        b = f.read()
+    t = b.decode("gbk", errors="replace")
+    target = pointing.get("target", "Facility/Hangzhou")
+    if target.startswith("*/"):
+        target = target[2:]
+    block = (
+        "<Targeted>\n<TargetMode>0</TargetMode>\n<Sequence>323</Sequence>\n"
+        f"<TrackingMode>2</TrackingMode>\n<AssignedTargets>{target}</AssignedTargets>\n"
+        "</Targeted>"
+    )
+    t = re.sub(r"<PointType>\d+</PointType>", "<PointType>3</PointType>", t)
+    t = re.sub(r"(?s)<Targeted>.*?</Targeted>", block, t)
+    with open(out_path, "wb") as f:
+        f.write(t.encode("gbk", errors="replace"))
+    return out_path.replace("\\", "/")
+
+
 def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
-    """实例 1（new_scenario）：建 SimpleCone 占位场景 → Save → patch 成 SAR/HalfPower。"""
+    """实例 1（new_scenario）：建 SimpleCone 占位场景 → Save → patch（SAR/HalfPower 改
+    Pattern；Targeted 指向改 Pointing）。"""
     launch_headless(port, new_scenario=True)
     con = C.atkOpen("127.0.0.1", port)
 
@@ -142,10 +207,17 @@ def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
     cmd("Animate", "* Reset")
     raw = os.path.join(tempfile.gettempdir(), f"xmlroute_raw_{port}.atk")
     cmd("Save", f'/ * "{raw.replace(chr(92), "/")}"')
-    patched = os.path.join(tempfile.gettempdir(), f"xmlroute_patch_{port}.atk")
+    patched = raw
     try:
-        return patch_sensor_patterns(
-            raw, cfg["sensor_type"], cfg["sensor_params"], patched)
+        if cfg["sensor_type"] in XML_ROUTE_TYPES:
+            patched = patch_sensor_patterns(
+                patched, cfg["sensor_type"], cfg["sensor_params"],
+                os.path.join(tempfile.gettempdir(), f"xmlroute_patch_{port}.atk"))
+        if (cfg.get("pointing") or {}).get("type") == "Targeted":
+            patched = patch_pointing_xml(
+                patched, cfg["pointing"],
+                os.path.join(tempfile.gettempdir(), f"xmlroute_point_{port}.atk"))
+        return patched
     finally:
         kill_port_owner(port)
 
@@ -175,7 +247,16 @@ def run_xml_route(cfg, port: int, tle: str, t0: str, t1: str, result: dict):
         result["error"] = f"卫星数校验失败: 预期 {result['expected']}, 实际 {len(names)}"
         kill_port_owner(port)
         return
+    if cfg.get("pointing") and cfg["pointing"].get("type") != "Targeted":
+        for i, nm in enumerate(names):
+            cmd("Point", f'"*/Satellite/{nm}/Sensor/S{i}" {build_point_cmd(cfg["pointing"])}')
+    for cc in constraint_cmds(cfg.get("constraints")):
+        cmd("SetConstraint", cc)
     for i, nm in enumerate(names):
+        for cc in constraint_cmds(cfg.get("constraints"),
+                                   sat=f"*/Satellite/{nm}",
+                                   sensor=f"*/Satellite/{nm}/Sensor/S{i}"):
+            cmd("SetConstraint", cc)
         cmd("Cov", f"*/Facility/Hangzhou Asset */Satellite/{nm}/Sensor/S{i} Assign")
     cmd("CovMulti", "/ Objects */Facility/Hangzhou")
     for b in range(0, len(names), BS):
@@ -218,9 +299,10 @@ def main():
         "windows": [], "asset_order": [], "timing": timing,
         "error": None,
     }
-    xml_route = bool(cfg.get("xml_route")) or sensor_type in XML_ROUTE_TYPES
+    xml_route = (bool(cfg.get("xml_route")) or sensor_type in XML_ROUTE_TYPES
+                or (cfg.get("pointing") or {}).get("type") == "Targeted")
     if xml_route:
-        if not sensor_params:
+        if sensor_type in XML_ROUTE_TYPES and not sensor_params:
             result["error"] = f"传感器 {sensor_type} 需要 sensor_params（见 worker.py 头注释）"
             _finish(None, result, out, port)
             return
@@ -278,12 +360,20 @@ def main():
         sname = f"S{idx}"
         cmd("New", f'/ "*/Satellite/{nm}/Sensor" {sname}')
         cmd("Define", f'"*/Satellite/{nm}/Sensor/{sname}" {build_define(sensor_type, params)}')
+        if cfg.get("pointing"):
+            cmd("Point", f'"*/Satellite/{nm}/Sensor/{sname}" {build_point_cmd(cfg["pointing"])}')
+        for cc in constraint_cmds(cfg.get("constraints"),
+                                   sat=f"*/Satellite/{nm}",
+                                   sensor=f"*/Satellite/{nm}/Sensor/{sname}"):
+            cmd("SetConstraint", cc)
     timing["sensor"] = round(time.time() - t0_, 1)
 
     cmd("New", "/ Facility Hangzhou")
     cmd("SetPosition", f"*/Facility/Hangzhou Geodetic {lat} {lon} 0.0")
     if cfg.get("min_elev"):
         cmd("SetConstraint", f"*/Facility/Hangzhou ElevationAngle Min {float(cfg['min_elev'])}")
+    for cc in constraint_cmds(cfg.get("constraints")):
+        cmd("SetConstraint", cc)
     # 新建场景必须先 Start 生成星历（仅 Reset/Step/Save-Load 都无法物化）。
     # 注意：Spinning 相位在 Connect 新建场景下跨实例仍不可复现（离散初始化状态，
     # 2026-08-15 独立复测确认；SimpleCone/SAR/HalfPower 等非旋转传感器不受影响）。

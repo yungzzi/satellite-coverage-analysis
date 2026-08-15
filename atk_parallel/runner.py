@@ -119,7 +119,8 @@ def launch_atk(port: int, new_scenario: bool = True):
 
 def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir, angles=None):
     """启动一片：ATK + worker，返回 job 字典（不等待）。"""
-    xml_route = cfg.get("sensor_type", "SimpleCone") in ("SAR", "HalfPower")
+    xml_route = (cfg.get("sensor_type", "SimpleCone") in ("SAR", "HalfPower")
+                or (cfg.get("pointing") or {}).get("type") == "Targeted")
     if xml_route:
         # SAR/HalfPower 走 Save→改XML→Load 路线（§7.1），worker 自管两个实例，
         # 调度器不预启动，避免端口被占用。
@@ -137,6 +138,8 @@ def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir, angles=
         "sensor_type": cfg.get("sensor_type", "SimpleCone"),
         "sensor_params": cfg.get("sensor_params"),
         "min_elev": cfg.get("min_elev"),
+        "pointing": cfg.get("pointing"),
+        "constraints": cfg.get("constraints"),
         "xml_route": xml_route,
         "out": out_path,
     }
@@ -249,6 +252,11 @@ def main():
     ap.add_argument("--sensor-params", default=None,
                     help='传感器参数（逗号分隔）：如 "45"、"40,60"、"0.5,0.35"、'
                          '"0,45,0,360"、"12,70,30,30,550000"')
+    ap.add_argument("--pointing", default=None,
+                    help='传感器指向 JSON：{"type":"Fixed|Targeted|GrazingAlt|External",...}')
+    ap.add_argument("--constraints", default=None,
+                    help='约束 JSON 数组：[{"object":"facility|sensor|satellite",'
+                         '"name":"约束名","params":"Min 10"}]')
     ap.add_argument("--area-region", default=None,
                     help='附加区域百分比覆盖率：min_lat,min_lon,max_lat,max_lon（如 "30,120,31,121"）')
     ap.add_argument("--area-granularity", type=float, default=0.5, help="区域网格粒度（度）")
@@ -301,7 +309,9 @@ def main():
     cfg = {**vars(args), "fov": args.fov,
            "sensor_type": args.sensor_type,
            "sensor_params": parse_sensor_params(args.sensor_params),
-           "min_elev": args.min_elev}
+           "min_elev": args.min_elev,
+           "pointing": json.loads(args.pointing) if args.pointing else None,
+           "constraints": json.loads(args.constraints) if args.constraints else None}
     all_results = {}
     failed = []
     port_pool = pick_free_ports(max_inst, args.port_base)

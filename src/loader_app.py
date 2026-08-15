@@ -19,6 +19,7 @@ loader_app.py —— 卫星覆盖分析工作台图形界面（Streamlit）
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -175,6 +176,56 @@ def _slider_bounds(values: list):
     if hi <= lo:
         hi = lo + 1
     return (lo, hi)
+
+
+def _fixed_method_inputs(method: str, prefix: str = "cov_pt") -> list | None:
+    """按姿态方法渲染参数输入，返回参数列表（或 None）。"""
+    if method == "YPR":
+        _seq = st.selectbox("转序", ["YPR", "YRP", "PYR", "PRY", "RYP", "RPY"],
+                            key=f"{prefix}_seq")
+        _c1, _c2, _c3 = st.columns(3)
+        _y = _c1.number_input("偏航(°)", value=0.0, min_value=-180.0, max_value=180.0,
+                              step=1.0, key=f"{prefix}_yaw")
+        _p = _c2.number_input("俯仰(°)", value=30.0, min_value=-180.0, max_value=180.0,
+                              step=1.0, key=f"{prefix}_pitch", help="俯仰=侧摆角")
+        _r = _c3.number_input("滚转(°)", value=0.0, min_value=-180.0, max_value=180.0,
+                              step=1.0, key=f"{prefix}_roll")
+        return [_seq, _y, _p, _r]
+    if method == "Euler":
+        _seq = st.selectbox("转序",
+                            ["121", "123", "131", "132", "212", "213", "231",
+                             "232", "312", "313", "321", "323"],
+                            key=f"{prefix}_eseq")
+        _c1, _c2, _c3 = st.columns(3)
+        _r1 = _c1.number_input("Rot1(°)", value=0.0, step=1.0, key=f"{prefix}_r1")
+        _r2 = _c2.number_input("Rot2(°)", value=30.0, step=1.0, key=f"{prefix}_r2")
+        _r3 = _c3.number_input("Rot3(°)", value=0.0, step=1.0, key=f"{prefix}_r3")
+        return [_seq, _r1, _r2, _r3]
+    if method == "Quaternion":
+        _c1, _c2, _c3, _c4 = st.columns(4)
+        _q1 = _c1.number_input("q1", value=0.0, step=0.01, key=f"{prefix}_q1")
+        _q2 = _c2.number_input("q2", value=0.0, step=0.01, key=f"{prefix}_q2")
+        _q3 = _c3.number_input("q3", value=0.0, step=0.01, key=f"{prefix}_q3")
+        _q4 = _c4.number_input("q4（标量）", value=1.0, step=0.01, key=f"{prefix}_q4")
+        return [_q1, _q2, _q3, _q4]
+    if method == "AzEl":
+        _c1, _c2 = st.columns(2)
+        _az = _c1.number_input("方位角(°)", value=0.0, min_value=0.0, max_value=360.0,
+                               step=1.0, key=f"{prefix}_az")
+        _el = _c2.number_input("高度角(°)", value=90.0, min_value=-90.0, max_value=90.0,
+                               step=1.0, key=f"{prefix}_el")
+        return [_az, _el]
+    if method == "matrix":
+        _c1, _c2, _c3 = st.columns(3)
+        _d11 = _c1.number_input("d11", value=1.0, step=0.01, key=f"{prefix}_d11")
+        _d21 = _c2.number_input("d21", value=0.0, step=0.01, key=f"{prefix}_d21")
+        _d22 = _c3.number_input("d22", value=1.0, step=0.01, key=f"{prefix}_d22")
+        _c4, _c5, _c6 = st.columns(3)
+        _d31 = _c4.number_input("d31", value=0.0, step=0.01, key=f"{prefix}_d31")
+        _d32 = _c5.number_input("d32", value=0.0, step=0.01, key=f"{prefix}_d32")
+        _d33 = _c6.number_input("d33", value=1.0, step=0.01, key=f"{prefix}_d33")
+        return [_d11, _d21, _d22, _d31, _d32, _d33]
+    return None
 
 
 def _name_search(keyword: str) -> list:
@@ -1221,6 +1272,112 @@ if tab_analysis.open:
                 _sensor_params = [_mel, _xel, _fwd, _aft, _alt]
             st.caption("复杂传感器用统一参数（逐星视场半角/幅宽仅对 SimpleCone 生效）；"
                        "上方\"最小仰角\"作为额外地面站约束（SAR 想只用自己的仰角范围就填 0）。")
+            _pointing = None
+            with st.expander("传感器指向（可选，ATK）", expanded=False):
+                _pt_mode = st.selectbox(
+                    "指向模式",
+                    ["天底（默认，不设置）", "Fixed 固定指向", "Targeted 目标指向",
+                     "GrazingAlt 入射高度", "External 外部指向文件", "Spinning 旋转（暂不可用）"],
+                    key="cov_pt_mode",
+                    help="Fixed=固定姿态偏置（侧摆）；Targeted=始终指向目标点（凝视观测）；"
+                         "GrazingAlt=入射高度指向；External=外部指向文件；"
+                         "Spinning 初始相位跨进程随机（已反馈官方），暂不可用。")
+                if _pt_mode == "Fixed 固定指向":
+                    _pt_method = st.selectbox(
+                        "姿态方法", ["YPR", "Euler", "Quaternion", "AzEl", "matrix"],
+                        key="cov_pt_fixed_method",
+                        help="YPR=偏航/俯仰/滚转（推荐，俯仰=侧摆）；Euler=欧拉角；"
+                             "Quaternion=四元数；AzEl=方位角/高度角；matrix=旋转矩阵。")
+                    _pt_params = _fixed_method_inputs(_pt_method, prefix="cov_pt_f")
+                    if _pt_params is not None:
+                        _pointing = {"type": "Fixed", "method": _pt_method, "params": _pt_params}
+                elif _pt_mode == "Targeted 目标指向":
+                    _pt_tmode = st.selectbox(
+                        "目标指向模式",
+                        ["Tracking（始终指向本页目标点）", "Fixed（目标点+固定姿态）"],
+                        key="cov_pt_tmode")
+                    if _pt_tmode.startswith("Tracking"):
+                        _pointing = {"type": "Targeted", "mode": "Tracking",
+                                     "target": "*/Facility/Hangzhou"}
+                    else:
+                        _pt_method = st.selectbox(
+                            "姿态方法", ["YPR", "Euler", "Quaternion", "AzEl", "matrix"],
+                            key="cov_pt_tfixed_method")
+                        _pt_params = _fixed_method_inputs(_pt_method, prefix="cov_pt_tf")
+                        if _pt_params is not None:
+                            _pointing = {"type": "Targeted", "mode": "Fixed",
+                                         "target": "*/Facility/Hangzhou",
+                                         "method": _pt_method, "params": _pt_params}
+                elif _pt_mode == "GrazingAlt 入射高度":
+                    _c1, _c2 = st.columns(2)
+                    _az = _c1.number_input("方位角(°)", value=90.0, min_value=0.0,
+                                           max_value=360.0, step=1.0, key="cov_pt_gaz")
+                    _alt = _c2.number_input("入射高度(m)", value=10000.0, min_value=0.0,
+                                            step=1000.0, key="cov_pt_galt")
+                    _pointing = {"type": "GrazingAlt", "azimuth": float(_az),
+                                 "altitude": float(_alt)}
+                elif _pt_mode == "External 外部指向文件":
+                    _pt_file = st.file_uploader(
+                        "指向文件（.sp）", type=["sp", "txt"], key="cov_pt_file",
+                        help="ATK 外部指向文件（.sp）格式见 ATK 官方文档；"
+                             "选文件后保存到 data/user_files/ 再传给 ATK。")
+                    if _pt_file is not None:
+                        _dst = sl.USER_FILES_DIR / f"pointing_{int(time.time())}_{_pt_file.name}"
+                        _dst.write_bytes(_pt_file.getvalue())
+                        _pointing = {"type": "External",
+                                     "file": str(_dst).replace("\\", "/")}
+                        st.caption(f"已保存指向文件：{_dst.name}")
+                elif _pt_mode == "Spinning 旋转（暂不可用）":
+                    st.warning("Spinning 初始相位跨进程随机，已反馈官方，暂不可用。")
+            _constraints = []
+            with st.expander("约束（可选，ATK）", expanded=False):
+                st.caption("常用约束直接填；高级约束在下方 JSON 里写（params 与官方 SetConstraint 命令参数一致）。")
+                _c1, _c2, _c3, _c4 = st.columns(4)
+                _sun_on = _c1.checkbox("太阳高度角约束", key="cov_cons_sun_on")
+                _sun_v = _c1.number_input("地面太阳高度 Min(°)", value=10.0, min_value=0.0,
+                                          max_value=90.0, step=1.0, key="cov_cons_sun_v",
+                                          disabled=not _sun_on)
+                if _sun_on:
+                    _constraints.append({"object": "facility", "name": "SunGroundElevAngle",
+                                         "params": f"Min {_sun_v}"})
+                _az_on = _c2.checkbox("方位角范围", key="cov_cons_az_on")
+                _az_min = _c2.number_input("方位 Min(°)", value=0.0, min_value=0.0,
+                                           max_value=360.0, step=5.0, key="cov_cons_azmin",
+                                           disabled=not _az_on)
+                _az_max = _c2.number_input("方位 Max(°)", value=180.0, min_value=0.0,
+                                           max_value=360.0, step=5.0, key="cov_cons_azmax",
+                                           disabled=not _az_on)
+                if _az_on:
+                    _constraints.append({"object": "facility", "name": "AzimuthAngle",
+                                         "params": f"Min {_az_min} Max {_az_max}"})
+                _rng_on = _c3.checkbox("距离范围", key="cov_cons_rng_on")
+                _rng_min = _c3.number_input("距离 Min(km)", value=0.0, min_value=0.0,
+                                            step=50.0, key="cov_cons_rngmin", disabled=not _rng_on)
+                _rng_max = _c3.number_input("距离 Max(km)", value=3000.0, min_value=0.0,
+                                            step=100.0, key="cov_cons_rngmax", disabled=not _rng_on)
+                if _rng_on:
+                    _constraints.append({"object": "facility", "name": "Range",
+                                         "params": f"Min {_rng_min*1000.0} Max {_rng_max*1000.0}"})
+                _los_on = _c4.checkbox("要求几何视线", key="cov_cons_los")
+                if _los_on:
+                    _constraints.append({"object": "facility", "name": "LineOfSight", "params": "On"})
+                _adv = st.text_area(
+                    "高级约束 JSON（可空）",
+                    value=st.session_state.get("cov_cons_adv", ""),
+                    key="cov_cons_adv", height=120,
+                    help='格式：[{"object":"facility|sensor|satellite","name":"约束名","params":"参数串"}]；'
+                         'object=facility 加在地面站（目标点）、sensor 加在每颗星的传感器、'
+                         'satellite 加在每颗星；params 与官方 SetConstraint 命令参数一致'
+                         '（如 "Min 10"、"Min 10 Max 60 ExcludeIntervals"、"On"）。')
+                if _adv.strip():
+                    try:
+                        _adv_list = json.loads(_adv)
+                        if not isinstance(_adv_list, list):
+                            raise ValueError("需要 JSON 数组")
+                        _constraints.extend(_adv_list)
+                        st.caption(f"高级约束已解析 {len(_adv_list)} 条")
+                    except Exception as _e:
+                        st.error(f"高级约束 JSON 解析失败：{_e}")
 
     with st.expander("传感器参数表（可选，逐星覆盖）"):
         sl.ensure_sensor_params()
@@ -1427,6 +1584,10 @@ if tab_analysis.open:
                     cfg["sensor_type"] = _sensor_type
                     if _sensor_params is not None:
                         cfg["sensor_params"] = _sensor_params
+                    if _pointing is not None:
+                        cfg["pointing"] = _pointing
+                    if _constraints:
+                        cfg["constraints"] = _constraints
                 if cov_mode == "点+半径":
                     region = {"mode": "circle", "lat": float(cov_lat),
                               "lon": float(cov_lon), "radius_km": float(cov_rad)}
@@ -1490,6 +1651,11 @@ if tab_analysis.open:
             st.caption(f"ATK 传感器类型：{res['cfg']['sensor_type']}，参数："
                        f"{res['cfg'].get('sensor_params')}"
                        "（上方\"最小仰角\"作为额外约束，设 0 可取消）。")
+        if res.get("engine") == "atk":
+            _pt = res["cfg"].get("pointing")
+            _cs = res["cfg"].get("constraints")
+            if _pt or _cs:
+                st.caption(f"ATK 指向：{_pt or '天底'}；约束 {len(_cs or [])} 条。")
         if "cov_xlsx" not in st.session_state:
             meta = {
                 "region_name": res["cfg"].get("region_name", ""),

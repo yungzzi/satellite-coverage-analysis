@@ -50,3 +50,26 @@ cd <atk-experiment 根目录>
 | 4000 | 8×500 | 62s | 4.9GB | 1962 |
 | 16091 全集 | 8×2012（大分片） | 21min（2 片崩） | 8.2GB | 5556（缺 2 片） |
 | 16091 全集（工具默认 1000/片） | 17×~950 | 待验收 | — | — |
+
+### 传感器与区域输出（2026-08-15 新增）
+
+```bash
+# 复杂传感器（SimpleCone/Rectangular/Conical 走 Define；
+# SAR/HalfPower 自动走 Save→改XML→Load 双实例路线）
+python -m atk_parallel.runner --tle data/test_data/jilin1_all.tle \
+    --t0 "12 Aug 2026 00:00:00.000" --t1 "12 Aug 2026 08:00:00.000" \
+    --sensor-type SAR --sensor-params "12,70,30,30,550000" --out-dir output_sar
+
+# 附加区域百分比覆盖率（输出 area_coverage.csv / area_grid_points.csv / area_summary.json）
+python -m atk_parallel.runner --tle data/test_data/jilin1_all.tle \
+    --t0 "12 Aug 2026 00:00:00.000" --t1 "12 Aug 2026 08:00:00.000" \
+    --area-region "30,120,31,121" --area-granularity 0.5 --area-fov 45 --out-dir output_area
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| --sensor-type | SimpleCone | SimpleCone/Rectangular/HalfPower/Conical/SAR |
+| --sensor-params | 无 | 逗号分隔：如 "45"、"40,60"、"0.5,0.35"、"0,45,0,360"、"12,70,30,30,550000" |
+| --area-region | 无 | 附加区域覆盖率：min_lat,min_lon,max_lat,max_lon |
+| --area-granularity | 0.5 | 区域网格粒度（度） |
+| --area-fov | 45 | 区域分析传感器半角（度） |

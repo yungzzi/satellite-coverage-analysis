@@ -752,3 +752,35 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   可用于"区域百分比覆盖率"输出项。逐星窗口仍走 Facility 点路线。
 - 复现脚本：`experiment/atk/cd_area_validate.py`、`cd_area_raw_probe.py`
   （gitignore，留档）。
+
+### 10.21 worker 支持复杂传感器 + runner 区域覆盖率输出（2026-08-15，A/B 落地）
+
+**A：worker 传感器类型参数化（atk_parallel/worker.py / runner.py）**
+- 新增 `--sensor-type`（SimpleCone/Rectangular/HalfPower/Conical/SAR）与
+  `--sensor-params`（逗号分隔参数，官方 Define 语法见 Help/传感器/Define.html）。
+- 路线分界（关键）：
+  - SimpleCone / Rectangular / Conical：走 `Define` 命令（实测正常）；
+  - **SAR / HalfPower：走 Save→改 XML→Load 双实例路线**（§7.1：rc.5 的 Define
+    对这两种类型静默失效，返回空串但传感器不生效 → 0 窗口）。
+    实现：实例 1（new_scenario）建 SimpleCone 占位 → Save → 改 `<Pattern>`
+    （SAR=`<SensorType>5</SensorType>`+`<SAR>` 块；HalfPower=`4`+`<HalfPwr>` 块，
+    halfAngle 按 70°·λ/D/2 换算）→ 实例 2（不带 new_scenario）Load → 计算。
+    调度器对这两种类型不再预启动 ATK，由 worker 自管两个实例。
+- worker 收尾不再调用 atkClose（堆损坏 0xC0000374 会丢结果），先落盘再按端口杀进程树。
+- 回归与试点（杭州点 30.25/120.17，2026-08-12 00:00–08:00 UTC）：
+
+| 传感器 | 规模 | 路线 | 窗口（两遍） |
+| --- | --- | --- | --- |
+| SimpleCone45 | 24 星子集 | Define | 69 / 69（基线一致） |
+| Rectangular(45,45) | 6 星 | Define | 25 / 25 |
+| SAR(12,70,30,30,550km) | 6 星 | XML | 34 / 34（Define 路线为 0） |
+| HalfPower(0.5,0.35) | 6 星 | XML | 29 / 29（Define 路线为 0） |
+
+**B：runner 区域百分比覆盖率输出**
+- 新增 `--area-region "min_lat,min_lon,max_lat,max_lon"`、`--area-granularity`、
+  `--area-fov`（可选，默认不跑）；复用 cd_area 模块（§10.20，XML 注入网格 +
+  SAR/HalfPower 自动加传感器 XML 补丁）。
+- 输出：`area_coverage.csv`（每分钟覆盖率%）、`area_grid_points.csv`（真实网格点）、
+  `area_summary.json`（网格点数/资产/覆盖分钟/均值/最大值）。
+- 实测（6 星，30~31°N / 120~121°E，0.5°）：SimpleCone45 → 9 网格点、72/481 覆盖分钟、
+  最大 100%；SAR(12,70,30,30,550km) → 232/481 覆盖分钟、assets 正确列出 6 颗。

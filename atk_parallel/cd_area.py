@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """ATK 覆盖定义（Coverage Definition）区域覆盖率模块。
 
-标准路线（实验记录 §10.17 / §10.18 定案）：
+标准路线（实验记录 §10.17 / §10.18 / §10.20 定案）：
     Connect 建 CD（默认网格）→ Save → XML 注入 <Grid> 区域参数 → Load
     → Assign → 带引号 Compute → Report_RM 读
     "Grid Point Visible Assets"（真实网格点）与 "Percent Coverage"（分钟级区域覆盖率）。
@@ -38,10 +38,13 @@ try:
     import ATKConnectModule as C
     from atk_parallel.headless import launch_headless
     from atk_parallel.report_parser import decode_report
+    from atk_parallel.worker import XML_ROUTE_TYPES, patch_sensor_patterns
 except ImportError:  # 仅文档/静态检查场景
     C = None
     launch_headless = None
     decode_report = None
+    XML_ROUTE_TYPES = ("SAR", "HalfPower")
+    patch_sensor_patterns = None
 
 
 @dataclass
@@ -51,7 +54,7 @@ class AreaCoverageResult:
     grid_points: [(lat, lon), ...] —— ATK 网格点可见目标报告读回的真实网格点；
     minutes: [datetime, ...] —— 每分钟时间戳（UTC）；
     coverage_pct: [float, ...] —— 与 minutes 对齐的区域覆盖率（0~100）；
-    assets: [str, ...] —— 参与计算的传感器（如 "tle-68196U-S45"）；
+    assets: [str, ...] —— 参与计算的传感器（如 "tle-68196U-S0"）；
     raw_grid_report: str —— 原始报告文本（留档）；
     raw_percent_report: str —— 原始报告文本（留档）。
     """
@@ -166,14 +169,20 @@ def build_cd_xml(
     granularity_deg: float,
     sensor_half_angle_deg: float = 45.0,
     cd_name: str = "CD1",
-    sensor_prefix: str = "S",
+    sensor_type: str = "SimpleCone",
+    sensor_params: Optional[list] = None,
 ) -> dict:
-    """新建场景 → 导入 TLE → 每星加 SimpleCone 传感器 → 建 CD → 保存 → 注入区域网格。
+    """新建场景 → 导入 TLE → 每星加传感器 → 建 CD → 保存 → 注入区域网格。
 
+    sensor_type 支持 SimpleCone / Rectangular / HalfPower / Conical / SAR
+    （官方 Define 语法见 Help/传感器/Define.html）；SimpleCone 缺省用
+    sensor_half_angle_deg，其余类型必须给 sensor_params。
     返回 {"xml": 补丁后路径, "sats": [..], "sensors": [..], "raw": 原场景路径}。
     """
     if C is None:
         raise RuntimeError("ATKConnectModule 不可用")
+    if sensor_type != "SimpleCone" and not sensor_params:
+        raise ValueError(f"传感器 {sensor_type} 需要 sensor_params")
     port = pick_port()
     kill_port_owner(port)
     launch_headless(port, new_scenario=True)
@@ -188,10 +197,22 @@ def build_cd_xml(
         if not sats:
             raise RuntimeError("TLE 导入后未找到卫星")
         sensors = []
+        xml_route = sensor_type in XML_ROUTE_TYPES
         for i, sat in enumerate(sats):
-            sname = f"{sensor_prefix}{i}"
+            sname = f"S{i}"
+            if xml_route:
+                # 占位用 SimpleCone，Save 后再改 XML（§7.1：SAR/HalfPower 的 Define 静默失效）
+                define_type, define_params = "SimpleCone", [sensor_half_angle_deg]
+            else:
+                define_type = sensor_type
+                define_params = sensor_params if sensor_params is not None else [sensor_half_angle_deg]
             _cmd(con, "New", f'/ "*/Satellite/{sat}/Sensor" {sname}')
-            _cmd(con, "Define", f'"*/Satellite/{sat}/Sensor/{sname}" SimpleCone {sensor_half_angle_deg}')
+            _cmd(
+                con,
+                "Define",
+                f'"*/Satellite/{sat}/Sensor/{sname}" {define_type} '
+                + " ".join(str(x) for x in define_params),
+            )
             sensors.append((sat, sname))
         _cmd(con, "New", f"/ */CoverageDefinition {cd_name}")
         _cmd(con, "Cov", f'*/CoverageDefinition/{cd_name} Interval "{t0}" "{t1}"')
@@ -206,7 +227,12 @@ def build_cd_xml(
         _cmd(con, "Save", f'/ * "{raw_xml}"')
     finally:
         kill_port_owner(port)
-    patched = _patch_grid_xml(raw_xml.replace("/", "\\"), region, granularity_deg)
+    patched = _patch_grid_xml(raw_xml.replace("\\", "/"), region, granularity_deg)
+    if xml_route and patch_sensor_patterns is not None:
+        fd, patched2 = tempfile.mkstemp(suffix=".atk", prefix="atk_cd_patch_")
+        os.close(fd)
+        patched = patch_sensor_patterns(
+            patched.replace("/", "\\"), sensor_type, sensor_params, patched2)
     return {
         "xml": patched,
         "raw": raw_xml,
@@ -252,9 +278,9 @@ def read_cd_reports(xml_path: str, t0: str, t1: str, cd_name: str = "CD1") -> Ar
         _cmd(con, "SetAnalysisTimePeriod", f'* "{t0}" "{t1}"')
         _cmd(con, "Animate", "* Reset")
         sats = _sat_names(con)
+        allnames = _cmd(con, "AllInstanceNames", "/")
         for sat in sats:
-            for sname in re.findall(rf"/Satellite/{re.escape(sat)}/Sensor/([^/]+?)(?= /|$)",
-                                    _cmd(con, "AllInstanceNames", "/")):
+            for sname in re.findall(rf"/Satellite/{re.escape(sat)}/Sensor/([^/]+?)(?= /|$)", allnames):
                 _cmd(
                     con,
                     "Cov",
@@ -275,9 +301,9 @@ def read_cd_reports(xml_path: str, t0: str, t1: str, cd_name: str = "CD1") -> Ar
         res.raw_percent_report = pct_rep
         res.grid_points = parse_grid_points(grid_rep)
         res.minutes, res.coverage_pct = parse_percent_coverage(pct_rep)
-        m = re.search(r"目标对象：\s*\n\s*([^\n]+)", pct_rep)
+        m = re.search(r"目标对象：\s*\n((?:\s+[^\n]+\n?)*)", pct_rep)
         if m:
-            res.assets = [a.strip() for a in m.group(1).split() if a.strip()]
+            res.assets = [a.strip() for a in m.group(1).splitlines() if a.strip()]
     finally:
         kill_port_owner(port)
     return res
@@ -291,9 +317,12 @@ def analyze_area_coverage(
     t1: str,
     sensor_half_angle_deg: float = 45.0,
     cd_name: str = "CD1",
+    sensor_type: str = "SimpleCone",
+    sensor_params: Optional[list] = None,
 ) -> AreaCoverageResult:
     """一站式：建 CD（XML 注入区域网格）→ 计算 → 返回网格点与分钟覆盖率。"""
     built = build_cd_xml(
-        tle_path, t0, t1, region, granularity_deg, sensor_half_angle_deg, cd_name
+        tle_path, t0, t1, region, granularity_deg, sensor_half_angle_deg, cd_name,
+        sensor_type, sensor_params,
     )
     return read_cd_reports(built["xml"], t0, t1, cd_name)

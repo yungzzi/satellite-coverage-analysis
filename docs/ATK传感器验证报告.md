@@ -273,3 +273,16 @@
 - 结论：与 Pro 环境结论（§10.13）一致；CD 区域百分比覆盖率可放心作为正式输出项。
 - 坑（已规避）：Connect `ImportTLEFile` 三行 TLE 崩溃；`atkClose` 堆损坏——
   模块按端口杀进程树收尾。
+
+### 7.9 复杂传感器批量支持（2026-08-15）：Define 与 XML 路线的分界
+
+- worker/runner 已支持 5 种传感器；**分界**：
+  - SimpleCone / Rectangular / Conical：`Define` 命令可用；
+  - SAR / HalfPower：`Define` 静默失效（返回空串、传感器不生效、0 窗口），
+    必须走 Save→改 XML→Load（实例 1 建占位 SimpleCone，实例 2 加载补丁）。
+- 实测（6 星，杭州点，8h）：SAR(12,70,30,30,550km) 34 窗口×2、HalfPower(0.5,0.35)
+  29 窗口×2，均逐窗口一致；SimpleCone45 24 星基线 69 窗口无回归。
+- 区域覆盖率（cd_area/runner --area-region）：SAR/HalfPower 与网格共用同一 XML
+  补丁机制，实测 6 星 SAR 区域 232/481 覆盖分钟、assets 全部列出。
+- 教训：**Define 返回空串不表示成功**；怀疑某传感器类型失效时，用 "Sensor Query"
+  或先小样本出窗口数验证，必要时直接走 XML 路线。

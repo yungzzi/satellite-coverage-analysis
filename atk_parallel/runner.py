@@ -7,9 +7,17 @@
 
 默认参数：每片 1000 颗、实例上限 min(核数, 可用内存/1.2GB, 12)、失败重试 2 次、
 单片超时 1200s、CovMulti Assets 每批 250 条。输出 merged_windows.csv + summary.json。
+
+传感器（A 阶段）：
+  --sensor-type SimpleCone|Rectangular|HalfPower|Conical|SAR
+  --sensor-params "45" / "40,60" / "0.5,0.35" / "0,45,0,360" / "12,70,30,30,550000"
+
+区域百分比覆盖率（B 阶段，可选）：
+  --area-region "30,120,31,121" --area-granularity 0.5 --area-fov 45
+  附加输出 area_coverage.csv / area_grid_points.csv / area_summary.json。
 """
 from __future__ import annotations
-import argparse, ctypes, json, os, socket, subprocess, sys, tempfile, time
+import argparse, csv, ctypes, json, os, re, socket, subprocess, sys, tempfile, time
 from datetime import datetime
 
 ATK_ROOT = r"D:\ATK航天任务设计工作箱\ATK-v4.0.1-rc.5-windows-x64\ATK-4.0.1-rc.5"
@@ -55,10 +63,7 @@ def decide_max_inst(requested: int | None) -> int:
 
 
 def pick_free_ports(n: int, base: int = 6655, max_scan: int = 200) -> list[int]:
-    """动态挑选 n 个当前空闲的本地端口（避免与其他软件已占用端口冲突）。
-
-    用 bind 探测：能 bind 成功即空闲（ATK 启动后由 --port 监听同一端口）。
-    """
+    """动态挑选 n 个当前空闲的本地端口（避免与其他软件已占用端口冲突）。"""
     ports: list[int] = []
     p = base
     while len(ports) < n and p < base + max_scan:
@@ -91,28 +96,40 @@ def wait_port(port: int, timeout_s: float = 120) -> bool:
     return False
 
 
-def launch_atk(port: int):
+def launch_atk(port: int, new_scenario: bool = True):
     # 隐藏 ATK 启动时弹出的使用协议/欢迎窗口（SW_HIDE）
     si = subprocess.STARTUPINFO()
     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     si.wShowWindow = 0
+    args = [ATK_EXE, "--headless", "--port", str(port),
+            "--hide-startup", "--hide-welcome", "--no-crash-report"]
+    if new_scenario:
+        args.insert(2, "--new-scenario")
     return subprocess.Popen(
-        [ATK_EXE, "--headless", "--new-scenario", "--port", str(port),
-         "--hide-startup", "--hide-welcome", "--no-crash-report"],
-        cwd=ATK_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        args, cwd=ATK_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         startupinfo=si)
 
 
 def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir):
     """启动一片：ATK + worker，返回 job 字典（不等待）。"""
-    atk_proc = launch_atk(port)
-    ready = wait_port(port)
+    xml_route = cfg.get("sensor_type", "SimpleCone") in ("SAR", "HalfPower")
+    if xml_route:
+        # SAR/HalfPower 走 Save→改XML→Load 路线（§7.1），worker 自管两个实例，
+        # 调度器不预启动，避免端口被占用。
+        atk_proc = None
+        ready = True
+    else:
+        atk_proc = launch_atk(port)
+        ready = wait_port(port)
     out_path = os.path.abspath(os.path.join(out_dir, f"shard_{port}.json"))
     cpath = os.path.abspath(os.path.join(out_dir, f"shard_{port}_cfg.json"))
     wcfg = {
         "port": port, "tle": os.path.abspath(shard_file).replace("\\", "/"),
         "expected": len(shard_recs), "angles": None, "fov": cfg["fov"],
         "lat": cfg["lat"], "lon": cfg["lon"], "t0": cfg["t0"], "t1": cfg["t1"],
+        "sensor_type": cfg.get("sensor_type", "SimpleCone"),
+        "sensor_params": cfg.get("sensor_params"),
+        "xml_route": xml_route,
         "out": out_path,
     }
     with open(cpath, "w", encoding="utf-8") as f:
@@ -134,8 +151,9 @@ def collect_shard_job(job, cfg):
         try: job["worker"].kill()
         except Exception: pass
         return None
-    try: job["atk"].kill()
-    except Exception: pass
+    if job.get("atk") is not None:
+        try: job["atk"].kill()
+        except Exception: pass
     if rc != 0 or not os.path.exists(job["out"]):
         print(f"  [片 {shard_i}] port {port} worker 失败 rc={rc}", flush=True)
         return None
@@ -150,6 +168,62 @@ def collect_shard_job(job, cfg):
     return res
 
 
+def parse_sensor_params(s: str | None):
+    if not s:
+        return None
+    return [float(x) for x in s.replace("，", ",").split(",") if x.strip() != ""]
+
+
+def run_area_analysis(args, out_dir):
+    """区域百分比覆盖率（CD 路线，XML 注入；见 atk_parallel/cd_area.py）。"""
+    from .cd_area import analyze_area_coverage
+    region = tuple(float(x) for x in args.area_region.split(","))
+    if len(region) != 4:
+        raise ValueError("--area-region 需要 4 个值：min_lat,min_lon,max_lat,max_lon")
+    params = parse_sensor_params(args.sensor_params)
+    print(f"区域覆盖率：region={region} gran={args.area_granularity} "
+          f"fov={args.area_fov} sensor={args.sensor_type} params={params}", flush=True)
+    res = analyze_area_coverage(
+        args.tle, region, args.area_granularity, args.t0, args.t1,
+        sensor_half_angle_deg=args.area_fov,
+        sensor_type=args.sensor_type, sensor_params=params,
+    )
+    cov_path = os.path.join(out_dir, "area_coverage.csv")
+    with open(cov_path, "w", encoding="utf-8-sig", newline="") as f:
+        wtr = csv.writer(f)
+        wtr.writerow(["minute_utc", "coverage_pct"])
+        for d, p in zip(res.minutes, res.coverage_pct):
+            wtr.writerow([d.strftime("%Y-%m-%d %H:%M:%S"), round(p, 6)])
+    pts_path = os.path.join(out_dir, "area_grid_points.csv")
+    with open(pts_path, "w", encoding="utf-8-sig", newline="") as f:
+        wtr = csv.writer(f)
+        wtr.writerow(["index", "lat", "lon"])
+        for i, (la, lo) in enumerate(res.grid_points, 1):
+            wtr.writerow([i, la, lo])
+    nonzero = [p for p in res.coverage_pct if p > 0]
+    info = {
+        "region": list(region),
+        "granularity_deg": args.area_granularity,
+        "fov_half_angle_deg": args.area_fov,
+        "sensor_type": args.sensor_type,
+        "sensor_params": params,
+        "grid_points": len(res.grid_points),
+        "assets": res.assets,
+        "minutes": len(res.minutes),
+        "covered_minutes": len(nonzero),
+        "mean_coverage_pct": round(sum(res.coverage_pct) / len(res.coverage_pct), 6) if res.coverage_pct else 0.0,
+        "max_coverage_pct": round(max(res.coverage_pct), 6) if res.coverage_pct else 0.0,
+        "output_coverage_csv": cov_path,
+        "output_grid_points_csv": pts_path,
+    }
+    with open(os.path.join(out_dir, "area_summary.json"), "w", encoding="utf-8") as f:
+        json.dump(info, f, ensure_ascii=False, indent=1)
+    print(f"区域覆盖率完成：网格 {info['grid_points']} 点 | 覆盖分钟 "
+          f"{info['covered_minutes']}/{info['minutes']} | 最大 {info['max_coverage_pct']}%",
+          flush=True)
+    return info
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tle", required=True, help="TLE 文件（三行或两行格式）")
@@ -157,7 +231,17 @@ def main():
     ap.add_argument("--t1", required=True, help='结束（"12 Aug 2026 08:00:00.000"）')
     ap.add_argument("--lat", type=float, default=30.25)
     ap.add_argument("--lon", type=float, default=120.17)
-    ap.add_argument("--fov", type=float, default=45.0, help="默认传感器半角（度）")
+    ap.add_argument("--fov", type=float, default=45.0, help="默认 SimpleCone 半角（度）")
+    ap.add_argument("--sensor-type", default="SimpleCone",
+                    choices=["SimpleCone", "Rectangular", "HalfPower", "Conical", "SAR"],
+                    help="传感器类型（默认 SimpleCone）")
+    ap.add_argument("--sensor-params", default=None,
+                    help='传感器参数（逗号分隔）：如 "45"、"40,60"、"0.5,0.35"、'
+                         '"0,45,0,360"、"12,70,30,30,550000"')
+    ap.add_argument("--area-region", default=None,
+                    help='附加区域百分比覆盖率：min_lat,min_lon,max_lat,max_lon（如 "30,120,31,121"）')
+    ap.add_argument("--area-granularity", type=float, default=0.5, help="区域网格粒度（度）")
+    ap.add_argument("--area-fov", type=float, default=45.0, help="区域分析传感器半角（度）")
     ap.add_argument("--per-shard", type=int, default=1000, help="每片卫星数")
     ap.add_argument("--max-inst", type=int, default=None, help="并行实例上限（默认自动）")
     ap.add_argument("--retries", type=int, default=2, help="失败片重试次数")
@@ -178,7 +262,9 @@ def main():
     shards = make_shards(recs, args.per_shard)
     n_shards = len(shards)
     max_inst = decide_max_inst(args.max_inst)
-    print(f"分片: {n_shards} 片（每片≤{args.per_shard}）| 并行上限: {max_inst} | 可用内存: {avail_memory_gb():.1f} GB", flush=True)
+    print(f"分片: {n_shards} 片（每片≤{args.per_shard}）| 并行上限: {max_inst} | "
+          f"可用内存: {avail_memory_gb():.1f} GB", flush=True)
+    print(f"传感器: {args.sensor_type} {parse_sensor_params(args.sensor_params)}", flush=True)
 
     # 分片 TLE 写系统 TEMP（ATK ImportTLEFile 不认中文路径）
     shard_dir = os.path.join(tempfile.gettempdir(), "atk_shards")
@@ -189,7 +275,9 @@ def main():
         to_two_line_file(sh, p)
         shard_files.append(os.path.abspath(p))
 
-    cfg = {**vars(args), "fov": args.fov}
+    cfg = {**vars(args), "fov": args.fov,
+           "sensor_type": args.sensor_type,
+           "sensor_params": parse_sensor_params(args.sensor_params)}
     all_results = {}
     failed = []
     port_pool = pick_free_ports(max_inst, args.port_base)
@@ -247,9 +335,8 @@ def main():
             if j < len(rec_list):
                 name_map[nm] = (rec_list[j].norad, rec_list[j].name)
         for w in res["windows"]:
-            asset = w["asset"]
-            base = asset[:-len("-S45")] if asset.endswith("-S45") else asset
-            norad, name = name_map.get(base, ("?", asset))
+            asset = re.sub(r"-S\d+$", "", w["asset"])
+            norad, name = name_map.get(asset, ("?", w["asset"]))
             merged.append({
                 "norad": norad, "name": name,
                 "start_utc": w["start"], "end_utc": w["end"],
@@ -258,7 +345,6 @@ def main():
     merged.sort(key=lambda r: r["start_utc"])
 
     csv_path = os.path.join(args.out_dir, "merged_windows.csv")
-    import csv
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         wtr = csv.DictWriter(f, fieldnames=["norad", "name", "start_utc", "end_utc", "duration_s"])
         wtr.writeheader()
@@ -273,7 +359,18 @@ def main():
         "windows": len(merged),
         "wall_seconds": round(wall, 1),
         "output_csv": csv_path,
+        "sensor_type": args.sensor_type,
+        "sensor_params": parse_sensor_params(args.sensor_params),
     }
+
+    if args.area_region:
+        try:
+            area = run_area_analysis(args, args.out_dir)
+            summary["area"] = area
+        except Exception as e:  # noqa: BLE001
+            summary["area"] = {"error": str(e)}
+            print(f"区域覆盖率失败: {e}", flush=True)
+
     with open(os.path.join(args.out_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1)
 

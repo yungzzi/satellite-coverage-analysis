@@ -733,7 +733,7 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   - `atkClose()` 偶发堆损坏崩溃（0xC0000374）——新模块一律改为按端口杀 ATK
     进程树收尾，不再调用 atkClose。
 - 官方反馈材料已起草：`docs/ATK官方反馈材料.md`；反馈渠道：
-  atk_service@163.com、红山开源官网（osredm.com/atknudt/atk）、
+  atk_service@163.com、红山开源平台的 ATK 官方项目页（osredm.com/atknudt/atk）、
   gitcode.com/jinke18/atk-doc Issues、工作人员微信 LXKTATK。
 
 ### 10.20 CD 区域模块完成 + 我方环境对拍通过（2026-08-15，任务落地）

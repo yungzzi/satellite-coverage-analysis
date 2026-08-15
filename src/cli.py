@@ -290,6 +290,9 @@ def _add_select_args(sp, run: bool = False):
     sp.add_argument("--n-sats", type=int, default=None, help="给定颗数 N")
     sp.add_argument("--decision-step-seconds", type=int, default=None,
                     help="选星决策粒度（秒）：10=精细（仅贪心）")
+    sp.add_argument("--engine", default=None, choices=["self", "atk"],
+                    help="覆盖引擎：self=自研（默认）；atk=本机 ATK（需安装注册，"
+                         "仅支持点+半径目标）")
     sp.add_argument("--list-optimal", action="store_true", help="打印全部最优方案")
     sp.add_argument("--no-xlsx", action="store_true",
                     help="run 默认导出 Excel，本开关关闭")
@@ -408,6 +411,8 @@ def _select_argv(a, xlsx: bool, save_as: str | None,
         argv += ["--xlsx"]
     if save_as:
         argv += ["--save-as", save_as]
+    if a.engine:
+        argv += ["--engine", a.engine]
     if a.out:
         argv += ["--out", a.out]
     return argv

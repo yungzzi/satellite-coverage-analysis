@@ -11,6 +11,8 @@
 传感器（A 阶段）：
   --sensor-type SimpleCone|Rectangular|HalfPower|Conical|SAR
   --sensor-params "45" / "40,60" / "0.5,0.35" / "0,45,0,360" / "12,70,30,30,550000"
+  --angles-file <json>  逐星 SimpleCone 半角列表（与 TLE 顺序一致；仅 SimpleCone 生效）
+  --min-elev <度>       地面站最小仰角约束（可选）
 
 区域百分比覆盖率（B 阶段，可选）：
   --area-region "30,120,31,121" --area-granularity 0.5 --area-fov 45
@@ -20,7 +22,9 @@ from __future__ import annotations
 import argparse, csv, ctypes, json, os, re, socket, subprocess, sys, tempfile, time
 from datetime import datetime
 
-ATK_ROOT = r"D:\ATK航天任务设计工作箱\ATK-v4.0.1-rc.5-windows-x64\ATK-4.0.1-rc.5"
+from .headless import get_atk_root
+
+ATK_ROOT = get_atk_root()
 ATK_EXE = os.path.join(ATK_ROOT, "ATK.exe")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -110,7 +114,7 @@ def launch_atk(port: int, new_scenario: bool = True):
         startupinfo=si)
 
 
-def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir):
+def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir, angles=None):
     """启动一片：ATK + worker，返回 job 字典（不等待）。"""
     xml_route = cfg.get("sensor_type", "SimpleCone") in ("SAR", "HalfPower")
     if xml_route:
@@ -125,10 +129,11 @@ def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir):
     cpath = os.path.abspath(os.path.join(out_dir, f"shard_{port}_cfg.json"))
     wcfg = {
         "port": port, "tle": os.path.abspath(shard_file).replace("\\", "/"),
-        "expected": len(shard_recs), "angles": None, "fov": cfg["fov"],
+        "expected": len(shard_recs), "angles": angles, "fov": cfg["fov"],
         "lat": cfg["lat"], "lon": cfg["lon"], "t0": cfg["t0"], "t1": cfg["t1"],
         "sensor_type": cfg.get("sensor_type", "SimpleCone"),
         "sensor_params": cfg.get("sensor_params"),
+        "min_elev": cfg.get("min_elev"),
         "xml_route": xml_route,
         "out": out_path,
     }
@@ -232,6 +237,9 @@ def main():
     ap.add_argument("--lat", type=float, default=30.25)
     ap.add_argument("--lon", type=float, default=120.17)
     ap.add_argument("--fov", type=float, default=45.0, help="默认 SimpleCone 半角（度）")
+    ap.add_argument("--min-elev", type=float, default=None, help="地面站最小仰角（度，可选）")
+    ap.add_argument("--angles-file", default=None,
+                    help="逐星 SimpleCone 半角 JSON 列表（与 TLE 顺序一致；仅 SimpleCone 生效）")
     ap.add_argument("--sensor-type", default="SimpleCone",
                     choices=["SimpleCone", "Rectangular", "HalfPower", "Conical", "SAR"],
                     help="传感器类型（默认 SimpleCone）")
@@ -259,25 +267,38 @@ def main():
             print("  ", p, flush=True)
     print(f"卫星总数: {len(recs)}", flush=True)
 
+    angles = None
+    if args.angles_file:
+        with open(args.angles_file, encoding="utf-8-sig") as f:
+            angles = json.load(f)
+        if len(angles) != len(recs):
+            print(f"警告：angles 数量 {len(angles)} ≠ 卫星数 {len(recs)}，按序号尽量对齐", flush=True)
+
     shards = make_shards(recs, args.per_shard)
     n_shards = len(shards)
     max_inst = decide_max_inst(args.max_inst)
     print(f"分片: {n_shards} 片（每片≤{args.per_shard}）| 并行上限: {max_inst} | "
           f"可用内存: {avail_memory_gb():.1f} GB", flush=True)
-    print(f"传感器: {args.sensor_type} {parse_sensor_params(args.sensor_params)}", flush=True)
+    print(f"传感器: {args.sensor_type} {parse_sensor_params(args.sensor_params)} "
+          f"min_elev={args.min_elev} angles={'有' if angles else '无'}", flush=True)
 
     # 分片 TLE 写系统 TEMP（ATK ImportTLEFile 不认中文路径）
     shard_dir = os.path.join(tempfile.gettempdir(), "atk_shards")
     os.makedirs(shard_dir, exist_ok=True)
     shard_files = []
+    shard_angles = []
+    start = 0
     for i, sh in enumerate(shards):
         p = os.path.join(shard_dir, f"shard_{i}.tle")
         to_two_line_file(sh, p)
         shard_files.append(os.path.abspath(p))
+        shard_angles.append(angles[start:start + len(sh)] if angles else None)
+        start += len(sh)
 
     cfg = {**vars(args), "fov": args.fov,
            "sensor_type": args.sensor_type,
-           "sensor_params": parse_sensor_params(args.sensor_params)}
+           "sensor_params": parse_sensor_params(args.sensor_params),
+           "min_elev": args.min_elev}
     all_results = {}
     failed = []
     port_pool = pick_free_ports(max_inst, args.port_base)
@@ -289,8 +310,8 @@ def main():
             sys.exit(1)
 
     t_wall = time.time()
-    for round_no, start in enumerate(range(0, n_shards, max_inst)):
-        batch = list(range(start, min(start + max_inst, n_shards)))
+    for round_no, start_i in enumerate(range(0, n_shards, max_inst)):
+        batch = list(range(start_i, min(start_i + max_inst, n_shards)))
         print(f"== 第 {round_no + 1} 轮：片 {batch} ==", flush=True)
         pending = list(batch)
         for attempt in range(args.retries + 1):
@@ -303,7 +324,8 @@ def main():
             for k, shard_i in enumerate(todo):
                 port = port_pool[k]
                 print(f"  [片 {shard_i}] port {port} 尝试 {attempt + 1}（{shard_norad_ranges(shards[shard_i])}）", flush=True)
-                job = start_shard_job(shard_i, port, shard_files[shard_i], shards[shard_i], cfg, args.out_dir)
+                job = start_shard_job(shard_i, port, shard_files[shard_i], shards[shard_i],
+                                      cfg, args.out_dir, angles=shard_angles[shard_i])
                 if not job["ready"]:
                     print(f"  [片 {shard_i}] port {port} ATK 端口未就绪", flush=True)
                     try: job["atk"].kill()
@@ -361,6 +383,7 @@ def main():
         "output_csv": csv_path,
         "sensor_type": args.sensor_type,
         "sensor_params": parse_sensor_params(args.sensor_params),
+        "min_elev": args.min_elev,
     }
 
     if args.area_region:

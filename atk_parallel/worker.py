@@ -18,6 +18,7 @@ config.json 字段：
                                 ParentAltitude]
   angles         与分片顺序对应的 SimpleCone 半角列表（可选，仅 SimpleCone，优先于 sensor_params）
   fov            默认 SimpleCone 半角（度）
+  min_elev       最小仰角约束（度，可选；加在地面站上 = 自研 min_elevation 口径）
   lat / lon      地面站经纬度（ATK 点目标）
   t0 / t1        分析时段（"12 Aug 2026 00:00:00.000" 格式）
   out            结果 JSON 路径
@@ -31,7 +32,9 @@ config.json 字段：
 from __future__ import annotations
 import argparse, json, os, re, subprocess, sys, tempfile, time
 
-ATK_ROOT = r"D:\ATK航天任务设计工作箱\ATK-v4.0.1-rc.5-windows-x64\ATK-4.0.1-rc.5"
+from .headless import get_atk_root, launch_headless
+
+ATK_ROOT = get_atk_root()
 PYMOD = os.path.join(ATK_ROOT, "IntegratingWithATK", "connect", "Python")
 BS = 250  # CovMulti Assets 每批条数（安全上限）
 
@@ -39,7 +42,6 @@ sys.path.insert(0, PYMOD)
 import ATKConnectModule as C
 
 from .report_parser import decode_report, parse_coverage_report
-from .headless import launch_headless
 
 XML_ROUTE_TYPES = ("SAR", "HalfPower")
 # 官方 XML <SensorType> 索引（§7.1 实测）：0=SimpleCone, 3=Conical, 4=HalfPower, 5=SAR
@@ -164,6 +166,8 @@ def run_xml_route(cfg, port: int, tle: str, t0: str, t1: str, result: dict):
     cmd("Load", f'/ Scenario "{patched}"')
     cmd("SetAnalysisTimePeriod", f'* "{t0}" "{t1}"')
     cmd("Animate", "* Reset")
+    if cfg.get("min_elev"):
+        cmd("SetConstraint", f"*/Facility/Hangzhou ElevationAngle Min {float(cfg['min_elev'])}")
     r = cmd("AllInstanceNames", "/")
     names = [n for n in re.findall(r"/Satellite/([^/]+?)(?= /Scenario/|$)", r) if n.strip()]
     result["sats"] = len(names)
@@ -278,6 +282,8 @@ def main():
 
     cmd("New", "/ Facility Hangzhou")
     cmd("SetPosition", f"*/Facility/Hangzhou Geodetic {lat} {lon} 0.0")
+    if cfg.get("min_elev"):
+        cmd("SetConstraint", f"*/Facility/Hangzhou ElevationAngle Min {float(cfg['min_elev'])}")
     # 新建场景必须先 Start 生成星历（仅 Reset/Step/Save-Load 都无法物化）。
     # 注意：Spinning 相位在 Connect 新建场景下跨实例仍不可复现（离散初始化状态，
     # 2026-08-15 独立复测确认；SimpleCone/SAR/HalfPower 等非旋转传感器不受影响）。

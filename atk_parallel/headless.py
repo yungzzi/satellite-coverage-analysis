@@ -2,10 +2,19 @@
 """ATK 无头启动辅助：--headless 只关 2D/3D 视图，主窗口仍可见，这里启动后主动隐藏。
 
 只隐藏本次启动新增的 ATK 进程窗口，不影响用户手动打开的 ATK GUI。
+ATK 安装目录可通过环境变量 ATK_ROOT 覆盖（默认本机实验路径）。
 """
 import ctypes, os, socket, subprocess, time
 
-ATK_ROOT = r"D:\ATK航天任务设计工作箱\ATK-v4.0.1-rc.5-windows-x64\ATK-4.0.1-rc.5"
+DEFAULT_ATK_ROOT = r"D:\ATK航天任务设计工作箱\ATK-v4.0.1-rc.5-windows-x64\ATK-4.0.1-rc.5"
+
+
+def get_atk_root() -> str:
+    """ATK 根目录：环境变量 ATK_ROOT 优先，否则用默认路径。"""
+    return os.environ.get("ATK_ROOT") or DEFAULT_ATK_ROOT
+
+
+ATK_ROOT = get_atk_root()
 ATK_EXE = os.path.join(ATK_ROOT, "ATK.exe")
 _user32 = ctypes.windll.user32
 

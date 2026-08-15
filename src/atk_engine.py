@@ -180,6 +180,10 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
             ]
             if sensor_params is not None:
                 cmd += ["--sensor-params", ",".join(str(x) for x in sensor_params)]
+            if cfg.get("pointing"):
+                cmd += ["--pointing", json.dumps(cfg["pointing"], ensure_ascii=False)]
+            if cfg.get("constraints"):
+                cmd += ["--constraints", json.dumps(cfg["constraints"], ensure_ascii=False)]
             p = subprocess.run(cmd, cwd=str(SRC_DIR), capture_output=True,
                                text=True, encoding="utf-8", errors="replace",
                                timeout=3600)

@@ -261,3 +261,15 @@
   —— 在"工具→覆盖性命令"分类下（不在"地面站"或"覆盖定义"分类下，所以容易找不到）。
 - 语法：`Cov_RM <ObjectPath> Access Compute "<ReportStyle>" [{TimeIntervals} | UseObjectTimes]`，
   示例：`Cov_RM */Satellite/Satellite1 Access Compute "Coverage" "14 Mar 2024 00:00:00.000" "15 Mar 2024 00:00:00.000"`。
+
+### 7.8 CD 区域模块（XML 注入）vs 自研引擎对拍（2026-08-15，我方环境复测）
+
+- 标准路线（实验记录 §10.18）：XML 注入区域网格（绕开失效的 `Cov Grid` 命令）。
+- 新增 `atk_parallel/cd_area.py`，一站式返回网格点 + 分钟覆盖率。
+- 对拍：NORAD 68196 + SimpleCone45，30~31°N / 120~121°E、0.5° 粒度，
+  2026-08-14 00:00–08:00 UTC：
+  - ATK 读回 9 个真实网格点（30.167/120.167 起），自研引擎同一批 9 点多边形模式；
+  - **480 分钟覆盖与否 100% 一致**，覆盖率最大差 0.00039、平均差 2.4e-6。
+- 结论：与 Pro 环境结论（§10.13）一致；CD 区域百分比覆盖率可放心作为正式输出项。
+- 坑（已规避）：Connect `ImportTLEFile` 三行 TLE 崩溃；`atkClose` 堆损坏——
+  模块按端口杀进程树收尾。

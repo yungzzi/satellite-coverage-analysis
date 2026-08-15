@@ -710,3 +710,45 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   "多进程取范围/聚合"记入待办暂不做。
 - SimpleCone + Facility 路线照常推进（确定可靠，69 窗口基线）。
 - Spinning 挂起：等官方回复或用户最终拍板（用户当前否决自研旋转模型）。
+
+### 10.19 重启后复测：Spinning 跨进程随机与机器重启无关（2026-08-15）
+
+用户重启计算机后，用 `experiment/atk/gui_xml_template_test.py`（无参 ×5，提权、隐藏窗口、
+独立子进程）加载用户 GUI 场景 ASCII 化 XML（SAT68196/Sensor1/Facility2），仅 Reset +
+带引号 Compute：
+
+| 实例 | 窗口数 | 首窗时长 |
+| --- | --- | --- |
+| 1 | 4 | 85.853s（01:43:57.853） |
+| 2 | 4 | 23.362s（01:44:44.503） |
+| 3 | 4 | 23.275s（01:44:44.207） |
+| 4 | 3 | 27.901s（01:45:35.518） |
+| 5 | 2 | 17.299s（01:46:27.007） |
+
+- 结论：**与机器重启/墙钟无关**，Spinning 初始相位跨进程随机依旧（§10.18 的
+  ASLR/未初始化变量假说成立）；GUI 跨进程 4/1/3 与无头 Connect 一致。
+- 同时发现并规避两个环境坑：
+  - Connect `ImportTLEFile` 传入三行（带名字行）TLE 会触发堆损坏（0xC0000374）——
+    必须纯两行格式（§9.10 再证）；
+  - `atkClose()` 偶发堆损坏崩溃（0xC0000374）——新模块一律改为按端口杀 ATK
+    进程树收尾，不再调用 atkClose。
+- 官方反馈材料已起草：`docs/ATK官方反馈材料.md`；反馈渠道：
+  atk_service@163.com、红山开源官网（osredm.com/atknudt/atk）、
+  gitcode.com/jinke18/atk-doc Issues、工作人员微信 LXKTATK。
+
+### 10.20 CD 区域模块完成 + 我方环境对拍通过（2026-08-15，任务落地）
+
+- 新增可复用模块 `atk_parallel/cd_area.py`：Connect 建 CD → Save → XML 注入
+  `<Grid>` 区域（MinLat/MaxLat/MinLon/MaxLon/ValueGranularity）→ Load → Assign →
+  带引号 Compute → 读 "Grid Point Visible Assets"（真实网格点）与
+  "Percent Coverage"（分钟级区域覆盖率）。
+- 我方环境独立对拍（NORAD 68196，SimpleCone45，30~31°N / 120~121°E，0.5° 粒度，
+  2026-08-14 00:00–08:00 UTC）：
+  - ATK 读回 **9 个真实网格点**（30.167/120.167 起）；自研引擎同一批 9 点
+    多边形模式逐分钟对拍；
+  - **480 分钟覆盖与否 100% 一致**；覆盖率最大差 0.00039、平均差 2.4e-6；
+  - ATK 报告 481 行（含终点），自研 480 行（左闭右开），对齐取交集 480。
+- 结论：XML 注入标准路线在我方环境复测通过，与 Pro 环境结论一致；CD 区域模块
+  可用于"区域百分比覆盖率"输出项。逐星窗口仍走 Facility 点路线。
+- 复现脚本：`experiment/atk/cd_area_validate.py`、`cd_area_raw_probe.py`
+  （gitignore，留档）。

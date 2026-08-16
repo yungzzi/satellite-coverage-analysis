@@ -168,7 +168,7 @@ CSV 是"数据底座"，Excel 是"展示层"：程序读 CSV，人看 Excel。
 
 - ⑤页 ATK 引擎现为"全局设置 + 逐星配置（左列表点选卫星 → 右侧定义/约束面板）"，
   逐星可覆盖全局（类型/参数/指向/约束）；约束分基本 + 光照（太阳/月球），
-  时间约束暂未做；Targeted 指向暂缓（XML 写法待复核）
+  时间约束暂未做；指向已支持 Fixed/GrazingAlt/External/Targeted（目标跟踪）
   SetConstraint 命令参数一致）
 - CLI：`sat select 夹 --engine atk ...` 或 `sat run ... --engine atk`
 - ATK 安装目录：环境变量 `ATK_ROOT`，或 config.toml 里 `[atk] root = "..."`（默认 D 盘实验安装路径）

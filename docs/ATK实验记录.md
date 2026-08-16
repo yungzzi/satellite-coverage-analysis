@@ -910,3 +910,35 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 | 逐星 33321 fov60 | 1 窗口更长（288s vs 72s） |
 | 光照 SunGroundElevAngle Min 80 | 0 |
 | AppTest（强制⑤页）ATK/自研两分支 | 无异常；全局/逐星面板、卫星列表均渲染 |
+
+### 10.26 Targeted 定案：正确 XML 写法（用户 GUI 场景破案）（2026-08-17）
+
+**破案经过**
+- 用户用 ATK GUI 手动建了"目标定向"传感器（Test for spinning bug.atk 传感器2），
+  导出其 XML 作为 Ground Truth：
+  - `PointType = 2`（之前试过 2 但目标路径格式不对）；
+  - `<AssignedTargets>` 内是 **`<ObjectsPath Path="/Scenario/<场景名>/Facility/<地面站>"/>`**
+    （子元素+完整绝对路径），不是内联文本路径；
+  - 追踪 = `TargetMode 0`；转发 = `TrackingMode 2`。
+- 之前"Targeted 走 XML 不生效"的根因有二：① AssignedTargets 写成了内联文本；
+  ② 场景名从 AllInstanceNames 解析时带**尾随空格**（`/Scenario/Scenario1 /Facility/...`），
+  导致 ATK Load 挂死（相对路径 `Facility/Hangzhou` 同样会挂死）。
+
+**验证（6 星 × 8h × 杭州 5km，参考值=仰角>0 连续时段合计 8）**
+| 用例 | 结果 |
+| --- | --- |
+| 全局 Targeted（接收/发射/转发 0/1/2） | 各 8 窗口，且逐星分布与 skyfield 参考完全一致 |
+| 转发确定性（两遍） | 8 / 8 一致 |
+| 仅 33321 逐星 Targeted | HJ-1B 1 窗口（该星仰角>0=1），其余按全局 |
+| 相对路径 / 尾随空格 | ATK Load 挂死（已规避） |
+
+**GUI 瞄准/追踪模式语义（回答用户）**
+- 瞄准模式：追踪=实时指向目标；固定指向=相对目标加固定姿态偏移（TargetMode=1，写法待样例）。
+- 追踪模式：接收/发射/转发 = 按信号方向调整指向；几何覆盖三者都指向目标（实测窗口一致），
+  转发多用于中继。用户选"追踪+转发"正确。
+
+**实现**
+- worker：`patch_pointing_targeted` 逐传感器把 Pointing 改为 PointType=2 +
+  ObjectsPath 全路径（场景名去空格）；Targeted 强制 XML 路线；Define 路线不出现 Targeted。
+- atk_ui：GUI 重新开放"Targeted 目标指向"（瞄准模式=追踪，追踪模式=接收/发射/转发）；
+  固定指向仍标注"待复核"。

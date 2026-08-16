@@ -76,7 +76,8 @@ def build_point_cmd(pointing) -> str:
         params = pointing.get("params") or []
         return f"Fixed {method} " + " ".join(str(x) for x in params)
     if t == "Targeted":
-        raise ValueError("Targeted 指向暂不可用（XML 注入写法待官方/GUI 样例复核，§10.25）")
+        return f"Targeted Tracking */Facility/Hangzhou " \
+               + str(pointing.get("track_mode", 2))
     if t == "GrazingAlt":
         return f"GrazingAlt {pointing['azimuth']} {pointing['altitude']}"
     if t == "External":
@@ -159,6 +160,38 @@ def patch_patterns_per_sensor(xml_path: str, blocks: dict, out_path: str) -> str
     return out_path.replace("\\", "/")
 
 
+def patch_pointing_targeted(xml_path: str, scenario: str, facility: str,
+                           targets: dict, out_path: str) -> str:
+    """把指定传感器（S{idx}）的 <Pointing> 改为目标指向（PointType=2）。
+
+    正确写法来自 GUI 场景传感器2（§10.26）：AssignedTargets 内是
+    <ObjectsPath Path="/Scenario/<场景名>/Facility/<地面站>"/>，不是内联文本路径。"""
+    with open(xml_path, "rb") as f:
+        b = f.read()
+    t = b.decode("gbk", errors="replace")
+    pat = re.compile(r'(?s)(<Sensor Name="S(\d+)"[^>]*>.*?<Pointing>).*?(</Pointing>)')
+
+    def repl(m):
+        idx = int(m.group(2))
+        tm = targets.get(idx)
+        if tm is None:
+            return m.group(0)
+        blk = m.group(0)
+        blk = re.sub(r"<PointType>\d+</PointType>", "<PointType>2</PointType>", blk, count=1)
+        new_tgt = (
+            "<Targeted>\n<TargetMode>0</TargetMode>\n<Sequence>323</Sequence>\n"
+            f"<TrackingMode>{int(tm)}</TrackingMode>\n<AssignedTargets>\n"
+            f'<ObjectsPath Path="/Scenario/{scenario}/Facility/{facility}"/>\n'
+            "</AssignedTargets>\n</Targeted>")
+        blk = re.sub(r"(?s)<Targeted>.*?</Targeted>", new_tgt, blk, count=1)
+        return blk
+
+    t = pat.sub(repl, t)
+    with open(out_path, "wb") as f:
+        f.write(t.encode("gbk", errors="replace"))
+    return out_path.replace("\\", "/")
+
+
 def eff_sat(i: int, cfg: dict) -> dict:
     """第 i 颗星的有效配置（逐星覆盖全局）。"""
     sc = cfg.get("sat_cfgs") or []
@@ -197,6 +230,8 @@ def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
     cmd("ImportTLEFile", f'* "{tle}"')
     r = cmd("AllInstanceNames", "/")
     names = [n for n in re.findall(r"/Satellite/([^/]+?)(?= /Scenario/|$)", str(r)) if n.strip()]
+    _scn = re.match(r"/Scenario/([^/]+)", str(r))
+    scenario = _scn.group(1).strip() if _scn else "Scenario1"
     fov = float(cfg.get("fov", 45.0))
     for i, nm in enumerate(names):
         cmd("New", f'/ "*/Satellite/{nm}/Sensor" S{i}')
@@ -208,15 +243,24 @@ def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
     raw = os.path.join(tempfile.gettempdir(), f"xmlroute_raw_{port}.atk")
     cmd("Save", f'/ * "{raw.replace(chr(92), "/")}"')
     blocks = {}
+    tgt = {}
     for i in range(len(names)):
         eff = eff_sat(i, cfg)
         if eff["type"] in XML_ROUTE_TYPES:
             blocks[i] = build_pattern_block(eff["type"], eff["params"])
+        pt = eff.get("pointing") or {}
+        if pt.get("type") == "Targeted":
+            tgt[i] = pt.get("track_mode", 2)
     try:
+        out_path = raw
         if blocks:
-            return patch_patterns_per_sensor(
+            out_path = patch_patterns_per_sensor(
                 raw, blocks, os.path.join(tempfile.gettempdir(), f"xmlroute_patch_{port}.atk"))
-        return raw
+        if tgt:
+            out_path = patch_pointing_targeted(
+                out_path, scenario, "Hangzhou", tgt,
+                os.path.join(tempfile.gettempdir(), f"xmlroute_tgt_{port}.atk"))
+        return out_path
     finally:
         kill_port_owner(port)
 
@@ -251,7 +295,7 @@ def run_xml_route(cfg, port: int, tle: str, t0: str, t1: str, result: dict):
     for i, nm in enumerate(names):
         eff = eff_sat(i, cfg)
         sp = f'"*/Satellite/{nm}/Sensor/S{i}"'
-        if eff["pointing"]:
+        if eff["pointing"] and eff["pointing"].get("type") != "Targeted":
             cmd("Point", f"{sp} {build_point_cmd(eff['pointing'])}")
         for cc in constraint_cmds(eff["constraints"], sensor=f"*/Satellite/{nm}/Sensor/S{i}"):
             cmd("SetConstraint", cc)
@@ -290,9 +334,11 @@ def main():
         "windows": [], "asset_order": [], "timing": timing, "error": None,
     }
     need_xml = any(
-        (eff_sat(i, cfg)["type"] in XML_ROUTE_TYPES)
+        (eff_sat(i, cfg)["type"] in XML_ROUTE_TYPES
+         or (eff_sat(i, cfg).get("pointing") or {}).get("type") == "Targeted")
         for i in range(expected or 0)) or \
-        cfg.get("sensor_type", "SimpleCone") in XML_ROUTE_TYPES
+        cfg.get("sensor_type", "SimpleCone") in XML_ROUTE_TYPES or \
+        (cfg.get("pointing") or {}).get("type") == "Targeted"
     if need_xml:
         t_xml = time.time()
         run_xml_route(cfg, port, tle, t0, t1, result)

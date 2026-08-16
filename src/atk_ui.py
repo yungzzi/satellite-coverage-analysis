@@ -150,12 +150,13 @@ def pointing_ui(prefix: str) -> dict | None:
     mode = st.selectbox(
         "指向模式",
         ["天底（默认，不设置）", "Fixed 固定指向", "GrazingAlt 入射高度",
-         "External 外部指向文件", "Targeted 目标指向（待复核，暂不可用）",
+         "External 外部指向文件", "Targeted 目标指向",
          "Spinning 旋转（暂不可用）"],
         key=f"{prefix}_pt_mode",
         help="Fixed=固定姿态偏置（侧摆，支持 YPR/欧拉/四元数/AzEl/矩阵）；"
              "GrazingAlt=入射高度指向；External=外部指向文件；"
-             "Targeted/Spinning 暂不可用（Targeted 的 XML 写法待复核）。")
+             "Targeted=始终指向目标点（凝视观测，XML 写法已由 GUI 场景确认）；"
+             "Spinning 初始相位跨进程随机，暂不可用。")
     if mode == "Fixed 固定指向":
         m = st.selectbox("姿态方法", ["YPR", "Euler", "Quaternion", "AzEl", "matrix"],
                          key=f"{prefix}_pt_method")
@@ -178,8 +179,19 @@ def pointing_ui(prefix: str) -> dict | None:
             dst.write_bytes(pf.getvalue())
             st.caption(f"已保存指向文件：{dst.name}")
             return {"type": "External", "file": str(dst).replace("\\", "/")}
-    elif "Targeted" in mode or "Spinning" in mode:
-        st.warning("该指向暂不可用（Targeted 的 XML 写法待复核）。")
+    elif mode == "Targeted 目标指向":
+        aim = st.selectbox("瞄准模式", ["追踪（推荐）", "固定指向（待复核，暂不可用）"],
+                           key=f"{prefix}_pt_aim",
+                           help="追踪=实时指向目标；固定指向=相对目标加固定姿态偏移（写法待 GUI 样例复核）。")
+        if aim.startswith("追踪"):
+            trk = st.selectbox("追踪模式", ["接收", "发射", "转发"],
+                               key=f"{prefix}_pt_trk",
+                               help="按信号方向调整指向；对几何覆盖三种模式都指向目标，转发多用于中继。")
+            tm = {"接收": 0, "发射": 1, "转发": 2}[trk]
+            return {"type": "Targeted", "track_mode": tm}
+        st.warning("固定指向（目标点+固定姿态偏移）的 XML 写法待 GUI 样例复核，暂不可用。")
+    elif "Spinning" in mode:
+        st.warning("Spinning 初始相位跨进程随机，已反馈官方，暂不可用。")
     return None
 
 

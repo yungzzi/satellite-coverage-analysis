@@ -871,3 +871,42 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   Min / Max / 附加参数；按类型自动拼 SetConstraint 参数（方位角必填 Min+Max、
   开关类用 On/Off、排除角类用 Min 值）。
 - 实测：SunGroundElevAngle Min 80 → 0 窗口（与 JSON 透传一致）。
+
+### 10.25 不分组单实例逐传感器 + GUI 两栏 + Targeted 误判纠正（2026-08-16，codex/atk-persat-unified）
+
+**重要纠正（覆盖 §10.23 的 Targeted 结论）**
+- §10.23 曾记录"Targeted 走 XML 注入（PointType=3）生效"。决定性复测推翻：
+  6 星"对杭州仰角>0 连续时段"参考值 = 8 段；枚举 PointType×TargetMode×TrackingMode×
+  外层 `<AssignedTarget>` 共 30+ 组合均无法复现 8 窗口；PointType=3 实为 **GrazingAlt**，
+  之前"Targeted 生效"的 6 个窗口是 GrazingAlt(0,0) 的假象。
+- 结论：Targeted 的真实 XML 写法未确认（Connect `Point ... Targeted` 在 rc.5 全 NACK，
+  且无 GUI 生成的样例可对照）→ **GUI 中将 Targeted 置为"待复核，暂不可用"**；
+  等拿到 GUI 手动建的 Targeted 场景（.atk）再定 XML 写法。
+
+**不分组、单实例、逐传感器（用户拍板）**
+- worker 重写：一次 ATK 实例内每颗星独立配置（类型/参数/指向/约束）：
+  - 无 SAR/HalfPower → Define 路线：逐传感器 `Define/Point/SetConstraint`；
+  - 有 SAR/HalfPower → XML 路线：实例 1 建 SimpleCone 占位 → Save →
+    **逐传感器改 `<Pattern>`**（五种类型块全部确认：SimpleCone=0/Rect=1/Conical=3/
+    HalfPower=4/SAR=5）→ 实例 2 Load → 逐传感器 Point/SetConstraint → 计算；
+  - 两类传感器可混在同一实例（不再分组）。
+- runner 新增 `--sat-cfgs`（按 TLE 顺序，分片切片）；engine 单次调用（临时目录只有 all.tle）。
+- 逐星约束作用于该星传感器/卫星级；目标点级约束（含最小仰角）在全局。
+
+**GUI 两栏（仿 ATK）**
+- `src/atk_ui.py`：全局/逐星共用"定义（类型+参数+指向）+ 约束（基本+光照）"面板，
+  带已保存配置回显；持久化 `data/atk_sat_config.toml`（TOML 读写）。
+- ⑤页 ATK 分支：全局面板（默认值）+ 逐星两栏（左：卫星列表单击选中；右：该星定义/约束 +
+  保存/清除，清除=回退全局）。
+- 约束只做"基本 + 光照（太阳/月球）"，时间约束暂不做（Connect 无命令、需 XML 注入验证）；
+  术语统一为"光照"，避免与 ATK 文档对不上。
+
+**验证（6 星 × 8h × 杭州 5km）**
+| 用例 | 结果 |
+| --- | --- |
+| 默认（全局 SimpleCone45，无逐星） | 1 窗口（回归一致） |
+| 单实例混合：SimpleCone60/Conical(10,45,0,360)/Rect(40,60)/SAR(12,70,30,30,550km)/SimpleCone10/Fixed YPR30 | 运行成功、临时目录仅 all.tle、两遍一致 |
+| 逐星 33321 fov10 | 0（窄锥漏擦边） |
+| 逐星 33321 fov60 | 1 窗口更长（288s vs 72s） |
+| 光照 SunGroundElevAngle Min 80 | 0 |
+| AppTest（强制⑤页）ATK/自研两分支 | 无异常；全局/逐星面板、卫星列表均渲染 |

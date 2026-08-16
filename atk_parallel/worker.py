@@ -1,33 +1,25 @@
 # -*- coding: utf-8 -*-
-"""单片 worker：连一个 headless ATK 实例，完成导入→传感器→覆盖→报告→落盘。
+"""单片 worker：连一个 headless ATK 实例，逐传感器配置（类型/参数/指向/约束），算覆盖窗口。
 
 用法：python -m atk_parallel.worker --config <config.json>
-config.json 字段：
-  port           ATK connect 端口
-  tle            纯两行 TLE 文件（正斜杠路径）
-  expected       预期卫星数（用于完整性校验）
-  sensor_type    传感器类型：SimpleCone / Rectangular / HalfPower / Conical / SAR
-                 （默认 SimpleCone，见官方 Define 命令库）
-  sensor_params  类型参数列表（SimpleCone 缺省用 fov/angles；其余类型必填）：
-                   Rectangular [VerticalHalfAngle, HorizontalHalfAngle]
-                   HalfPower   [Frequency, Diameter]
-                   Conical     [InnerConeHalfAngle, OuterConeHalfAngle,
-                                MinClockAngle, MaxClockAngle]
-                   SAR         [MinElevationAngle, MaxElevationAngle,
-                                ForwardExclusionAngle, AftExclusionAngle,
-                                ParentAltitude]
-  angles         与分片顺序对应的 SimpleCone 半角列表（可选，仅 SimpleCone，优先于 sensor_params）
-  fov            默认 SimpleCone 半角（度）
-  min_elev       最小仰角约束（度，可选；加在地面站上 = 自研 min_elevation 口径）
-  lat / lon      地面站经纬度（ATK 点目标）
-  t0 / t1        分析时段（"12 Aug 2026 00:00:00.000" 格式）
-  out            结果 JSON 路径
-  xml_route      布尔（可选）：SAR/HalfPower 走 Save→改 XML→Load 路线（Define 在 rc.5
-                 对这两种类型静默失效，§7.1）；该模式下 worker 自己管理两个 ATK 实例，
-                 runner 不应预启动实例。
+config 字段：
+  port / tle / expected / out / t0 / t1 / lat / lon
+  fov            全局默认 SimpleCone 半角（度）
+  min_elev       目标点最小仰角（度，地面站级，全局）
+  sensor_type / sensor_params / pointing / constraints
+                 全局默认（constraints 中 object=facility 作用于目标点、sensor 作用于每颗星传感器、
+                 satellite 作用于每颗星）
+  sat_cfgs       逐星配置列表（与 TLE 导入顺序一一对应；None=用全局）：
+                 {"sensor_type", "sensor_params", "fov_half_angle_deg",
+                  "pointing", "constraints"(该星传感器级), "sat_constraints"(该星卫星级)}
+  angles         兼容旧接口：SimpleCone 逐星半角列表（仅全局 SimpleCone 且未配 sat_cfgs 时用）
 
-注意：不调用 atkClose（本环境实测偶发堆损坏 0xC0000374，会丢结果），
-收尾一律按端口杀 ATK 进程树（调度器也会清理）。
+路线：
+  - 无 SAR/HalfPower 时走 Define 路线（一个实例，逐传感器 Define/Point/SetConstraint）；
+  - 有 SAR/HalfPower 时走 XML 路线（实例1 建 SimpleCone 占位 → Save → 逐传感器改 Pattern
+    → 实例2 Load → 逐传感器 Point/SetConstraint → 计算）。两类传感器可混在同一个实例里。
+
+注意：不调用 atkClose（堆损坏会丢结果），收尾按端口杀 ATK 进程树。
 """
 from __future__ import annotations
 import argparse, json, os, re, subprocess, sys, tempfile, time
@@ -36,7 +28,7 @@ from .headless import get_atk_root, launch_headless
 
 ATK_ROOT = get_atk_root()
 PYMOD = os.path.join(ATK_ROOT, "IntegratingWithATK", "connect", "Python")
-BS = 250  # CovMulti Assets 每批条数（安全上限）
+BS = 250
 
 sys.path.insert(0, PYMOD)
 import ATKConnectModule as C
@@ -44,12 +36,11 @@ import ATKConnectModule as C
 from .report_parser import decode_report, parse_coverage_report
 
 XML_ROUTE_TYPES = ("SAR", "HalfPower")
-# 官方 XML <SensorType> 索引（§7.1 实测）：0=SimpleCone, 3=Conical, 4=HalfPower, 5=SAR
-SENSOR_TYPE_INDEX = {"HalfPower": 4, "SAR": 5}
+SENSOR_TYPE_INDEX = {"SimpleCone": 0, "Rectangular": 1, "Conical": 3,
+                     "HalfPower": 4, "SAR": 5}
 
 
 def kill_port_owner(port: int) -> None:
-    """按端口找到 ATK 进程树并强制结束（替代 atkClose）。"""
     try:
         out = subprocess.run(["netstat", "-ano"], capture_output=True,
                              text=True, errors="replace").stdout
@@ -75,35 +66,25 @@ def kill_port_owner(port: int) -> None:
 
 
 def build_define(sensor_type: str, params) -> str:
-    """拼 Define 命令参数串（官方语法见 Help/传感器/Define.html）。"""
     return f"{sensor_type} " + " ".join(str(x) for x in params)
 
 
 def build_point_cmd(pointing) -> str:
-    """构造 Point 命令参数串（官方语法见 Help/传感器/Point *.html）。"""
     t = pointing.get("type", "Fixed")
     if t == "Fixed":
         method = pointing.get("method", "YPR")
         params = pointing.get("params") or []
         return f"Fixed {method} " + " ".join(str(x) for x in params)
     if t == "Targeted":
-        target = pointing.get("target", "*/Facility/Hangzhou")
-        if pointing.get("mode", "Tracking") == "Tracking":
-            extra = pointing.get("extra")
-            s = f"Targeted Tracking {target}"
-            return s + (f" {extra}" if extra else "")
-        method = pointing.get("method", "YPR")
-        params = pointing.get("params") or []
-        return f"Targeted Fixed {target} {method} " + " ".join(str(x) for x in params)
+        raise ValueError("Targeted 指向暂不可用（XML 注入写法待官方/GUI 样例复核，§10.25）")
     if t == "GrazingAlt":
         return f"GrazingAlt {pointing['azimuth']} {pointing['altitude']}"
     if t == "External":
         return f'External "{pointing["file"]}"'
-    raise ValueError(f"暂不支持的指向类型：{t}（Spinning 等官方回复）")
+    raise ValueError(f"暂不支持的指向类型：{t}")
 
 
 def constraint_cmds(constraints, facility="*/Facility/Hangzhou", sat=None, sensor=None):
-    """约束列表 → SetConstraint 参数串列表（官方语法见 Help/.../Set Constraint.html）。"""
     out = []
     for c in constraints or []:
         obj = c.get("object", "facility")
@@ -121,67 +102,86 @@ def constraint_cmds(constraints, facility="*/Facility/Hangzhou", sat=None, senso
 
 
 def build_pattern_block(sensor_type: str, params) -> str:
-    """构造 XML <Pattern> 块（SAR/HalfPower 用，§7.1 / 参考 xml_sar5.atk / xml_hp4.atk）。"""
+    """构造 XML <Pattern> 块（五种类型全支持；结构来自 Connect 建场景 Save 导出 + §7.1）。"""
     idx = SENSOR_TYPE_INDEX[sensor_type]
+    if sensor_type == "SimpleCone":
+        return (f"<Pattern>\n<SensorType>{idx}</SensorType>\n<SimpleCone>\n"
+                f"<HalfAng>{params[0]}</HalfAng>\n</SimpleCone>\n</Pattern>")
+    if sensor_type == "Rectangular":
+        v, h = float(params[0]), float(params[1])
+        return (f"<Pattern>\n<SensorType>{idx}</SensorType>\n<Rect>\n"
+                f"<HorizontalHalfAng>{h}</HorizontalHalfAng>\n"
+                f"<VerticalHalfAng>{v}</VerticalHalfAng>\n</Rect>\n</Pattern>")
+    if sensor_type == "Conical":
+        i, o, mc, xc = (float(params[k]) for k in range(4))
+        return (f"<Pattern>\n<SensorType>{idx}</SensorType>\n<Conical>\n"
+                f"<InnerConeAngle>{i}</InnerConeAngle>\n<OuterConeAngle>{o}</OuterConeAngle>\n"
+                f"<MinClockAngle>{mc}</MinClockAngle>\n<MaxClockAngle>{xc}</MaxClockAngle>\n"
+                f"</Conical>\n</Pattern>")
+    if sensor_type == "HalfPower":
+        freq, diam = float(params[0]), float(params[1])
+        lam = 299792458.0 / (freq * 1e9) if freq > 0 else 0.0
+        half = round(70.0 * lam / diam / 2.0, 6) if diam > 0 else 0.0
+        return (f"<Pattern>\n<SensorType>{idx}</SensorType>\n<HalfPwr>\n"
+                f"<AntFrequency>{freq}</AntFrequency>\n<AntDiameter>{diam}</AntDiameter>\n"
+                f"<halfAngle>{half}</halfAngle>\n</HalfPwr>\n</Pattern>")
     if sensor_type == "SAR":
-        min_el, max_el, fwd, aft = (float(params[i]) for i in range(4))
+        mel, xel, fwd, aft = (float(params[k]) for k in range(4))
         alt = float(params[4]) if len(params) > 4 else 0.0
         track = int(params[5]) if len(params) > 5 else 0
-        return (
-            f"<Pattern>\n<SensorType>{idx}</SensorType>\n<SAR>\n"
-            f"<MinElevAngle>{min_el}</MinElevAngle>\n<MaxElevAngle>{max_el}</MaxElevAngle>\n"
-            f"<FwdExclAngle>{fwd}</FwdExclAngle>\n<AftExclAngle>{aft}</AftExclAngle>\n"
-            f"<Altitude>{alt}</Altitude>\n<TrackParentAlt>{track}</TrackParentAlt>\n"
-            f"</SAR>\n</Pattern>"
-        )
-    freq, diam = float(params[0]), float(params[1])
-    lam = 299792458.0 / (freq * 1e9) if freq > 0 else 0.0
-    half_angle = round(70.0 * lam / diam / 2.0, 6) if diam > 0 else 0.0
-    return (
-        f"<Pattern>\n<SensorType>{idx}</SensorType>\n<HalfPwr>\n"
-        f"<AntFrequency>{freq}</AntFrequency>\n<AntDiameter>{diam}</AntDiameter>\n"
-        f"<halfAngle>{half_angle}</halfAngle>\n</HalfPwr>\n</Pattern>"
-    )
+        return (f"<Pattern>\n<SensorType>{idx}</SensorType>\n<SAR>\n"
+                f"<MinElevAngle>{mel}</MinElevAngle>\n<MaxElevAngle>{xel}</MaxElevAngle>\n"
+                f"<FwdExclAngle>{fwd}</FwdExclAngle>\n<AftExclAngle>{aft}</AftExclAngle>\n"
+                f"<Altitude>{alt}</Altitude>\n<TrackParentAlt>{track}</TrackParentAlt>\n"
+                f"</SAR>\n</Pattern>")
+    raise ValueError(f"未知传感器类型：{sensor_type}")
 
 
-def patch_sensor_patterns(xml_path: str, sensor_type: str, params, out_path: str) -> str:
-    """把场景 XML 中所有传感器 <Pattern> 替换为目标类型，返回正斜杠路径。"""
+def patch_patterns_per_sensor(xml_path: str, blocks: dict, out_path: str) -> str:
+    """按传感器索引逐个替换 <Pattern>（blocks: {idx: Pattern块字符串}）。"""
     with open(xml_path, "rb") as f:
         b = f.read()
     t = b.decode("gbk", errors="replace")
-    block = build_pattern_block(sensor_type, params)
-    t = re.sub(r"(?s)<Pattern>.*?</Pattern>", lambda m: block, t)
+    pat = re.compile(r'(?s)(<Sensor Name="S(\d+)"[^>]*>.*?<Pattern>).*?(</Pattern>)')
+
+    def repl(m):
+        idx = int(m.group(2))
+        blk = blocks.get(idx)
+        if blk is None:
+            return m.group(0)
+        inner = blk[len("<Pattern>"):-len("</Pattern>")] \
+            if blk.startswith("<Pattern>") and blk.endswith("</Pattern>") else blk
+        return m.group(1) + inner + m.group(3)
+
+    t = pat.sub(repl, t)
     with open(out_path, "wb") as f:
         f.write(t.encode("gbk", errors="replace"))
     return out_path.replace("\\", "/")
 
 
-def patch_pointing_xml(xml_path: str, pointing: dict, out_path: str) -> str:
-    """把场景 XML 的 <Pointing> 改为目标指向（Targeted，PointType=3）。
-
-    Connect 的 Point ... Targeted 命令在 4.0.1-rc.5 返回 NACK（与 SAR/HalfPower
-    Define 同类通道问题），实测 XML 注入 PointType=3 + AssignedTargets 生效。"""
-    with open(xml_path, "rb") as f:
-        b = f.read()
-    t = b.decode("gbk", errors="replace")
-    target = pointing.get("target", "Facility/Hangzhou")
-    if target.startswith("*/"):
-        target = target[2:]
-    block = (
-        "<Targeted>\n<TargetMode>0</TargetMode>\n<Sequence>323</Sequence>\n"
-        f"<TrackingMode>2</TrackingMode>\n<AssignedTargets>{target}</AssignedTargets>\n"
-        "</Targeted>"
-    )
-    t = re.sub(r"<PointType>\d+</PointType>", "<PointType>3</PointType>", t)
-    t = re.sub(r"(?s)<Targeted>.*?</Targeted>", block, t)
-    with open(out_path, "wb") as f:
-        f.write(t.encode("gbk", errors="replace"))
-    return out_path.replace("\\", "/")
+def eff_sat(i: int, cfg: dict) -> dict:
+    """第 i 颗星的有效配置（逐星覆盖全局）。"""
+    sc = cfg.get("sat_cfgs") or []
+    s = sc[i] if i < len(sc) and sc[i] else {}
+    stype = s.get("sensor_type") or cfg.get("sensor_type", "SimpleCone")
+    sparams = s.get("sensor_params") if s.get("sensor_params") is not None \
+        else cfg.get("sensor_params")
+    if stype == "SimpleCone" and sparams is None:
+        if s.get("fov_half_angle_deg") is not None:
+            sparams = [s["fov_half_angle_deg"]]
+        elif cfg.get("angles") and i < len(cfg["angles"]):
+            sparams = [cfg["angles"][i]]
+        else:
+            sparams = [cfg.get("fov", 45.0)]
+    pointing = s.get("pointing") or cfg.get("pointing")
+    cons = list(cfg.get("constraints") or []) + list(s.get("constraints") or [])
+    sat_cons = list(s.get("sat_constraints") or [])
+    return {"type": stype, "params": sparams, "pointing": pointing,
+            "constraints": cons, "sat_constraints": sat_cons}
 
 
 def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
-    """实例 1（new_scenario）：建 SimpleCone 占位场景 → Save → patch（SAR/HalfPower 改
-    Pattern；Targeted 指向改 Pointing）。"""
+    """实例 1：建 SimpleCone 占位 → Save → 逐传感器改 Pattern（XML 路线）。"""
     launch_headless(port, new_scenario=True)
     con = C.atkOpen("127.0.0.1", port)
 
@@ -207,23 +207,22 @@ def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
     cmd("Animate", "* Reset")
     raw = os.path.join(tempfile.gettempdir(), f"xmlroute_raw_{port}.atk")
     cmd("Save", f'/ * "{raw.replace(chr(92), "/")}"')
-    patched = raw
+    blocks = {}
+    for i in range(len(names)):
+        eff = eff_sat(i, cfg)
+        if eff["type"] in XML_ROUTE_TYPES:
+            blocks[i] = build_pattern_block(eff["type"], eff["params"])
     try:
-        if cfg["sensor_type"] in XML_ROUTE_TYPES:
-            patched = patch_sensor_patterns(
-                patched, cfg["sensor_type"], cfg["sensor_params"],
-                os.path.join(tempfile.gettempdir(), f"xmlroute_patch_{port}.atk"))
-        if (cfg.get("pointing") or {}).get("type") == "Targeted":
-            patched = patch_pointing_xml(
-                patched, cfg["pointing"],
-                os.path.join(tempfile.gettempdir(), f"xmlroute_point_{port}.atk"))
-        return patched
+        if blocks:
+            return patch_patterns_per_sensor(
+                raw, blocks, os.path.join(tempfile.gettempdir(), f"xmlroute_patch_{port}.atk"))
+        return raw
     finally:
         kill_port_owner(port)
 
 
 def run_xml_route(cfg, port: int, tle: str, t0: str, t1: str, result: dict):
-    """实例 2（不带 new_scenario）：Load 补丁场景 → Assign → Compute → 报告。"""
+    """实例 2：Load → 目标点约束 → 逐传感器 Point/约束 → Assign → 计算。"""
     patched = build_and_patch_xml(cfg, port, tle, t0, t1)
     launch_headless(port, new_scenario=False)
     con = C.atkOpen("127.0.0.1", port)
@@ -240,6 +239,8 @@ def run_xml_route(cfg, port: int, tle: str, t0: str, t1: str, result: dict):
     cmd("Animate", "* Reset")
     if cfg.get("min_elev"):
         cmd("SetConstraint", f"*/Facility/Hangzhou ElevationAngle Min {float(cfg['min_elev'])}")
+    for cc in constraint_cmds(cfg.get("constraints")):
+        cmd("SetConstraint", cc)
     r = cmd("AllInstanceNames", "/")
     names = [n for n in re.findall(r"/Satellite/([^/]+?)(?= /Scenario/|$)", r) if n.strip()]
     result["sats"] = len(names)
@@ -247,15 +248,14 @@ def run_xml_route(cfg, port: int, tle: str, t0: str, t1: str, result: dict):
         result["error"] = f"卫星数校验失败: 预期 {result['expected']}, 实际 {len(names)}"
         kill_port_owner(port)
         return
-    if cfg.get("pointing") and cfg["pointing"].get("type") != "Targeted":
-        for i, nm in enumerate(names):
-            cmd("Point", f'"*/Satellite/{nm}/Sensor/S{i}" {build_point_cmd(cfg["pointing"])}')
-    for cc in constraint_cmds(cfg.get("constraints")):
-        cmd("SetConstraint", cc)
     for i, nm in enumerate(names):
-        for cc in constraint_cmds(cfg.get("constraints"),
-                                   sat=f"*/Satellite/{nm}",
-                                   sensor=f"*/Satellite/{nm}/Sensor/S{i}"):
+        eff = eff_sat(i, cfg)
+        sp = f'"*/Satellite/{nm}/Sensor/S{i}"'
+        if eff["pointing"]:
+            cmd("Point", f"{sp} {build_point_cmd(eff['pointing'])}")
+        for cc in constraint_cmds(eff["constraints"], sensor=f"*/Satellite/{nm}/Sensor/S{i}"):
+            cmd("SetConstraint", cc)
+        for cc in constraint_cmds(eff["sat_constraints"], sat=f"*/Satellite/{nm}"):
             cmd("SetConstraint", cc)
         cmd("Cov", f"*/Facility/Hangzhou Asset */Satellite/{nm}/Sensor/S{i} Assign")
     cmd("CovMulti", "/ Objects */Facility/Hangzhou")
@@ -281,31 +281,19 @@ def main():
     port = int(cfg["port"])
     tle = cfg["tle"].replace("\\", "/")
     expected = int(cfg.get("expected", 0))
-    fov = float(cfg.get("fov", 45.0))
-    angles = cfg.get("angles") or []
-    sensor_type = cfg.get("sensor_type", "SimpleCone")
-    sensor_params = cfg.get("sensor_params")
-    lat = float(cfg.get("lat", 30.25))
-    lon = float(cfg.get("lon", 120.17))
     t0, t1 = cfg["t0"], cfg["t1"]
     out = cfg["out"]
-
     timing = {}
     t_all = time.time()
-
     result = {
         "port": port, "ok": False, "expected": expected, "sats": 0,
-        "sensor_type": sensor_type, "sensor_params": sensor_params,
-        "windows": [], "asset_order": [], "timing": timing,
-        "error": None,
+        "windows": [], "asset_order": [], "timing": timing, "error": None,
     }
-    xml_route = (bool(cfg.get("xml_route")) or sensor_type in XML_ROUTE_TYPES
-                or (cfg.get("pointing") or {}).get("type") == "Targeted")
-    if xml_route:
-        if sensor_type in XML_ROUTE_TYPES and not sensor_params:
-            result["error"] = f"传感器 {sensor_type} 需要 sensor_params（见 worker.py 头注释）"
-            _finish(None, result, out, port)
-            return
+    need_xml = any(
+        (eff_sat(i, cfg)["type"] in XML_ROUTE_TYPES)
+        for i in range(expected or 0)) or \
+        cfg.get("sensor_type", "SimpleCone") in XML_ROUTE_TYPES
+    if need_xml:
         t_xml = time.time()
         run_xml_route(cfg, port, tle, t0, t1, result)
         result["timing"]["xml_route"] = round(time.time() - t_xml, 1)
@@ -323,90 +311,62 @@ def main():
 
     cmd("New", "/ Scenario W" + str(port))
     cmd("SetAnalysisTimePeriod", f'* "{t0}" "{t1}"')
-    # 初始化动画状态；新建场景的星历物化仍需下方 Start（见注释）
     cmd("Animate", "* Reset")
-
-    t0_ = time.time()
     cmd("ImportTLEFile", f'* "{tle}"')
-    timing["import"] = round(time.time() - t0_, 1)
-
     r = cmd("AllInstanceNames", "/")
-    names = re.findall(r"/Satellite/([^/]+?)(?= /Scenario/|$)", str(r))
-    names = [n for n in names if n.strip()]
-    sats = len(names)
-    result["sats"] = sats
+    names = [n for n in re.findall(r"/Satellite/([^/]+?)(?= /Scenario/|$)", str(r)) if n.strip()]
+    result["sats"] = len(names)
     result["asset_order"] = names
-
-    if expected and sats != expected:
-        result["error"] = f"卫星数校验失败: 预期 {expected}, 实际 {sats}"
+    if expected and len(names) != expected:
+        result["error"] = f"卫星数校验失败: 预期 {expected}, 实际 {len(names)}"
         _finish(con, result, out, port)
         return
 
     t0_ = time.time()
-    for idx, nm in enumerate(names):
-        if sensor_type == "SimpleCone":
-            if angles:
-                params = [angles[idx] if idx < len(angles) else fov]
-            elif sensor_params is None:
-                params = [fov]
-            else:
-                params = sensor_params
-        else:
-            if not sensor_params:
-                result["error"] = f"传感器 {sensor_type} 需要 sensor_params（见 worker.py 头注释）"
-                _finish(con, result, out, port)
-                return
-            params = sensor_params
-        sname = f"S{idx}"
-        cmd("New", f'/ "*/Satellite/{nm}/Sensor" {sname}')
-        cmd("Define", f'"*/Satellite/{nm}/Sensor/{sname}" {build_define(sensor_type, params)}')
-        if cfg.get("pointing"):
-            cmd("Point", f'"*/Satellite/{nm}/Sensor/{sname}" {build_point_cmd(cfg["pointing"])}')
-        for cc in constraint_cmds(cfg.get("constraints"),
-                                   sat=f"*/Satellite/{nm}",
-                                   sensor=f"*/Satellite/{nm}/Sensor/{sname}"):
+    for i, nm in enumerate(names):
+        eff = eff_sat(i, cfg)
+        sp = f'"*/Satellite/{nm}/Sensor/S{i}"'
+        cmd("New", f'/ "*/Satellite/{nm}/Sensor" S{i}')
+        cmd("Define", f"{sp} {build_define(eff['type'], eff['params'])}")
+        if eff["pointing"]:
+            cmd("Point", f"{sp} {build_point_cmd(eff['pointing'])}")
+        for cc in constraint_cmds(eff["constraints"], sensor=f"*/Satellite/{nm}/Sensor/S{i}"):
+            cmd("SetConstraint", cc)
+        for cc in constraint_cmds(eff["sat_constraints"], sat=f"*/Satellite/{nm}"):
             cmd("SetConstraint", cc)
     timing["sensor"] = round(time.time() - t0_, 1)
 
     cmd("New", "/ Facility Hangzhou")
-    cmd("SetPosition", f"*/Facility/Hangzhou Geodetic {lat} {lon} 0.0")
+    cmd("SetPosition", f"*/Facility/Hangzhou Geodetic {float(cfg['lat'])} {float(cfg['lon'])} 0.0")
     if cfg.get("min_elev"):
         cmd("SetConstraint", f"*/Facility/Hangzhou ElevationAngle Min {float(cfg['min_elev'])}")
     for cc in constraint_cmds(cfg.get("constraints")):
         cmd("SetConstraint", cc)
-    # 新建场景必须先 Start 生成星历（仅 Reset/Step/Save-Load 都无法物化）。
-    # 注意：Spinning 相位在 Connect 新建场景下跨实例仍不可复现（离散初始化状态，
-    # 2026-08-15 独立复测确认；SimpleCone/SAR/HalfPower 等非旋转传感器不受影响）。
     cmd("Animate", "* Start")
     cmd("Animate", "* Reset")
 
     t0_ = time.time()
     cmd("CovMulti", "/ Objects */Facility/Hangzhou")
-    for b in range(0, sats, BS):
-        lo, hi = b + 1, min(b + BS, sats)
-        assets = " ".join(f'*/Satellite/{names[i - 1]}/Sensor/S{i - 1}' for i in range(lo, hi + 1))
+    for b in range(0, len(names), BS):
+        lo, hi = b + 1, min(b + BS, len(names))
+        assets = " ".join(f"*/Satellite/{names[i - 1]}/Sensor/S{i - 1}" for i in range(lo, hi + 1))
         cmd("CovMulti", f"/ Assets {assets}")
         cmd("CovMulti", f'/ Access Compute "{t0}" "{t1}"')
     timing["cov"] = round(time.time() - t0_, 1)
-
-    t0_ = time.time()
     r = C.atkConnect(con, "Cov_RM", f'*/Facility/Hangzhou Access Compute "Coverage" "{t0}" "{t1}"')
     text = decode_report(r if isinstance(r, str) else str(r))
     timing["report"] = round(time.time() - t0_, 1)
     result["windows"] = parse_coverage_report(text)
     result["timing"]["total"] = round(time.time() - t_all, 1)
     result["ok"] = True
-
     _finish(con, result, out, port)
 
 
 def _finish(con, result, out, port):
-    # 先落盘再清理：atkClose 偶发堆损坏（0xC0000374），若先关会丢结果
     with open(out, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=1)
     print(json.dumps({k: result[k] for k in (
-        "port", "ok", "expected", "sats", "sensor_type", "timing", "error")},
-        ensure_ascii=False), flush=True)
+        "port", "ok", "expected", "sats", "timing", "error")}, ensure_ascii=False), flush=True)
     kill_port_owner(port)
 
 

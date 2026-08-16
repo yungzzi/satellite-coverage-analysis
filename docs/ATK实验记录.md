@@ -846,3 +846,28 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 | Range ≤100km | 0 |
 
 注意：Targeted 走 XML 路线时 SimpleCone 用全局半角（逐星视场半角表不参与）。
+
+### 10.24 第 5 页重构 + ATK 逐星参数 + 约束全 GUI（2026-08-16，codex/gui-page5-redesign）
+
+**第 5 页布局**
+- 改为**单栏**（st.container(border=True) 分组）：目标区域与时间 / 卫星来源 / 引擎参数。
+- **覆盖引擎置顶**（segmented_control），**默认 ATK**（后续大概率走 ATK）。
+- **引擎差异化**：
+  - 自研：视场半角/最小仰角/步长/边界精化/幅宽开关 + 原"传感器参数表（逐星，自研）"
+    （只在此分支显示）；
+  - ATK：全局传感器类型+参数、传感器指向、约束（全 GUI 表格，去掉 JSON）、
+    **逐星 ATK 参数表**（NORAD/视场半角/最小仰角/传感器类型/参数）。
+
+**ATK 逐星参数（atk_engine）**
+- cfg.sat_sensor_overrides：按 NORAD 覆盖视场半角/最小仰角，或整颗星换传感器类型+参数；
+  优先级：ATK 逐星表 > 自研逐星表 > 全局。
+- 引擎按（最小仰角, 传感器类型, 参数）分组，每组一次 ATK 计算（XML 路线组内同质，兼容 SAR/HalfPower/Targeted）。
+- 实测（6 星 × 8h × 杭州 5km，SimpleCone）：HJ-1B fov45 → 1 窗口（72s）；fov10 → 0；
+  fov60 → 1 窗口（288s，更长）；min_elevation=30 逐星生效；28890 逐星换 Conical 生效；
+  两遍一致。
+
+**约束全 GUI（去掉高级 JSON）**
+- 一行一条约束：启用 / 作用对象（目标点/每颗星传感器/每颗星）/ 约束类型（19 种全表）/
+  Min / Max / 附加参数；按类型自动拼 SetConstraint 参数（方位角必填 Min+Max、
+  开关类用 On/Off、排除角类用 Min 值）。
+- 实测：SunGroundElevAngle Min 80 → 0 窗口（与 JSON 透传一致）。

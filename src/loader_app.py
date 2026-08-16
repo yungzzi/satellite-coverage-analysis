@@ -228,6 +228,302 @@ def _fixed_method_inputs(method: str, prefix: str = "cov_pt") -> list | None:
     return None
 
 
+def _render_self_sensor_table(cov_sats, cov_sw_en):
+    """自研引擎逐星传感器参数表（原⑤页底部折叠区，仅自研引擎显示）。"""
+    with st.expander("传感器参数表（可选，逐星覆盖，自研）", expanded=False):
+        sl.ensure_sensor_params()
+        if "sensor_rows" not in st.session_state:
+            st.session_state["sensor_rows"] = sl.load_sensor_params()
+        _cur = st.session_state["sensor_rows"]
+        _df = pd.DataFrame(_cur, columns=["norad", "fov_half_angle_deg",
+                                          "min_elevation_deg", "swath_km"])
+        for _c in ["fov_half_angle_deg", "min_elevation_deg", "swath_km"]:
+            _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
+        _df["norad"] = pd.to_numeric(_df["norad"], errors="coerce").astype("Int64")
+        edited = st.data_editor(
+            _df,
+            key="sensor_editor", num_rows="dynamic", hide_index=True,
+            column_config={
+                "norad": st.column_config.NumberColumn("NORAD 编号", min_value=1, step=1,
+                                                       help="必填：卫星编目编号"),
+                "fov_half_angle_deg": st.column_config.NumberColumn(
+                    "视场半角(°)", min_value=0.0, step=1.0, format="%.1f",
+                    help="选填；留空用全局默认"),
+                "min_elevation_deg": st.column_config.NumberColumn(
+                    "最小仰角(°)", min_value=0.0, step=1.0, format="%.1f",
+                    help="选填；留空用全局默认"),
+                "swath_km": st.column_config.NumberColumn(
+                    "幅宽(km)", min_value=0.0, step=1.0, format="%.1f",
+                    help="选填；填了按幅宽换算视场半角（仍按覆盖圆锥计算），同一行幅宽优先"),
+            },
+        )
+        st.caption("只按 NORAD 精确匹配；未设置的星用上方全局默认（10°/10°）。"
+                   "重复编号以表里靠后的为准。同一行若同时填了幅宽和视场半角，"
+                   "以幅宽为准（幅宽会按轨道高度换算成等效视场半角）；"
+                   "幅宽是否生效由上方\"幅宽（逐星）生效\"开关控制，默认关闭；"
+                   "未填幅宽的星按默认视场半角计算，高轨/静止星自动回退视场半角。"
+                   "保存后下一次\"开始覆盖分析\"生效。")
+        _b_save, _b_reset = st.columns(2)
+        if _b_save.button("保存参数表", key="btn_sensor_save", type="primary"):
+            _rows = _df_to_sensor_rows(edited)
+            if _rows is None:
+                flash("参数表有无效行：NORAD 必须是正整数，请修正后再保存。", kind="warning")
+            else:
+                sl.save_sensor_params(_rows, swath_enabled=bool(cov_sw_en))
+                st.session_state["sensor_rows"] = _rows
+                if cov_sw_en:
+                    _both = [i + 1 for i, r in enumerate(_rows)
+                             if (r.get("swath_km") or 0) > 0
+                             and r.get("fov_half_angle_deg") is not None]
+                    if _both:
+                        _both_s = "、".join(map(str, _both[:10]))
+                        if len(_both) > 10:
+                            _both_s += f" 等 {len(_both)} 行"
+                        flash(f"已保存 {len(_rows)} 条；第 {_both_s} 行同时填了幅宽与视场半角，"
+                              f"将以幅宽为准。", kind="warning")
+                    else:
+                        flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽（逐星）已生效），"
+                              f"下一次分析生效。", kind="success")
+                else:
+                    flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽（逐星）未生效——"
+                          f"开关保持关闭），下一次分析生效。", kind="success")
+        def _btn_sensor_reset():
+            if st.session_state.get("sensor_confirm"):
+                sl.save_sensor_params([])
+                st.session_state["sensor_rows"] = []
+                st.session_state["sensor_confirm"] = False
+                st.session_state["cov_sw_en"] = False
+                flash("已恢复默认模板（无覆盖行）。", kind="success")
+            else:
+                st.session_state["sensor_confirm"] = True
+                flash("再点一次\"恢复默认模板\"确认覆盖（会清空当前所有条目）。", kind="warning")
+
+        _b_reset.button("恢复默认模板", key="btn_sensor_reset", on_click=_btn_sensor_reset)
+        with st.expander("从本次覆盖分析的卫星来源导入（去重）"):
+            _src_names = [_strip_collection_label(n) for n in cov_sats]
+            if not _src_names:
+                st.caption("请先在上方\"卫星来源（收藏夹）\"里勾选收藏夹，这里会把所选来源的卫星去重后列出。")
+            else:
+                _src_key = tuple(sorted(_src_names))
+                if st.session_state.get("sensor_src_key") != _src_key:
+                    _src_rows = sl.collection_sources_dedup(_src_names)
+                    st.session_state["sensor_src_rows"] = _src_rows
+                    st.session_state["sensor_src_key"] = _src_key
+                _src_rows = st.session_state.get("sensor_src_rows", [])
+                if not _src_rows:
+                    st.caption("所选来源未解析到卫星（可能本地缓存缺失），请先到④页下载/解析。")
+                else:
+                    _rr_col = st.columns([5, 1])
+                    with _rr_col[1]:
+                        if st.button("重新读取来源", key="btn_sensor_src_reload",
+                                     help="重新从本地缓存解析所选来源（下载新 TLE 后点这个）"):
+                            st.session_state.pop("sensor_src_key", None)
+                            st.rerun()
+                    _base = _df_to_sensor_rows(edited) or []
+                    _existing = {r["norad"] for r in _base}
+                    _df_src = pd.DataFrame(_src_rows, columns=["name", "norad", "source"])
+                    _df_src["已在参数表"] = _df_src["norad"].isin(_existing).map(
+                        {True: "是", False: "否"})
+                    _q = st.text_input("搜索（名称或 NORAD）", key="sensor_src_q")
+                    _f_src, _f_miss = st.columns(2)
+                    _src_opts = sorted(_df_src["source"].unique().tolist())
+                    _pick_src = _f_src.multiselect("按来源筛选", _src_opts,
+                                                   default=_src_opts, key="sensor_src_filter")
+                    _only_miss = _f_miss.checkbox("只看未加入参数表的",
+                                                  value=True, key="sensor_src_miss")
+                    _mask = _df_src["source"].isin(_pick_src)
+                    if _q.strip():
+                        _ql = _q.strip().lower()
+                        _mask &= (_df_src["name"].str.lower().str.contains(_ql)
+                                  | _df_src["norad"].astype(str).str.contains(_ql))
+                    if _only_miss:
+                        _mask &= _df_src["已在参数表"] == "否"
+                    _df_pick = _df_src[_mask].reset_index(drop=True)
+                    st.caption(f"来源去重共 {len(_df_src)} 颗；当前筛选 {len(_df_pick)} 颗。")
+                    _pick_all = st.checkbox("全选当前筛选结果", key="sensor_src_all")
+                    _ev = st.dataframe(
+                        _df_pick[["name", "norad", "source", "已在参数表"]],
+                        hide_index=True, width="stretch",
+                        on_select="rerun", selection_mode="multi-row", key="sensor_src_pick")
+                    _sel_idx = list(range(len(_df_pick))) if _pick_all else list(_ev.selection.rows)
+                    _n_sel = len(_sel_idx)
+                    _pf, _pe, _pw = st.columns(3)
+                    _pfv = _pf.number_input("视场半角(°)（0=不改）", value=0.0, min_value=0.0,
+                                            step=1.0, key="sensor_src_fov")
+                    _pev = _pe.number_input("最小仰角(°)（0=不改）", value=0.0, min_value=0.0,
+                                            step=1.0, key="sensor_src_elev")
+                    _pwv = _pw.number_input("幅宽(km)（0=不用）", value=0.0, min_value=0.0,
+                                            step=1.0, key="sensor_src_swath")
+                    st.caption("若同时填了视场半角与幅宽，在\"幅宽生效\"开关开启时以幅宽为准"
+                               "（幅宽会换算成等效视场半角）；开关关闭时幅宽只记录、不参与计算。")
+                    if st.button(f"加入参数表（{_n_sel} 颗）", key="btn_sensor_src_add", type="primary"):
+                        if not _sel_idx:
+                            flash("请先勾选要加入的卫星（或勾选\"全选当前筛选结果\"）。", kind="warning")
+                        else:
+                            _added = 0
+                            for _i in _sel_idx:
+                                _nid = int(_df_pick.loc[_i, "norad"])
+                                if _nid in _existing:
+                                    continue
+                                _row = {"norad": _nid}
+                                if _pfv > 0:
+                                    _row["fov_half_angle_deg"] = float(_pfv)
+                                if _pev > 0:
+                                    _row["min_elevation_deg"] = float(_pev)
+                                if _pwv > 0:
+                                    _row["swath_km"] = float(_pwv)
+                                _base.append(_row)
+                                _existing.add(_nid)
+                                _added += 1
+                            st.session_state["sensor_rows"] = _base
+                            flash(f"已把 {_added} 颗加入参数表（跳过已在表中的 {_n_sel - _added} 颗）；"
+                                  f"记得点\"保存参数表\"生效。", kind="success")
+                            st.rerun()
+
+
+ATK_CONSTRAINT_OPTIONS = [
+    "AzimuthAngle", "ElevationAngle", "Range",
+    "AzimuthRate", "ElevationRate", "RangeRate", "AngularRate",
+    "Altitude", "PropagationDelay", "LineOfSight", "fieldofview", "TerrainMask",
+    "SunElevationAngle", "SunGroundElevAngle", "LunarElevationAngle",
+    "LOSSunExclusion", "LOSLunarExclusion", "BSSunExclusion", "BSLunarExclusion",
+]
+
+
+def _render_atk_constraints_editor() -> list:
+    """ATK 约束全 GUI 编辑：一行一条约束，返回 [{object,name,params}]。"""
+    with st.expander("约束（可选，ATK）", expanded=False):
+        st.caption("一行一条约束：选作用对象（目标点/每颗星传感器/每颗星）与约束类型；"
+                   "Min/Max 填数值；开关类（视线/视场/地形）在\"附加参数\"填 On 或 Off；"
+                   "排除角类把角度填在 Min 列。参数与官方 SetConstraint 命令一致。")
+        if "atk_cons_rows" not in st.session_state:
+            st.session_state["atk_cons_rows"] = [
+                {"enable": True, "object": "目标点", "type": "SunGroundElevAngle",
+                 "min": 10.0, "max": None, "extra": ""}]
+        _df = pd.DataFrame(st.session_state["atk_cons_rows"],
+                           columns=["enable", "object", "type", "min", "max", "extra"])
+        _df["enable"] = _df["enable"].fillna(True).astype(bool)
+        _df["object"] = _df["object"].astype("string")
+        _df["type"] = _df["type"].astype("string")
+        _df["min"] = pd.to_numeric(_df["min"], errors="coerce")
+        _df["max"] = pd.to_numeric(_df["max"], errors="coerce")
+        _df["extra"] = _df["extra"].fillna("").astype("string")
+        edited = st.data_editor(
+            _df, key="atk_cons_editor", num_rows="dynamic", hide_index=True,
+            column_config={
+                "enable": st.column_config.CheckboxColumn("启用"),
+                "object": st.column_config.SelectboxColumn(
+                    "作用对象", options=["目标点", "每颗星传感器", "每颗星"]),
+                "type": st.column_config.SelectboxColumn("约束类型", options=ATK_CONSTRAINT_OPTIONS),
+                "min": st.column_config.NumberColumn("Min 值", format="%.3f"),
+                "max": st.column_config.NumberColumn("Max 值", format="%.3f"),
+                "extra": st.column_config.TextColumn(
+                    "附加参数", help='如 "ExcludeIntervals" / "On" / "Off"'),
+            },
+        )
+        obj_map = {"目标点": "facility", "每颗星传感器": "sensor", "每颗星": "satellite"}
+        rows = []
+        for _, r in edited.iterrows():
+            if not r.get("enable"):
+                continue
+            t = (r.get("type") or "").strip()
+            o = obj_map.get(r.get("object"), "facility")
+            if not t:
+                continue
+            mn = r.get("min"); mx = r.get("max")
+            mn_s = None if mn is None or pd.isna(mn) else f"{float(mn):g}"
+            mx_s = None if mx is None or pd.isna(mx) else f"{float(mx):g}"
+            ex = (r.get("extra") or "").strip()
+            if t == "AzimuthAngle":
+                params = f"Min {mn_s} Max {mx_s}" if (mn_s and mx_s) else "Min 0 Max 360"
+                if ex:
+                    params += " " + ex
+            elif t in ("LineOfSight", "fieldofview", "TerrainMask"):
+                params = ex or "On"
+            elif t in ("LOSSunExclusion", "LOSLunarExclusion",
+                       "BSSunExclusion", "BSLunarExclusion"):
+                params = mn_s or "0"
+            else:
+                parts = []
+                if mn_s:
+                    parts.append(f"Min {mn_s}")
+                if mx_s:
+                    parts.append(f"Max {mx_s}")
+                params = " ".join(parts)
+                if ex:
+                    params += " " + ex
+            rows.append({"object": o, "name": t, "params": params})
+        st.caption(f"当前启用 {len(rows)} 条约束。")
+        return rows
+
+
+def _render_atk_sat_editor(cov_sats) -> list:
+    """ATK 逐星传感器参数表：NORAD/名称/视场半角/最小仰角/类型/参数。"""
+    with st.expander("逐星传感器参数（可选，ATK）", expanded=False):
+        st.caption("只按 NORAD 精确匹配；留空的列用上方全局设置。每颗星可单独设视场半角/最小仰角，"
+                   "或整颗换成另一种传感器类型（参数用逗号分隔）。")
+        _cur = st.session_state.get("atk_sat_rows", [])
+        _df = pd.DataFrame(_cur, columns=["norad", "name", "fov_half_angle_deg",
+                                          "min_elevation_deg", "sensor_type", "sensor_params"])
+        _df["norad"] = pd.to_numeric(_df["norad"], errors="coerce").astype("Int64")
+        for _c in ["fov_half_angle_deg", "min_elevation_deg"]:
+            _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
+        _df["name"] = _df["name"].fillna("").astype("string")
+        _df["sensor_type"] = _df["sensor_type"].fillna("").astype("string")
+        _df["sensor_params"] = _df["sensor_params"].fillna("").astype("string")
+        edited = st.data_editor(
+            _df, key="atk_sat_editor", num_rows="dynamic", hide_index=True,
+            column_config={
+                "norad": st.column_config.NumberColumn("NORAD 编号", min_value=1, step=1,
+                                                       help="必填"),
+                "name": st.column_config.TextColumn("卫星名（可留空）"),
+                "fov_half_angle_deg": st.column_config.NumberColumn(
+                    "视场半角(°)（SimpleCone）", min_value=0.0, step=1.0, format="%.1f",
+                    help="留空=用全局视场半角"),
+                "min_elevation_deg": st.column_config.NumberColumn(
+                    "最小仰角(°)", min_value=0.0, step=1.0, format="%.1f",
+                    help="留空=用全局最小仰角"),
+                "sensor_type": st.column_config.SelectboxColumn(
+                    "传感器类型", options=["", "SimpleCone", "Rectangular",
+                                          "HalfPower", "Conical", "SAR"],
+                    help="留空=用上方全局类型"),
+                "sensor_params": st.column_config.TextColumn(
+                    "参数（逗号分隔）", help="留空=用全局参数；如 40,60 / 0.5,0.35 / 12,70,30,30,550000"),
+            },
+        )
+        rows = []
+        for _, r in edited.iterrows():
+            norad = r.get("norad")
+            if norad is None or pd.isna(norad):
+                continue
+            row = {"norad": int(norad)}
+            if r.get("fov_half_angle_deg") is not None and not pd.isna(r["fov_half_angle_deg"]):
+                row["fov_half_angle_deg"] = float(r["fov_half_angle_deg"])
+            if r.get("min_elevation_deg") is not None and not pd.isna(r["min_elevation_deg"]):
+                row["min_elevation_deg"] = float(r["min_elevation_deg"])
+            _st = (r.get("sensor_type") or "").strip()
+            _sp = (r.get("sensor_params") or "").strip()
+            if _st:
+                row["sensor_type"] = _st
+            if _sp:
+                row["sensor_params"] = [float(x) for x in
+                                        _sp.replace("，", ",").split(",") if x.strip()]
+            rows.append(row)
+        _src_names = [_strip_collection_label(n) for n in cov_sats]
+        if _src_names and st.button("从本次卫星来源批量添加（去重）", key="btn_atk_sat_src"):
+            _sr = sl.collection_sources_dedup(_src_names)
+            _exist = {r["norad"] for r in rows}
+            for x in _sr:
+                if int(x["norad"]) not in _exist:
+                    rows.append({"norad": int(x["norad"]), "name": x["name"]})
+                    _exist.add(int(x["norad"]))
+            st.session_state["atk_sat_rows"] = rows
+            flash(f"已按来源批量添加 {len(rows)} 行（可再逐行填参数）。", kind="success")
+            st.rerun()
+        st.caption(f"当前 {len(rows)} 行逐星覆盖。")
+        return rows
+
+
 def _name_search(keyword: str) -> list:
     """按名字搜索（附带界面上的 所属国/发射年份/高度 过滤），搜索与重置共用。"""
     return sl.search_metadata(
@@ -1074,18 +1370,29 @@ if tab_constellations.open:
 
 if tab_analysis.open:
     st.subheader("覆盖分析")
-    st.caption("选好收藏夹（卫星来源）后，设置目标区域与时间直接开算；"
-               "覆盖判定参数沿用已拍板默认值（视场半角 10°=视线张角假设、最小仰角 10°、"
-               "10 秒检测 + 1 秒边界精化、选星按 1 分钟片；幅宽为逐星可选，默认不生效）。")
+    st.caption("选好卫星来源与目标区域后直接开算；结果同时保存到 output/ 目录。")
+
     all_cols = sl.load_all_collections()
     cov_names = [_collection_label(x) for x in all_cols]
 
-    c1, c2 = st.columns(2)
-    with c1:
-        cov_mode = st.radio("目标区域", ["点+半径", "地区多边形"], key="cov_mode",
-                            horizontal=True)
+    # ---------- 1) 覆盖引擎（顶部，默认 ATK） ----------
+    cov_engine = st.segmented_control(
+        "覆盖引擎",
+        ["自研（无需外部软件）", "ATK（需本机安装并注册，推荐）"],
+        default="ATK（需本机安装并注册，推荐）", key="cov_engine",
+        help="自研=纯 Python 几何判定（免依赖）；ATK=调用本机 ATK 计算，支持更多传感器类型/指向/约束，"
+             "当前只支持点+半径目标（按圆心点判定）。ATK 安装目录可用环境变量 ATK_ROOT 或 config [atk] root 指定。")
+    cov_engine_sel = "atk" if cov_engine.startswith("ATK") else "self"
+
+    # ---------- 2) 目标区域与时间 ----------
+    with st.container(border=True):
+        st.markdown("**目标区域与时间**")
+        cov_mode = st.segmented_control("目标区域", ["点+半径", "地区多边形"],
+                                        default="点+半径", key="cov_mode")
         grid_spacing = 0.2
         if cov_mode == "点+半径":
+            if cov_engine_sel == "atk":
+                st.caption("ATK 引擎按目标圆心点判定（5km 圆近似）。")
             if "cov_loc_list" not in st.session_state:
                 st.session_state["cov_loc_list"] = sl.load_locations()
             _locs = st.session_state["cov_loc_list"]
@@ -1104,8 +1411,7 @@ if tab_analysis.open:
             la, lo, ra = st.columns(3)
             cov_lat = la.number_input("纬度", value=30.25, step=0.01, key="cov_lat")
             cov_lon = lo.number_input("经度", value=120.15, step=0.01, key="cov_lon")
-            cov_rad = ra.number_input("半径(km)", value=5.0, min_value=0.1, step=0.5,
-                                      key="cov_rad")
+            cov_rad = ra.number_input("半径(km)", value=5.0, min_value=0.1, step=0.5, key="cov_rad")
             if _loc is not None and _loc.get("source") != "builtin":
                 if st.session_state.get("cov_loc_del") == cov_loc:
                     dc1, dc2 = st.columns(2)
@@ -1135,6 +1441,8 @@ if tab_analysis.open:
                 else:
                     flash("请先输入地点名称再保存。", kind="warning")
         else:
+            if cov_engine_sel == "atk":
+                st.warning("ATK 引擎只支持点+半径目标；地区多边形请切到自研引擎。")
             geo_dir = sl.PROJECT_ROOT / "data" / "geo"
             geo_files = {p.stem: str(p) for p in sorted(geo_dir.glob("*.json"))}
             cov_geo = st.selectbox("预设地区", list(geo_files), key="cov_geo")
@@ -1144,11 +1452,14 @@ if tab_analysis.open:
         d1, d2 = st.columns(2)
         _today0 = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         cov_t0 = d1.datetime_input("开始时间 (UTC)", value=_today0, key="cov_t0")
-        cov_t1 = d2.datetime_input("结束时间 (UTC)", value=_today0 + timedelta(hours=8),
-                                   key="cov_t1")
-        cov_sats = st.multiselect("卫星来源（收藏夹）", cov_names, key="cov_cols")
+        cov_t1 = d2.datetime_input("结束时间 (UTC)", value=_today0 + timedelta(hours=8), key="cov_t1")
+
+    # ---------- 3) 卫星来源 ----------
+    with st.container(border=True):
+        st.markdown("**卫星来源**")
+        cov_sats = st.multiselect("收藏夹（可多选）", cov_names, key="cov_cols")
+
         def _cov_tle_uploaded():
-            # 回调在控件重建前执行，这里改 cov_cols 才不会报"控件已实例化"
             f_up = st.session_state.get("cov_tle_up")
             if f_up is None:
                 return
@@ -1181,48 +1492,56 @@ if tab_analysis.open:
                     "2 58582   3.0457 313.8823 0014312 202.7838 294.2930  1.00266763  9805")
             st.caption("每颗星 3 行：第 1 行名称（可中文），第 2~3 行为两行轨道根数；"
                        "多颗星按此格式依次排列，一个文件可包含全部卫星。")
-    with c2:
-        p1, p2 = st.columns(2)
-        cov_fov = p1.number_input("视场半角(°)", value=10.0, min_value=1.0, max_value=89.0,
-                                  step=1.0, key="cov_fov",
-                                  help="视线张角（天底圆锥半角，假设值 10°）：普通成像星约 1°~10°，"
-                                       "宽幅任务约 30°")
-        cov_elev = p2.number_input("最小仰角(°)", value=10.0, min_value=0.0, max_value=85.0,
-                                   step=1.0, key="cov_elev",
-                                   help="经典标准值 10°（过境/覆盖分析常用）；不需要该限制就填 0")
-        st.session_state.setdefault("cov_sw_en", sl.load_sensor_swath_enabled())
-        cov_sw_en = st.checkbox(
-            "幅宽（逐星）生效（默认关闭）",
-            key="cov_sw_en",
-            help="只对传感器参数表中填了幅宽的星生效：填了幅宽且开关开启 → 按该星自己的轨道高度"
-                 "换算成等效视场半角计算；未填幅宽的星一律按默认视场半角（10°）计算。"
-                 "高轨/静止卫星没有条带成像概念，会自动回退视场半角。")
-        p3, p4 = st.columns(2)
-        cov_step = p3.number_input("时间步长(分钟)", value=1, min_value=1, step=1,
-                                   key="cov_step")
-        cov_refine = p4.number_input("边界精化(秒)", value=1, min_value=0, step=1,
-                                     key="cov_refine",
-                                     help="窗口边界精化步长（默认 1 秒，P1）；"
-                                          "检测步长为 10 秒（config.toml 可改 coarse_step_seconds）")
-        st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。"
-                   "结果会同时保存到 output/ 目录。")
-        cov_engine = st.radio(
-            "覆盖引擎", ["自研（默认，无需外部软件）", "ATK（需本机安装并注册）"],
-            key="cov_engine", horizontal=True,
-            help="自研=纯 Python 几何判定（默认，免依赖）；ATK=调用本机安装的 ATK 计算，"
-                 "支持更多传感器类型，当前只支持点+半径目标（按圆心点判定）。"
-                 "ATK 安装目录可用环境变量 ATK_ROOT 指定（默认 D 盘实验安装路径）。")
-        cov_sensor_type = "SimpleCone（默认）"
-        _sensor_type = "SimpleCone"
-        _sensor_params = None
-        if cov_engine.startswith("ATK"):
+
+    # ---------- 4) 引擎参数（差异化） ----------
+    _sensor_type = "SimpleCone"
+    _sensor_params = None
+    _pointing = None
+    _constraints = []
+    _atk_sat_overrides = []
+    if cov_engine_sel == "self":
+        with st.container(border=True):
+            st.markdown("**自研引擎参数**")
+            p1, p2 = st.columns(2)
+            cov_fov = p1.number_input("视场半角(°)", value=10.0, min_value=1.0, max_value=89.0,
+                                      step=1.0, key="cov_fov",
+                                      help="视线张角（天底圆锥半角，假设值 10°）：普通成像星约 1°~10°，宽幅任务约 30°")
+            cov_elev = p2.number_input("最小仰角(°)", value=10.0, min_value=0.0, max_value=85.0,
+                                       step=1.0, key="cov_elev",
+                                       help="经典标准值 10°（过境/覆盖分析常用）；不需要该限制就填 0")
+            st.session_state.setdefault("cov_sw_en", sl.load_sensor_swath_enabled())
+            cov_sw_en = st.checkbox(
+                "幅宽（逐星）生效（默认关闭）", key="cov_sw_en",
+                help="只对传感器参数表中填了幅宽的星生效：填了幅宽且开关开启 → 按该星自己的轨道高度"
+                     "换算成等效视场半角计算；未填幅宽的星一律按默认视场半角（10°）计算。"
+                     "高轨/静止卫星没有条带成像概念，会自动回退视场半角。")
+            p3, p4 = st.columns(2)
+            cov_step = p3.number_input("时间步长(分钟)", value=1, min_value=1, step=1, key="cov_step")
+            cov_refine = p4.number_input("边界精化(秒)", value=1, min_value=0, step=1, key="cov_refine",
+                                         help="窗口边界精化步长（默认 1 秒，P1）；检测步长为 10 秒（config.toml 可改 coarse_step_seconds）")
+            st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。")
+        _render_self_sensor_table(cov_sats, cov_sw_en)
+    else:
+        with st.container(border=True):
+            st.markdown("**ATK 引擎参数**")
+            p0, p1 = st.columns(2)
+            cov_fov = p0.number_input("全局视场半角(°)（SimpleCone 用）", value=10.0, min_value=1.0,
+                                      max_value=89.0, step=1.0, key="cov_fov",
+                                      help="全局 SimpleCone 视场半角；逐星表可对单颗星覆盖")
+            cov_elev = p1.number_input("最小仰角(°)（额外地面站约束）", value=0.0, min_value=0.0,
+                                       max_value=85.0, step=1.0, key="cov_elev",
+                                       help="加在目标点地面站上的最小仰角；SAR 想只用自己的仰角范围就填 0")
+            st.session_state.setdefault("cov_sw_en", sl.load_sensor_swath_enabled())
+            cov_sw_en = st.session_state["cov_sw_en"]
+            cov_step = 1
+            cov_refine = 1
             cov_sensor_type = st.selectbox(
-                "传感器类型（ATK 引擎）",
+                "传感器类型（全局）",
                 ["SimpleCone（默认）", "Rectangular（矩形）", "HalfPower（半功率）",
                  "Conical（复杂圆锥）", "SAR"],
                 key="cov_sensor_type",
-                help="自研引擎只支持视场半角（视线张角）；ATK 引擎支持更多类型。"
-                     "SAR/HalfPower 自动走 XML 路线（ATK 4.0.1 的 Define 命令对这两类静默失效，已绕过）。")
+                help="自研引擎只支持视场半角；ATK 引擎支持更多类型。SAR/HalfPower 自动走 XML 路线"
+                     "（ATK 4.0.1 的 Define 命令对这两类静默失效，已绕过）。")
             _sensor_type = {
                 "SimpleCone（默认）": "SimpleCone",
                 "Rectangular（矩形）": "Rectangular",
@@ -1240,40 +1559,39 @@ if tab_analysis.open:
             elif cov_sensor_type == "HalfPower（半功率）":
                 _c1, _c2 = st.columns(2)
                 _f = _c1.number_input("频率(GHz)", value=14.5, min_value=0.01, step=0.1,
-                                      key="cov_sensor_freq",
-                                      help="半功率波束宽度由频率与天线直径计算")
+                                      key="cov_sensor_freq", help="半功率波束宽度由频率与天线直径计算")
                 _d = _c2.number_input("天线直径(m)", value=1.0, min_value=0.01, step=0.1,
                                       key="cov_sensor_diam")
                 _sensor_params = [_f, _d]
             elif cov_sensor_type == "Conical（复杂圆锥）":
                 _c1, _c2, _c3, _c4 = st.columns(4)
-                _inner = _c1.number_input("内锥半角(°)", value=0.0, min_value=0.0,
-                                          max_value=89.0, step=1.0, key="cov_sensor_inner")
-                _outer = _c2.number_input("外锥半角(°)", value=45.0, min_value=0.1,
-                                          max_value=89.0, step=1.0, key="cov_sensor_outer")
-                _minc = _c3.number_input("最小时钟角(°)", value=0.0, min_value=0.0,
-                                         max_value=360.0, step=5.0, key="cov_sensor_minc")
-                _maxc = _c4.number_input("最大时钟角(°)", value=360.0, min_value=0.0,
-                                         max_value=360.0, step=5.0, key="cov_sensor_maxc")
+                _inner = _c1.number_input("内锥半角(°)", value=0.0, min_value=0.0, max_value=89.0,
+                                          step=1.0, key="cov_sensor_inner")
+                _outer = _c2.number_input("外锥半角(°)", value=45.0, min_value=0.1, max_value=89.0,
+                                          step=1.0, key="cov_sensor_outer")
+                _minc = _c3.number_input("最小时钟角(°)", value=0.0, min_value=0.0, max_value=360.0,
+                                         step=5.0, key="cov_sensor_minc")
+                _maxc = _c4.number_input("最大时钟角(°)", value=360.0, min_value=0.0, max_value=360.0,
+                                         step=5.0, key="cov_sensor_maxc")
                 _sensor_params = [_inner, _outer, _minc, _maxc]
             elif cov_sensor_type == "SAR":
                 _c1, _c2, _c3 = st.columns(3)
-                _mel = _c1.number_input("最小入射仰角(°)", value=12.0, min_value=0.0,
-                                        max_value=89.0, step=1.0, key="cov_sensor_mel")
-                _xel = _c2.number_input("最大入射仰角(°)", value=70.0, min_value=0.0,
-                                        max_value=89.0, step=1.0, key="cov_sensor_xel")
-                _alt = _c3.number_input("父高度(m)", value=550000.0, min_value=0.0,
-                                        step=1000.0, key="cov_sensor_alt")
+                _mel = _c1.number_input("最小入射仰角(°)", value=12.0, min_value=0.0, max_value=89.0,
+                                        step=1.0, key="cov_sensor_mel")
+                _xel = _c2.number_input("最大入射仰角(°)", value=70.0, min_value=0.0, max_value=89.0,
+                                        step=1.0, key="cov_sensor_xel")
+                _alt = _c3.number_input("父高度(m)", value=550000.0, min_value=0.0, step=1000.0,
+                                        key="cov_sensor_alt")
                 _c4, _c5 = st.columns(2)
-                _fwd = _c4.number_input("前向排除角(°)", value=30.0, min_value=0.0,
-                                        max_value=89.0, step=1.0, key="cov_sensor_fwd")
-                _aft = _c5.number_input("后向排除角(°)", value=30.0, min_value=0.0,
-                                        max_value=89.0, step=1.0, key="cov_sensor_aft")
+                _fwd = _c4.number_input("前向排除角(°)", value=30.0, min_value=0.0, max_value=89.0,
+                                        step=1.0, key="cov_sensor_fwd")
+                _aft = _c5.number_input("后向排除角(°)", value=30.0, min_value=0.0, max_value=89.0,
+                                        step=1.0, key="cov_sensor_aft")
                 _sensor_params = [_mel, _xel, _fwd, _aft, _alt]
-            st.caption("复杂传感器用统一参数（逐星视场半角/幅宽仅对 SimpleCone 生效）；"
-                       "上方\"最小仰角\"作为额外地面站约束（SAR 想只用自己的仰角范围就填 0）。")
+            else:
+                st.caption("SimpleCone：全局视场半角在上面；逐星表可对单颗星覆盖。")
             _pointing = None
-            with st.expander("传感器指向（可选，ATK）", expanded=False):
+            with st.expander("传感器指向（可选）", expanded=False):
                 _pt_mode = st.selectbox(
                     "指向模式",
                     ["天底（默认，不设置）", "Fixed 固定指向", "Targeted 目标指向",
@@ -1310,8 +1628,8 @@ if tab_analysis.open:
                                          "method": _pt_method, "params": _pt_params}
                 elif _pt_mode == "GrazingAlt 入射高度":
                     _c1, _c2 = st.columns(2)
-                    _az = _c1.number_input("方位角(°)", value=90.0, min_value=0.0,
-                                           max_value=360.0, step=1.0, key="cov_pt_gaz")
+                    _az = _c1.number_input("方位角(°)", value=90.0, min_value=0.0, max_value=360.0,
+                                           step=1.0, key="cov_pt_gaz")
                     _alt = _c2.number_input("入射高度(m)", value=10000.0, min_value=0.0,
                                             step=1000.0, key="cov_pt_galt")
                     _pointing = {"type": "GrazingAlt", "azimuth": float(_az),
@@ -1329,222 +1647,8 @@ if tab_analysis.open:
                         st.caption(f"已保存指向文件：{_dst.name}")
                 elif _pt_mode == "Spinning 旋转（暂不可用）":
                     st.warning("Spinning 初始相位跨进程随机，已反馈官方，暂不可用。")
-            _constraints = []
-            with st.expander("约束（可选，ATK）", expanded=False):
-                st.caption("常用约束直接填；高级约束在下方 JSON 里写（params 与官方 SetConstraint 命令参数一致）。")
-                _c1, _c2, _c3, _c4 = st.columns(4)
-                _sun_on = _c1.checkbox("太阳高度角约束", key="cov_cons_sun_on")
-                _sun_v = _c1.number_input("地面太阳高度 Min(°)", value=10.0, min_value=0.0,
-                                          max_value=90.0, step=1.0, key="cov_cons_sun_v",
-                                          disabled=not _sun_on)
-                if _sun_on:
-                    _constraints.append({"object": "facility", "name": "SunGroundElevAngle",
-                                         "params": f"Min {_sun_v}"})
-                _az_on = _c2.checkbox("方位角范围", key="cov_cons_az_on")
-                _az_min = _c2.number_input("方位 Min(°)", value=0.0, min_value=0.0,
-                                           max_value=360.0, step=5.0, key="cov_cons_azmin",
-                                           disabled=not _az_on)
-                _az_max = _c2.number_input("方位 Max(°)", value=180.0, min_value=0.0,
-                                           max_value=360.0, step=5.0, key="cov_cons_azmax",
-                                           disabled=not _az_on)
-                if _az_on:
-                    _constraints.append({"object": "facility", "name": "AzimuthAngle",
-                                         "params": f"Min {_az_min} Max {_az_max}"})
-                _rng_on = _c3.checkbox("距离范围", key="cov_cons_rng_on")
-                _rng_min = _c3.number_input("距离 Min(km)", value=0.0, min_value=0.0,
-                                            step=50.0, key="cov_cons_rngmin", disabled=not _rng_on)
-                _rng_max = _c3.number_input("距离 Max(km)", value=3000.0, min_value=0.0,
-                                            step=100.0, key="cov_cons_rngmax", disabled=not _rng_on)
-                if _rng_on:
-                    _constraints.append({"object": "facility", "name": "Range",
-                                         "params": f"Min {_rng_min*1000.0} Max {_rng_max*1000.0}"})
-                _los_on = _c4.checkbox("要求几何视线", key="cov_cons_los")
-                if _los_on:
-                    _constraints.append({"object": "facility", "name": "LineOfSight", "params": "On"})
-                _adv = st.text_area(
-                    "高级约束 JSON（可空）",
-                    value=st.session_state.get("cov_cons_adv", ""),
-                    key="cov_cons_adv", height=120,
-                    help='格式：[{"object":"facility|sensor|satellite","name":"约束名","params":"参数串"}]；'
-                         'object=facility 加在地面站（目标点）、sensor 加在每颗星的传感器、'
-                         'satellite 加在每颗星；params 与官方 SetConstraint 命令参数一致'
-                         '（如 "Min 10"、"Min 10 Max 60 ExcludeIntervals"、"On"）。')
-                if _adv.strip():
-                    try:
-                        _adv_list = json.loads(_adv)
-                        if not isinstance(_adv_list, list):
-                            raise ValueError("需要 JSON 数组")
-                        _constraints.extend(_adv_list)
-                        st.caption(f"高级约束已解析 {len(_adv_list)} 条")
-                    except Exception as _e:
-                        st.error(f"高级约束 JSON 解析失败：{_e}")
-
-    with st.expander("传感器参数表（可选，逐星覆盖）"):
-        sl.ensure_sensor_params()
-        if "sensor_rows" not in st.session_state:
-            st.session_state["sensor_rows"] = sl.load_sensor_params()
-        _cur = st.session_state["sensor_rows"]
-        _df = pd.DataFrame(_cur, columns=["norad", "fov_half_angle_deg",
-                                          "min_elevation_deg", "swath_km"])
-        for _c in ["fov_half_angle_deg", "min_elevation_deg", "swath_km"]:
-            _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
-        _df["norad"] = pd.to_numeric(_df["norad"], errors="coerce").astype("Int64")
-        edited = st.data_editor(
-            _df,
-            key="sensor_editor",
-            num_rows="dynamic",
-            hide_index=True,
-            column_config={
-                "norad": st.column_config.NumberColumn("NORAD 编号", min_value=1, step=1,
-                                                       help="必填：卫星编目编号"),
-                "fov_half_angle_deg": st.column_config.NumberColumn(
-                    "视场半角(°)", min_value=0.0, step=1.0, format="%.1f",
-                    help="选填；留空用全局默认"),
-                "min_elevation_deg": st.column_config.NumberColumn(
-                    "最小仰角(°)", min_value=0.0, step=1.0, format="%.1f",
-                    help="选填；留空用全局默认"),
-                "swath_km": st.column_config.NumberColumn(
-                    "幅宽(km)", min_value=0.0, step=1.0, format="%.1f",
-                    help="选填；填了按幅宽换算视场半角（仍按覆盖圆锥计算），同一行幅宽优先"),
-            },
-        )
-        st.caption("只按 NORAD 精确匹配；未设置的星用上方全局默认（10°/10°）。"
-                   "重复编号以表里靠后的为准。同一行若同时填了幅宽和视场半角，"
-                   "以幅宽为准（幅宽会按轨道高度换算成等效视场半角）；"
-                   "幅宽是否生效由右上角\"幅宽（逐星）生效\"开关控制，默认关闭；"
-                   "未填幅宽的星按默认视场半角计算，高轨/静止星自动回退视场半角。"
-                   "保存后下一次\"开始覆盖分析\"生效。")
-        _b_save, _b_reset = st.columns(2)
-        if _b_save.button("保存参数表", key="btn_sensor_save", type="primary"):
-            _rows = _df_to_sensor_rows(edited)
-            if _rows is None:
-                flash("参数表有无效行：NORAD 必须是正整数，请修正后再保存。", kind="warning")
-            else:
-                sl.save_sensor_params(_rows, swath_enabled=bool(cov_sw_en))
-                st.session_state["sensor_rows"] = _rows
-                if cov_sw_en:
-                    _both = [i + 1 for i, r in enumerate(_rows)
-                             if (r.get("swath_km") or 0) > 0
-                             and r.get("fov_half_angle_deg") is not None]
-                    if _both:
-                        _both_s = "、".join(map(str, _both[:10]))
-                        if len(_both) > 10:
-                            _both_s += f" 等 {len(_both)} 行"
-                        flash(f"已保存 {len(_rows)} 条；第 {_both_s} 行同时填了幅宽与视场半角，"
-                              f"将以幅宽为准。", kind="warning")
-                    else:
-                        flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽（逐星）已生效），"
-                              f"下一次分析生效。", kind="success")
-                else:
-                    flash(f"已保存传感器参数表（{len(_rows)} 条覆盖，幅宽（逐星）未生效——"
-                          f"开关保持关闭），下一次分析生效。", kind="success")
-        def _btn_sensor_reset():
-            # 回调在控件重建前执行，这里改 cov_sw_en 才不会报"控件已实例化"
-            if st.session_state.get("sensor_confirm"):
-                sl.save_sensor_params([])
-                st.session_state["sensor_rows"] = []
-                st.session_state["sensor_confirm"] = False
-                st.session_state["cov_sw_en"] = False
-                flash("已恢复默认模板（无覆盖行）。", kind="success")
-            else:
-                st.session_state["sensor_confirm"] = True
-                flash("再点一次\"恢复默认模板\"确认覆盖（会清空当前所有条目）。",
-                      kind="warning")
-
-        _b_reset.button("恢复默认模板", key="btn_sensor_reset",
-                        on_click=_btn_sensor_reset)
-        with st.expander("从本次覆盖分析的卫星来源导入（去重）"):
-            _src_names = [_strip_collection_label(n) for n in cov_sats]
-            if not _src_names:
-                st.caption("请先在上方\"卫星来源（收藏夹）\"里勾选收藏夹，"
-                           "这里会把所选来源的卫星去重后列出。")
-            else:
-                _src_key = tuple(sorted(_src_names))
-                if st.session_state.get("sensor_src_key") != _src_key:
-                    _src_rows = sl.collection_sources_dedup(_src_names)
-                    st.session_state["sensor_src_rows"] = _src_rows
-                    st.session_state["sensor_src_key"] = _src_key
-                _src_rows = st.session_state.get("sensor_src_rows", [])
-                if not _src_rows:
-                    st.caption("所选来源未解析到卫星（可能本地缓存缺失），"
-                               "请先到④页下载/解析。")
-                else:
-                    _rr_col = st.columns([5, 1])
-                    with _rr_col[1]:
-                        if st.button("重新读取来源", key="btn_sensor_src_reload",
-                                     help="重新从本地缓存解析所选来源（下载新 TLE 后点这个）"):
-                            st.session_state.pop("sensor_src_key", None)
-                            st.rerun()
-                    _base = _df_to_sensor_rows(edited) or []
-                    _existing = {r["norad"] for r in _base}
-                    _df_src = pd.DataFrame(_src_rows, columns=["name", "norad",
-                                                               "source"])
-                    _df_src["已在参数表"] = _df_src["norad"].isin(_existing).map(
-                        {True: "是", False: "否"})
-                    _q = st.text_input("搜索（名称或 NORAD）", key="sensor_src_q")
-                    _f_src, _f_miss = st.columns(2)
-                    _src_opts = sorted(_df_src["source"].unique().tolist())
-                    _pick_src = _f_src.multiselect("按来源筛选", _src_opts,
-                                                   default=_src_opts,
-                                                   key="sensor_src_filter")
-                    _only_miss = _f_miss.checkbox("只看未加入参数表的",
-                                                  value=True, key="sensor_src_miss")
-                    _mask = _df_src["source"].isin(_pick_src)
-                    if _q.strip():
-                        _ql = _q.strip().lower()
-                        _mask &= (_df_src["name"].str.lower().str.contains(_ql)
-                                  | _df_src["norad"].astype(str).str.contains(_ql))
-                    if _only_miss:
-                        _mask &= _df_src["已在参数表"] == "否"
-                    _df_pick = _df_src[_mask].reset_index(drop=True)
-                    st.caption(f"来源去重共 {len(_df_src)} 颗；当前筛选 {len(_df_pick)} 颗。")
-                    _pick_all = st.checkbox("全选当前筛选结果", key="sensor_src_all")
-                    _ev = st.dataframe(
-                        _df_pick[["name", "norad", "source", "已在参数表"]],
-                        hide_index=True, width="stretch",
-                        on_select="rerun", selection_mode="multi-row",
-                        key="sensor_src_pick")
-                    _sel_idx = list(range(len(_df_pick))) if _pick_all \
-                        else list(_ev.selection.rows)
-                    _n_sel = len(_sel_idx)
-                    _pf, _pe, _pw = st.columns(3)
-                    _pfv = _pf.number_input("视场半角(°)（0=不改）", value=0.0,
-                                            min_value=0.0, step=1.0,
-                                            key="sensor_src_fov")
-                    _pev = _pe.number_input("最小仰角(°)（0=不改）", value=0.0,
-                                            min_value=0.0, step=1.0,
-                                            key="sensor_src_elev")
-                    _pwv = _pw.number_input("幅宽(km)（0=不用）", value=0.0,
-                                            min_value=0.0, step=1.0,
-                                            key="sensor_src_swath")
-                    st.caption("若同时填了视场半角与幅宽，在\"幅宽生效\"开关开启时以幅宽为准"
-                               "（幅宽会换算成等效视场半角）；开关关闭时幅宽只记录、不参与计算。")
-                    if st.button(f"加入参数表（{_n_sel} 颗）", key="btn_sensor_src_add",
-                                 type="primary"):
-                        if not _sel_idx:
-                            flash("请先勾选要加入的卫星（或勾选\"全选当前筛选结果\"）。",
-                                  kind="warning")
-                        else:
-                            _added = 0
-                            for _i in _sel_idx:
-                                _nid = int(_df_pick.loc[_i, "norad"])
-                                if _nid in _existing:
-                                    continue
-                                _row = {"norad": _nid}
-                                if _pfv > 0:
-                                    _row["fov_half_angle_deg"] = float(_pfv)
-                                if _pev > 0:
-                                    _row["min_elevation_deg"] = float(_pev)
-                                if _pwv > 0:
-                                    _row["swath_km"] = float(_pwv)
-                                _base.append(_row)
-                                _existing.add(_nid)
-                                _added += 1
-                            st.session_state["sensor_rows"] = _base
-                            flash(f"已把 {_added} 颗加入参数表（跳过已在表中的 "
-                                  f"{_n_sel - _added} 颗）；记得点\"保存参数表\"生效。",
-                                  kind="success")
-                            st.rerun()
+            _constraints = _render_atk_constraints_editor()
+            _atk_sat_overrides = _render_atk_sat_editor(cov_sats)
 
     if st.button("开始覆盖分析", key="btn_cov_run", type="primary"):
         real_cols = [_strip_collection_label(n) for n in cov_sats]
@@ -1588,6 +1692,8 @@ if tab_analysis.open:
                         cfg["pointing"] = _pointing
                     if _constraints:
                         cfg["constraints"] = _constraints
+                    if _atk_sat_overrides:
+                        cfg["sat_sensor_overrides"] = _atk_sat_overrides
                 if cov_mode == "点+半径":
                     region = {"mode": "circle", "lat": float(cov_lat),
                               "lon": float(cov_lon), "radius_km": float(cov_rad)}

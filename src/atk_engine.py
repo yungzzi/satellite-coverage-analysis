@@ -107,8 +107,14 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
     os.environ["ATK_ROOT"] = root
 
     sats = sl.records_to_satellites(recs)
-    # 逐星有效参数：与自研引擎同一套解析（逐星表 > 全局默认；幅宽/GEO 回退同规则）
-    fovs, elevs = [], []
+    overrides_by_norad = {}
+    for o in cfg.get("sat_sensor_overrides") or []:
+        try:
+            overrides_by_norad[int(o["norad"])] = o
+        except (KeyError, TypeError, ValueError):
+            continue
+    # 逐星有效参数：ATK 逐星表（sat_sensor_overrides）> 自研逐星表 > 全局默认；幅宽/GEO 回退同规则
+    per_sat = []
     sat_params, sensor_warnings = [], []
     for rec, sat in zip(recs, sats):
         norad = int(sat.model.satnum) if getattr(sat, "model", None) else int(_rec_get(rec, "norad"))
@@ -125,10 +131,26 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
                 f"没有条带成像概念，已改按视场半角 {fov_back}° 计算")
         if sat_cfg.get("swath_km"):
             alt = _tle_mean_altitude_km(rec)
-            fovs.append(round(float(cov.swath_to_half_angle_deg(alt, sat_cfg["swath_km"])), 6))
+            fov = round(float(cov.swath_to_half_angle_deg(alt, sat_cfg["swath_km"])), 6)
         else:
-            fovs.append(float(sat_cfg["fov_half_angle_deg"]))
-        elevs.append(float(sat_cfg["min_elevation_deg"]))
+            fov = float(sat_cfg["fov_half_angle_deg"])
+        elev = float(sat_cfg["min_elevation_deg"])
+        stype, sparams = sensor_type, sensor_params
+        ov = overrides_by_norad.get(norad)
+        if ov:
+            if ov.get("fov_half_angle_deg") is not None:
+                fov = float(ov["fov_half_angle_deg"])
+                info["fov_half_angle_deg"] = fov
+                info["source"] = "atk_override"
+            if ov.get("min_elevation_deg") is not None:
+                elev = float(ov["min_elevation_deg"])
+                info["min_elevation_deg"] = elev
+            if ov.get("sensor_type"):
+                stype = ov["sensor_type"]
+            if ov.get("sensor_params") is not None:
+                sparams = [float(x) for x in ov["sensor_params"]]
+        per_sat.append({"norad": norad, "fov": fov, "elev": elev,
+                        "type": stype, "params": sparams})
         sat_params.append({"name": sat.name, **info})
 
     lat, lon = float(region["lat"]), float(region["lon"])
@@ -146,25 +168,29 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
     t0_atk = _atk_time(dt_list[0].strftime("%Y-%m-%d %H:%M:%S"))
     t1_atk = _atk_time(t1_true.strftime("%Y-%m-%d %H:%M:%S"))
 
-    # 按最小仰角分组，每组一次 ATK 计算
+    # 按（最小仰角, 传感器类型, 参数）分组，每组一次 ATK 计算（支持逐星差异化）
     groups = {}
-    for i, e in enumerate(elevs):
-        groups.setdefault(e, []).append(i)
+    for i, ps in enumerate(per_sat):
+        key = (ps["elev"], ps["type"],
+               json.dumps(ps["params"], sort_keys=True) if ps["params"] else None)
+        groups.setdefault(key, []).append(i)
 
     tmp = Path(tempfile.mkdtemp(prefix="atk_engine_"))
     windows_by_norad = {}
     try:
-        for gi, (elev, idxs) in enumerate(sorted(groups.items())):
+        for gi, (key, idxs) in enumerate(sorted(groups.items())):
+            elev, stype, pkey = key
             group_recs = [recs[i] for i in idxs]
+            params = per_sat[idxs[0]]["params"]
             tle_path = tmp / f"g{gi}.tle"
             angles_path = tmp / f"g{gi}_angles.json"
             out_dir = tmp / f"g{gi}_out"
             _write_two_line_tle(group_recs, tle_path)
             with open(angles_path, "w", encoding="utf-8") as f:
-                json.dump([fovs[i] for i in idxs], f)
+                json.dump([per_sat[i]["fov"] for i in idxs], f)
             if progress:
                 progress((gi + 1) / (len(groups) + 1),
-                         f"ATK 计算中（仰角 {elev}° 组 {gi + 1}/{len(groups)}）")
+                         f"ATK 计算中（{stype} 组 {gi + 1}/{len(groups)}）")
             cmd = [
                 sys.executable, "-m", "atk_parallel.runner",
                 "--tle", str(tle_path),
@@ -172,14 +198,14 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
                 "--lat", str(lat), "--lon", str(lon),
                 "--fov", str(float(cfg.get("fov_half_angle_deg", 10.0))),
                 "--min-elev", str(elev),
-                "--sensor-type", sensor_type,
+                "--sensor-type", stype,
                 "--angles-file", str(angles_path),
                 "--per-shard", str(max(1000, len(group_recs))),
                 "--max-inst", "1",
                 "--out-dir", str(out_dir),
             ]
-            if sensor_params is not None:
-                cmd += ["--sensor-params", ",".join(str(x) for x in sensor_params)]
+            if params is not None:
+                cmd += ["--sensor-params", ",".join(str(x) for x in params)]
             if cfg.get("pointing"):
                 cmd += ["--pointing", json.dumps(cfg["pointing"], ensure_ascii=False)]
             if cfg.get("constraints"):

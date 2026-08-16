@@ -161,6 +161,9 @@ CSV 是"数据底座"，Excel 是"展示层"：程序读 CSV，人看 Excel。
   选 ATK 后可再选传感器类型（矩形/半功率/复杂圆锥/SAR，自研引擎仅支持视场半角）
 - ⑤页选 ATK 后还可配置"传感器指向"（Fixed 全姿态方法 / Targeted 目标跟踪 /
   GrazingAlt 入射高度 / External 外部指向文件；Spinning 暂不可用）与"约束"
+
+- ⑤页已重构为单栏：覆盖引擎置顶（默认 ATK）；自研/ATK 参数区按引擎差异化显示；
+  ATK 支持逐星参数表（视场/仰角/类型/参数）与约束全 GUI 编辑（不再用 JSON）
   （太阳高度角 / 方位角 / 距离 / 视线 + 高级 JSON 透传，params 与官方
   SetConstraint 命令参数一致）
 - CLI：`sat select 夹 --engine atk ...` 或 `sat run ... --engine atk`

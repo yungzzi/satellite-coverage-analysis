@@ -38,6 +38,7 @@ import query_coverage as qc
 import satellite_loader as sl
 import satellite_selection as ss
 import validate_loader
+import atk_ui as aui
 
 # 覆盖分析的输出写相对路径 "output/"，把工作目录固定到项目根，避免写错位置
 os.chdir(str(sl.PROJECT_ROOT))
@@ -522,6 +523,86 @@ def _render_atk_sat_editor(cov_sats) -> list:
             st.rerun()
         st.caption(f"当前 {len(rows)} 行逐星覆盖。")
         return rows
+
+
+def _atk_cfg_file() -> Path:
+    p = sl.PROJECT_ROOT / "data" / "atk_sat_config.toml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _tq(s) -> str:
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _cfg_to_toml_lines(cfg: dict, prefix: str) -> list:
+    lines = []
+    if cfg.get("sensor_type"):
+        lines.append(f"{prefix}sensor_type = {_tq(cfg['sensor_type'])}")
+    if cfg.get("sensor_params"):
+        lines.append(f"{prefix}sensor_params = ['"
+                     + ", ".join(repr(float(x)) for x in cfg["sensor_params"])
+                     + "]")
+    if cfg.get("pointing"):
+        pt = cfg["pointing"]
+        inner = []
+        for k, v in pt.items():
+            if isinstance(v, list):
+                inner.append(f"{k} = [" + ", ".join(repr(float(x)) for x in v) + "]")
+            elif isinstance(v, str):
+                inner.append(f"{k} = {_tq(v)}")
+            else:
+                inner.append(f"{k} = {repr(float(v))}")
+        lines.append(f"{prefix}pointing = {{ " + ", ".join(inner) + " }")
+    for c in cfg.get("constraints") or []:
+        lines.append(f"{prefix}[[constraints]]")
+        lines.append(f"{prefix}object = {_tq(c['object'])}")
+        lines.append(f"{prefix}name = {_tq(c['name'])}")
+        lines.append(f"{prefix}params = {_tq(c['params'])}")
+    return lines
+
+
+def _persist_atk_cfg(global_cfg=None, sat_cfgs=None) -> None:
+    g = dict(global_cfg) if global_cfg is not None else (st.session_state.get("atk_global_cfg") or {})
+    s = dict(sat_cfgs) if sat_cfgs is not None else (st.session_state.get("atk_sat_cfgs") or {})
+    lines = ["# ATK 传感器配置（程序维护，可手改）", ""]
+    lines.append("[global]")
+    lines += _cfg_to_toml_lines(g, "")
+    lines.append("")
+    lines.append("[sats]")
+    for nid, c in s.items():
+        lines.append(f"[sats.{nid}]")
+        lines += _cfg_to_toml_lines(c, "")
+        lines.append("")
+    _atk_cfg_file().write_text("\n".join(lines), encoding="utf-8")
+
+
+def _load_atk_cfg() -> tuple:
+    p = _atk_cfg_file()
+    if not p.exists():
+        return {}, {}
+    import tomllib
+    try:
+        with open(p, "rb") as f:
+            d = tomllib.load(f)
+    except Exception:
+        return {}, {}
+    g = dict(d.get("global") or {})
+    s = {str(k): dict(v) for k, v in (d.get("sats") or {}).items()}
+    return g, s
+
+
+def _atk_sat_pool(cov_sats) -> list:
+    names = [_strip_collection_label(n) for n in cov_sats]
+    if not names:
+        return []
+    src = sl.collection_sources_dedup(names)
+    cfgs = st.session_state.get("atk_sat_cfgs") or {}
+    pool = []
+    for x in src:
+        pool.append({"norad": int(x["norad"]), "name": x["name"],
+                     "已配置": "●" if str(x["norad"]) in cfgs else ""})
+    return pool
 
 
 def _name_search(keyword: str) -> list:
@@ -1522,133 +1603,92 @@ if tab_analysis.open:
             st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。")
         _render_self_sensor_table(cov_sats, cov_sw_en)
     else:
+        if "atk_global_cfg" not in st.session_state or "atk_sat_cfgs" not in st.session_state:
+            _g0, _s0 = aui.load_cfg()
+            st.session_state.setdefault("atk_global_cfg", _g0)
+            st.session_state.setdefault("atk_sat_cfgs", _s0)
+        _g_cfg = st.session_state["atk_global_cfg"]
+        _sat_cfgs = st.session_state["atk_sat_cfgs"]
+
         with st.container(border=True):
-            st.markdown("**ATK 引擎参数**")
+            st.markdown("**ATK 全局设置（所有星的默认值）**")
             p0, p1 = st.columns(2)
-            cov_fov = p0.number_input("全局视场半角(°)（SimpleCone 用）", value=10.0, min_value=1.0,
-                                      max_value=89.0, step=1.0, key="cov_fov",
-                                      help="全局 SimpleCone 视场半角；逐星表可对单颗星覆盖")
-            cov_elev = p1.number_input("最小仰角(°)（额外地面站约束）", value=0.0, min_value=0.0,
-                                       max_value=85.0, step=1.0, key="cov_elev",
+            cov_fov = p0.number_input("全局视场半角(°)（SimpleCone 用）", value=10.0,
+                                      min_value=1.0, max_value=89.0, step=1.0,
+                                      key="cov_fov", help="全局 SimpleCone 视场半角；逐星可覆盖")
+            cov_elev = p1.number_input("最小仰角(°)（目标点额外约束）", value=0.0,
+                                       min_value=0.0, max_value=85.0, step=1.0,
+                                       key="cov_elev",
                                        help="加在目标点地面站上的最小仰角；SAR 想只用自己的仰角范围就填 0")
             st.session_state.setdefault("cov_sw_en", sl.load_sensor_swath_enabled())
             cov_sw_en = st.session_state["cov_sw_en"]
             cov_step = 1
             cov_refine = 1
-            cov_sensor_type = st.selectbox(
-                "传感器类型（全局）",
-                ["SimpleCone（默认）", "Rectangular（矩形）", "HalfPower（半功率）",
-                 "Conical（复杂圆锥）", "SAR"],
-                key="cov_sensor_type",
-                help="自研引擎只支持视场半角；ATK 引擎支持更多类型。SAR/HalfPower 自动走 XML 路线"
-                     "（ATK 4.0.1 的 Define 命令对这两类静默失效，已绕过）。")
-            _sensor_type = {
-                "SimpleCone（默认）": "SimpleCone",
-                "Rectangular（矩形）": "Rectangular",
-                "HalfPower（半功率）": "HalfPower",
-                "Conical（复杂圆锥）": "Conical",
-                "SAR": "SAR",
-            }[cov_sensor_type]
-            if cov_sensor_type == "Rectangular（矩形）":
-                _c1, _c2 = st.columns(2)
-                _v = _c1.number_input("垂直半角(°)", value=40.0, min_value=0.1, max_value=89.0,
-                                      step=1.0, key="cov_sensor_vh")
-                _h = _c2.number_input("水平半角(°)", value=60.0, min_value=0.1, max_value=89.0,
-                                      step=1.0, key="cov_sensor_hh")
-                _sensor_params = [_v, _h]
-            elif cov_sensor_type == "HalfPower（半功率）":
-                _c1, _c2 = st.columns(2)
-                _f = _c1.number_input("频率(GHz)", value=14.5, min_value=0.01, step=0.1,
-                                      key="cov_sensor_freq", help="半功率波束宽度由频率与天线直径计算")
-                _d = _c2.number_input("天线直径(m)", value=1.0, min_value=0.01, step=0.1,
-                                      key="cov_sensor_diam")
-                _sensor_params = [_f, _d]
-            elif cov_sensor_type == "Conical（复杂圆锥）":
-                _c1, _c2, _c3, _c4 = st.columns(4)
-                _inner = _c1.number_input("内锥半角(°)", value=0.0, min_value=0.0, max_value=89.0,
-                                          step=1.0, key="cov_sensor_inner")
-                _outer = _c2.number_input("外锥半角(°)", value=45.0, min_value=0.1, max_value=89.0,
-                                          step=1.0, key="cov_sensor_outer")
-                _minc = _c3.number_input("最小时钟角(°)", value=0.0, min_value=0.0, max_value=360.0,
-                                         step=5.0, key="cov_sensor_minc")
-                _maxc = _c4.number_input("最大时钟角(°)", value=360.0, min_value=0.0, max_value=360.0,
-                                         step=5.0, key="cov_sensor_maxc")
-                _sensor_params = [_inner, _outer, _minc, _maxc]
-            elif cov_sensor_type == "SAR":
-                _c1, _c2, _c3 = st.columns(3)
-                _mel = _c1.number_input("最小入射仰角(°)", value=12.0, min_value=0.0, max_value=89.0,
-                                        step=1.0, key="cov_sensor_mel")
-                _xel = _c2.number_input("最大入射仰角(°)", value=70.0, min_value=0.0, max_value=89.0,
-                                        step=1.0, key="cov_sensor_xel")
-                _alt = _c3.number_input("父高度(m)", value=550000.0, min_value=0.0, step=1000.0,
-                                        key="cov_sensor_alt")
-                _c4, _c5 = st.columns(2)
-                _fwd = _c4.number_input("前向排除角(°)", value=30.0, min_value=0.0, max_value=89.0,
-                                        step=1.0, key="cov_sensor_fwd")
-                _aft = _c5.number_input("后向排除角(°)", value=30.0, min_value=0.0, max_value=89.0,
-                                        step=1.0, key="cov_sensor_aft")
-                _sensor_params = [_mel, _xel, _fwd, _aft, _alt]
+            _g_panel = aui.panel("atk_g", allow_facility=True, initial=_g_cfg)
+            if st.button("保存全局设置为默认", key="btn_atk_global_save", type="primary"):
+                aui.persist(global_cfg=_g_panel)
+                st.session_state["atk_global_cfg"] = _g_panel
+                flash("已保存全局默认设置。", kind="success")
+            st.session_state["atk_global_cfg"] = _g_panel
+
+        with st.container(border=True):
+            st.markdown("**逐星配置（覆盖全局）**")
+            _pool = aui.sat_pool(cov_sats)
+            if not _pool:
+                st.caption("请先在上方「卫星来源」勾选收藏夹，这里会列出所有卫星；"
+                           "单击选中一颗星后在右侧配置。")
             else:
-                st.caption("SimpleCone：全局视场半角在上面；逐星表可对单颗星覆盖。")
-            _pointing = None
-            with st.expander("传感器指向（可选）", expanded=False):
-                _pt_mode = st.selectbox(
-                    "指向模式",
-                    ["天底（默认，不设置）", "Fixed 固定指向", "Targeted 目标指向",
-                     "GrazingAlt 入射高度", "External 外部指向文件", "Spinning 旋转（暂不可用）"],
-                    key="cov_pt_mode",
-                    help="Fixed=固定姿态偏置（侧摆）；Targeted=始终指向目标点（凝视观测）；"
-                         "GrazingAlt=入射高度指向；External=外部指向文件；"
-                         "Spinning 初始相位跨进程随机（已反馈官方），暂不可用。")
-                if _pt_mode == "Fixed 固定指向":
-                    _pt_method = st.selectbox(
-                        "姿态方法", ["YPR", "Euler", "Quaternion", "AzEl", "matrix"],
-                        key="cov_pt_fixed_method",
-                        help="YPR=偏航/俯仰/滚转（推荐，俯仰=侧摆）；Euler=欧拉角；"
-                             "Quaternion=四元数；AzEl=方位角/高度角；matrix=旋转矩阵。")
-                    _pt_params = _fixed_method_inputs(_pt_method, prefix="cov_pt_f")
-                    if _pt_params is not None:
-                        _pointing = {"type": "Fixed", "method": _pt_method, "params": _pt_params}
-                elif _pt_mode == "Targeted 目标指向":
-                    _pt_tmode = st.selectbox(
-                        "目标指向模式",
-                        ["Tracking（始终指向本页目标点）", "Fixed（目标点+固定姿态）"],
-                        key="cov_pt_tmode")
-                    if _pt_tmode.startswith("Tracking"):
-                        _pointing = {"type": "Targeted", "mode": "Tracking",
-                                     "target": "*/Facility/Hangzhou"}
+                _col_l, _col_r = st.columns([1, 2])
+                with _col_l:
+                    _df_pool = pd.DataFrame(_pool, columns=["norad", "name", "已配置"])
+                    _sel = st.dataframe(_df_pool, hide_index=True, on_select="rerun",
+                                        selection_mode="single-row", key="atk_sat_list")
+                    _sel_idx = list(_sel.selection.rows)
+                    _cur_norad = None
+                    if _sel_idx and _sel_idx[0] < len(_pool):
+                        _cur_norad = _pool[_sel_idx[0]]["norad"]
+                    st.caption("单击选中一颗星 → 右侧打开配置（仿 ATK 的列表+属性页）。")
+                with _col_r:
+                    if _cur_norad is None:
+                        st.caption("在左侧列表选中一颗星后在此配置。")
                     else:
-                        _pt_method = st.selectbox(
-                            "姿态方法", ["YPR", "Euler", "Quaternion", "AzEl", "matrix"],
-                            key="cov_pt_tfixed_method")
-                        _pt_params = _fixed_method_inputs(_pt_method, prefix="cov_pt_tf")
-                        if _pt_params is not None:
-                            _pointing = {"type": "Targeted", "mode": "Fixed",
-                                         "target": "*/Facility/Hangzhou",
-                                         "method": _pt_method, "params": _pt_params}
-                elif _pt_mode == "GrazingAlt 入射高度":
-                    _c1, _c2 = st.columns(2)
-                    _az = _c1.number_input("方位角(°)", value=90.0, min_value=0.0, max_value=360.0,
-                                           step=1.0, key="cov_pt_gaz")
-                    _alt = _c2.number_input("入射高度(m)", value=10000.0, min_value=0.0,
-                                            step=1000.0, key="cov_pt_galt")
-                    _pointing = {"type": "GrazingAlt", "azimuth": float(_az),
-                                 "altitude": float(_alt)}
-                elif _pt_mode == "External 外部指向文件":
-                    _pt_file = st.file_uploader(
-                        "指向文件（.sp）", type=["sp", "txt"], key="cov_pt_file",
-                        help="ATK 外部指向文件（.sp）格式见 ATK 官方文档；"
-                             "选文件后保存到 data/user_files/ 再传给 ATK。")
-                    if _pt_file is not None:
-                        _dst = sl.USER_FILES_DIR / f"pointing_{int(time.time())}_{_pt_file.name}"
-                        _dst.write_bytes(_pt_file.getvalue())
-                        _pointing = {"type": "External",
-                                     "file": str(_dst).replace("\\", "/")}
-                        st.caption(f"已保存指向文件：{_dst.name}")
-                elif _pt_mode == "Spinning 旋转（暂不可用）":
-                    st.warning("Spinning 初始相位跨进程随机，已反馈官方，暂不可用。")
-            _constraints = _render_atk_constraints_editor()
-            _atk_sat_overrides = _render_atk_sat_editor(cov_sats)
+                        _cur_cfg = _sat_cfgs.get(str(_cur_norad), {})
+                        st.markdown(f"**NORAD {_cur_norad} 的设置**")
+                        st.caption("此处只对该星生效；空项表示用全局设置。")
+                        _panel = aui.panel(f"atk_s_{_cur_norad}", allow_facility=False,
+                                           initial=_cur_cfg)
+                        _b1, _b2 = st.columns(2)
+                        if _b1.button("保存本星配置", key="btn_atk_sat_save", type="primary"):
+                            _sat_cfgs[str(_cur_norad)] = _panel
+                            st.session_state["atk_sat_cfgs"] = _sat_cfgs
+                            aui.persist(sat_cfgs=_sat_cfgs)
+                            flash(f"已保存 NORAD {_cur_norad} 的配置。", kind="success")
+                        if _b2.button("清除本星配置（回退全局）", key="btn_atk_sat_clear"):
+                            _sat_cfgs.pop(str(_cur_norad), None)
+                            st.session_state["atk_sat_cfgs"] = _sat_cfgs
+                            aui.persist(sat_cfgs=_sat_cfgs)
+                            flash(f"已清除 NORAD {_cur_norad} 的配置。", kind="success")
+
+            _atk_sat_overrides = []
+            for _nid, _c in _sat_cfgs.items():
+                _row = {"norad": int(_nid)}
+                if _c.get("sensor_type") and _c["sensor_type"] != "SimpleCone":
+                    _row["sensor_type"] = _c["sensor_type"]
+                    if _c.get("sensor_params"):
+                        _row["sensor_params"] = _c["sensor_params"]
+                elif _c.get("sensor_params") and len(_c["sensor_params"]) == 1:
+                    _row["fov_half_angle_deg"] = _c["sensor_params"][0]
+                if _c.get("pointing"):
+                    _row["pointing"] = _c["pointing"]
+                if _c.get("constraints"):
+                    _row["constraints"] = _c["constraints"]
+                _atk_sat_overrides.append(_row)
+            _sensor_type = _g_panel["sensor_type"]
+            _sensor_params = _g_panel["sensor_params"] if _g_panel["sensor_type"] != "SimpleCone" else None
+            _pointing = _g_panel["pointing"]
+            _constraints = _g_panel["constraints"]
+            if _g_panel["sensor_type"] == "SimpleCone" and _g_panel.get("sensor_params"):
+                cov_fov = _g_panel["sensor_params"][0]
 
     if st.button("开始覆盖分析", key="btn_cov_run", type="primary"):
         real_cols = [_strip_collection_label(n) for n in cov_sats]

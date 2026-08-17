@@ -867,10 +867,27 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   两遍一致。
 
 **约束全 GUI（去掉高级 JSON）**
-- 一行一条约束：启用 / 作用对象（目标点/每颗星传感器/每颗星）/ 约束类型（19 种全表）/
-  Min / Max / 附加参数；按类型自动拼 SetConstraint 参数（方位角必填 Min+Max、
-  开关类用 On/Off、排除角类用 Min 值）。
+- 约束页（§10.29 起改为 ATK 同款布局）：按作用对象分页签（目标点/每颗星传感器/每颗星），
+  每类约束=启用开关+输入框（Min/Max、On/Off 或单值规避角）；按类型自动拼 SetConstraint
+  参数（方位角必填 Min+Max、开关类用 On/Off、排除角类用单值）。
 - 实测：SunGroundElevAngle Min 80 → 0 窗口（与 JSON 透传一致）。
+
+### 10.29 约束页改为 ATK 同款「开关+输入框」布局（2026-08-17，codex/constraints-atk-style）
+
+- 去掉 data_editor 表格，改为仿 ATK 约束属性页：作用对象=页签（全局=目标点/每颗星传感器/
+  每颗星；逐星=该星传感器/该星），每组内按 ATK 文档分「基本约束」（方位角/仰角/距离/
+  三种变化率/角变化率/高度/传播延时/视线/视场/地形）与「光照约束」（太阳仰角/太阳地平仰角/
+  月球仰角/四种太阳月球规避角）。
+- 每类约束：启用开关 + Min/Max（minmax 型，默认值与 ATK DefaultSensor.atk 一致：
+  如仰角 0~90°、距离 0~4e7 m、高度 0~2e8 m）；视线/视场/地形 = On/Off；
+  规避角 = 单值（最小夹角）。
+- 参数串保持与 SetConstraint 文档一致（`Min X Max Y` / `On|Off` / 单值，
+  方位角必须同时给 Min/Max，支持 ExcludeIntervals/IncludeIntervals 附加）；
+  数值统一普通十进制（避免科学计数法进命令）。
+- 兼容旧配置：已有 {object,name,params} 照常解析回显；旧默认「目标点（逐星=该星传感器）
+  太阳地平仰角 Min 10」保留。时间/通信约束仍不实现（页面注明）。
+- 验证：AppTest 渲染 3+2 页签无异常；旧参数串→控件→重建参数串逐条一致；
+  勾选/填值/取消勾选后输出与预期一致。
 
 ### 10.25 不分组单实例逐传感器 + GUI 两栏 + Targeted 误判纠正（2026-08-16，codex/atk-persat-unified）
 

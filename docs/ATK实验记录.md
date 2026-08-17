@@ -1084,3 +1084,21 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 
 - GUI：Spinning 指向新增“旋转星分片并行（各片相位独立随机，更快）”勾选框，默认关；
   指向 TOML 持久化支持 bool 字段。
+
+### 10.32 逐星卫星姿态（AddAttitude）尝试：Connect 命令层未实现（2026-08-18）
+
+**目标**：给每颗星配置“整星姿态”（卫星本体偏置，如 YPR 俯仰 30°），与传感器级指向解耦。
+
+**实测（rc.5 Connect）**
+- `AddAttitude <Sat> YPR "<t0>" <seq> y p r`、`Attitude`、`GetAttitude`：**全部 NACK**；
+- 同路径下 `Position`、`SetState` 也 NACK（卫星命令族整体缺失，文档有、实现无）；
+- 仅 `SetAttitude <Sat> Standard` ACK（只设姿态模式，不带数据）。
+- 这与当初 Targeted / SAR Define 的情况一致：Connect 命令层未实现，只能走 **XML 注入**。
+
+**XML 结构线索**：`DefaultSatellite.atk` 里有 `<Attitude><AttPropType>0</AttPropType><AttGen>
+<AttGenType>0</AttGenType><LHAttOffsetQuats>1</LHAttOffsetQuats><LHAttOffsetQuatx>0</LHAttOffsetQuatx>…`
+，但全安装示例里没有非默认 `AttGenType` 的存档，非默认写法无 ground truth。
+
+**结论与下一步**：本分支不保留无效代码（已还原）。要做整星姿态，需要用户像 Targeted 那次一样：
+在 ATK GUI 里给卫星设一个姿态（如固定姿态 YPR 30°）保存场景，把 .atk 给我；读 XML 后按
+“Save → 改 <Attitude> → Load”路线实现（与 SAR/Pattern、Targeted 同款）。

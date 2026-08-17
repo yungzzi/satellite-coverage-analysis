@@ -267,6 +267,8 @@ def main():
     ap.add_argument("--area-fov", type=float, default=45.0, help="区域分析传感器半角（度）")
     ap.add_argument("--per-shard", type=int, default=1000, help="每片卫星数")
     ap.add_argument("--max-inst", type=int, default=None, help="并行实例上限（默认自动）")
+    ap.add_argument("--spin-parallel", action="store_true",
+                    help="旋转指向允许普通分片并行（各片相位独立随机，更快；默认聚为单实例保持一致相位）")
     ap.add_argument("--retries", type=int, default=2, help="失败片重试次数")
     ap.add_argument("--shard-timeout", type=int, default=1200, help="单片超时（秒）")
     ap.add_argument("--out-dir", default="output")
@@ -296,20 +298,40 @@ def main():
             print(f"警告：sat_cfgs 数量 {len(sat_cfgs)} ≠ 卫星数 {len(recs)}，按序号尽量对齐", flush=True)
 
     pointing = json.loads(args.pointing) if args.pointing else None
-    has_spinning = (pointing or {}).get("type") == "Spinning" or any(
-        (c or {}).get("pointing", {}).get("type") == "Spinning" for c in (sat_cfgs or []))
-    if has_spinning:
-        # Spinning 初始相位跨实例不锚定（§10.18）：强制单实例单分片，保证一次分析内相位一致、可复现
-        per_shard = len(recs)
-        max_inst = 1
-        if args.per_shard != len(recs) or args.max_inst not in (None, 1):
-            print("提示：检测到 Spinning 旋转指向，为保持相位一致已强制单实例单分片", flush=True)
+    spin_flags = [False] * len(recs)
+    if (pointing or {}).get("type") == "Spinning":
+        spin_flags = [True] * len(recs)
     else:
-        per_shard = args.per_shard
-        max_inst = decide_max_inst(args.max_inst)
-    shards = make_shards(recs, per_shard)
+        for i, c in enumerate(sat_cfgs or []):
+            if (c or {}).get("pointing", {}).get("type") == "Spinning":
+                spin_flags[i] = True
+    n_spin = sum(spin_flags)
+    # Spinning 旋转指向：初始相位跨实例不锚定（§10.18）。
+    # 默认（方案A）：所有旋转星聚为 1 个实例（相位一致、可复现），非旋转星按 per_shard 并行；
+    # 开启 --spin-parallel 或指向参数 parallel=true（方案B）：旋转星也普通分片，各片相位独立随机。
+    spin_parallel = bool(args.spin_parallel) or bool((pointing or {}).get("parallel")) or any(
+        (c or {}).get("pointing", {}).get("parallel") for c in (sat_cfgs or []))
+    if n_spin and not spin_parallel:
+        spin_idx = [i for i, f in enumerate(spin_flags) if f]
+        nonspin_idx = [i for i, f in enumerate(spin_flags) if not f]
+        shard_indices = [spin_idx]
+        if nonspin_idx:
+            shard_indices += [nonspin_idx[k:k + args.per_shard]
+                              for k in range(0, len(nonspin_idx), args.per_shard)]
+        if n_spin == len(recs):
+            print("提示：全部卫星为旋转指向，已聚为单个实例（相位一致）", flush=True)
+        else:
+            print(f"提示：旋转星 {n_spin} 颗已聚为 1 个实例（相位一致），"
+                  f"其余 {len(nonspin_idx)} 颗按每片≤{args.per_shard} 并行", flush=True)
+    else:
+        if n_spin:
+            print("提示：旋转星按普通分片并行，各片相位独立随机（代表性实现）", flush=True)
+        shard_indices = [list(range(k, min(k + args.per_shard, len(recs))))
+                         for k in range(0, len(recs), args.per_shard)]
+    shards = [[recs[i] for i in idx] for idx in shard_indices]
     n_shards = len(shards)
-    print(f"分片: {n_shards} 片（每片≤{per_shard}）| 并行上限: {max_inst} | "
+    max_inst = decide_max_inst(args.max_inst)
+    print(f"分片: {n_shards} 片 | 并行上限: {max_inst} | "
           f"可用内存: {avail_memory_gb():.1f} GB", flush=True)
     print(f"传感器: {args.sensor_type} {parse_sensor_params(args.sensor_params)} "
           f"min_elev={args.min_elev} angles={'有' if angles else '无'}", flush=True)
@@ -320,14 +342,12 @@ def main():
     shard_files = []
     shard_angles = []
     shard_cfgs = []
-    start = 0
-    for i, sh in enumerate(shards):
+    for i, (sh, idx) in enumerate(zip(shards, shard_indices)):
         p = os.path.join(shard_dir, f"shard_{i}.tle")
         to_two_line_file(sh, p)
         shard_files.append(os.path.abspath(p))
-        shard_angles.append(angles[start:start + len(sh)] if angles else None)
-        shard_cfgs.append(sat_cfgs[start:start + len(sh)] if sat_cfgs else None)
-        start += len(sh)
+        shard_angles.append([angles[j] for j in idx] if angles else None)
+        shard_cfgs.append([sat_cfgs[j] for j in idx] if sat_cfgs else None)
 
     cfg = {**vars(args), "fov": args.fov,
            "sensor_type": args.sensor_type,

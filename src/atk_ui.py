@@ -8,17 +8,41 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pandas as pd
 import streamlit as st
 
 import satellite_loader as sl
 
-ATK_CONSTRAINT_OPTIONS = [
-    "AzimuthAngle", "ElevationAngle", "Range",
-    "AzimuthRate", "ElevationRate", "RangeRate", "AngularRate",
-    "Altitude", "PropagationDelay", "LineOfSight", "fieldofview", "TerrainMask",
-    "SunElevationAngle", "SunGroundElevAngle", "LunarElevationAngle",
-    "LOSSunExclusion", "LOSLunarExclusion", "BSSunExclusion", "BSLunarExclusion",
+# 约束元数据：名称 → (中文名, 控件类型, 单位, (默认Min, 默认Max), 步长)
+# 控件类型：minmax=开关+Min/Max；onoff=开关+On/Off；single=开关+单值（规避角）
+# 类型清单与默认值对齐 ATK「约束配置」文档（基本/光照），时间/通信约束暂不实现。
+CONSTRAINT_META = {
+    "AzimuthAngle": ("方位角", "minmax", "°", (-180.0, 180.0), 1.0),
+    "ElevationAngle": ("仰角", "minmax", "°", (0.0, 90.0), 1.0),
+    "Range": ("距离", "minmax", "m", (0.0, 4e7), 1000.0),
+    "AzimuthRate": ("方位角变化率", "minmax", "°/s", (-5.0, 5.0), 0.1),
+    "ElevationRate": ("仰角变化率", "minmax", "°/s", (-5.0, 5.0), 0.1),
+    "RangeRate": ("距离变化率", "minmax", "m/s", (-5000.0, 5000.0), 10.0),
+    "AngularRate": ("角变化率", "minmax", "°/s", (0.0, 5.0), 0.1),
+    "Altitude": ("高度", "minmax", "m", (0.0, 2e8), 1000.0),
+    "PropagationDelay": ("传播延时", "minmax", "s", (0.0, 3600.0), 1.0),
+    "LineOfSight": ("视线", "onoff", "", (0.0, 1.0), 1.0),
+    "fieldofview": ("视场", "onoff", "", (0.0, 1.0), 1.0),
+    "TerrainMask": ("地形", "onoff", "", (0.0, 1.0), 1.0),
+    "SunElevationAngle": ("太阳仰角", "minmax", "°", (0.0, 90.0), 1.0),
+    "SunGroundElevAngle": ("太阳地平仰角", "minmax", "°", (0.0, 90.0), 1.0),
+    "LunarElevationAngle": ("月球仰角", "minmax", "°", (0.0, 90.0), 1.0),
+    "LOSSunExclusion": ("视线太阳规避角", "single", "°", (0.0, 180.0), 1.0),
+    "LOSLunarExclusion": ("视线月球规避角", "single", "°", (0.0, 180.0), 1.0),
+    "BSSunExclusion": ("视轴太阳规避角", "single", "°", (0.0, 180.0), 1.0),
+    "BSLunarExclusion": ("视轴月球规避角", "single", "°", (0.0, 180.0), 1.0),
+}
+CONSTRAINT_GROUPS = [
+    ("基本约束", ["AzimuthAngle", "ElevationAngle", "Range", "AzimuthRate",
+                 "ElevationRate", "RangeRate", "AngularRate", "Altitude",
+                 "PropagationDelay", "LineOfSight", "fieldofview", "TerrainMask"]),
+    ("光照约束", ["SunElevationAngle", "SunGroundElevAngle", "LunarElevationAngle",
+                "LOSSunExclusion", "LOSLunarExclusion",
+                "BSSunExclusion", "BSLunarExclusion"]),
 ]
 
 
@@ -214,101 +238,137 @@ def pointing_ui(prefix: str) -> dict | None:
     return None
 
 
-def _params_to_row(c) -> dict:
-    """把已保存的 {object,name,params} 尽量还原成表格行。"""
-    obj = c.get("object", "sensor")
-    obj_label = {"facility": "目标点", "sensor": "该星传感器", "satellite": "该星"}.get(obj, "该星传感器")
-    name = c.get("name", "")
-    params = (c.get("params") or "").strip()
-    mn = mx = None
-    extra = ""
-    m = re.match(r"Min\s+([-\d.eE]+)", params)
+def _parse_constraint_state(name: str, params: str) -> dict:
+    """把已保存的 {name, params} 还原为控件状态 {en,min,max,onoff,val,extra}。"""
+    s = (params or "").strip()
+    st0 = {"en": True, "min": None, "max": None, "onoff": "On", "val": None, "extra": ""}
+    if not s:
+        return st0
+    if s in ("On", "Off"):
+        st0["onoff"] = s
+        return st0
+    m = re.search(r"Min\s+([-\d.eE]+)", s)
     if m:
-        mn = float(m.group(1))
-    m = re.search(r"Max\s+([-\d.eE]+)", params)
+        st0["min"] = float(m.group(1))
+    m = re.search(r"Max\s+([-\d.eE]+)", s)
     if m:
-        mx = float(m.group(1))
-    if name in ("LineOfSight", "fieldofview", "TerrainMask"):
-        extra = params if params in ("On", "Off") else "On"
-    elif params and mn is None:
-        try:
-            mn = float(params.split()[0])
-        except (ValueError, IndexError):
-            extra = params
-    elif "ExcludeIntervals" in params or "IncludeIntervals" in params:
-        extra = "ExcludeIntervals" if "ExcludeIntervals" in params else "IncludeIntervals"
-    return {"enable": True, "object": obj_label, "type": name,
-            "min": mn, "max": mx, "extra": extra}
+        st0["max"] = float(m.group(1))
+    if "ExcludeIntervals" in s:
+        st0["extra"] = "ExcludeIntervals"
+    elif "IncludeIntervals" in s:
+        st0["extra"] = "IncludeIntervals"
+    if st0["min"] is None and st0["max"] is None:
+        m = re.match(r"\s*([-\d.eE]+)\s*$", s)
+        if m:
+            st0["val"] = float(m.group(1))
+    return st0
+
+
+def _fmt_num(v) -> str:
+    """数字转普通十进制字符串（避免 4e+07 这类科学计数法）。"""
+    s = f"{float(v):f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s
+
+
+def _build_constraint_params(name: str, st0: dict) -> str:
+    """把控件状态还原为 SetConstraint 参数串（与 ATK 文档一致）。"""
+    kind = CONSTRAINT_META[name][1]
+    if kind == "onoff":
+        return st0.get("onoff") or "On"
+    if kind == "single":
+        v = st0.get("val")
+        return "0" if v is None else _fmt_num(v)
+    parts = []
+    if st0.get("min") is not None:
+        parts.append(f"Min {_fmt_num(st0['min'])}")
+    if st0.get("max") is not None:
+        parts.append(f"Max {_fmt_num(st0['max'])}")
+    if name == "AzimuthAngle" and len(parts) < 2:
+        parts = ["Min 0", "Max 360"]  # ATK 要求方位角必须同时给 Min/Max
+    if not parts and not st0.get("extra"):
+        return ""
+    params = " ".join(parts)
+    if st0.get("extra"):
+        params = (params + " " + st0["extra"]).strip()
+    return params
 
 
 def constraints_ui(prefix: str, allow_facility: bool,
                    initial_constraints=None) -> list:
-    """约束输入（基本+光照），一行一条。"""
-    st.caption("一行一条约束：作用对象 + 约束类型 + Min/Max；开关类（视线/视场/地形）在附加参数填 On/Off；"
-               "排除角类把角度填在 Min 列。")
-    key = f"{prefix}_cons_rows"
-    if key not in st.session_state:
-        if initial_constraints:
-            st.session_state[key] = [_params_to_row(c) for c in initial_constraints]
-        else:
-            st.session_state[key] = [
-                {"enable": True, "object": "目标点" if allow_facility else "该星传感器",
-                 "type": "SunGroundElevAngle", "min": 10.0, "max": None, "extra": ""}]
-    df = pd.DataFrame(st.session_state[key],
-                      columns=["enable", "object", "type", "min", "max", "extra"])
-    df["enable"] = df["enable"].fillna(True).astype(bool)
-    df["object"] = df["object"].astype("string")
-    df["type"] = df["type"].astype("string")
-    df["min"] = pd.to_numeric(df["min"], errors="coerce")
-    df["max"] = pd.to_numeric(df["max"], errors="coerce")
-    df["extra"] = df["extra"].fillna("").astype("string")
-    objs = (["目标点", "每颗星传感器", "每颗星"] if allow_facility
-            else ["该星传感器", "该星"])
-    edited = st.data_editor(
-        df, key=f"{prefix}_cons_editor", num_rows="dynamic", hide_index=True,
-        column_config={
-            "enable": st.column_config.CheckboxColumn("启用"),
-            "object": st.column_config.SelectboxColumn("作用对象", options=objs),
-            "type": st.column_config.SelectboxColumn("约束类型", options=ATK_CONSTRAINT_OPTIONS),
-            "min": st.column_config.NumberColumn("Min 值", format="%.3f"),
-            "max": st.column_config.NumberColumn("Max 值", format="%.3f"),
-            "extra": st.column_config.TextColumn(
-                "附加参数", help='如 "ExcludeIntervals" / "On" / "Off"'),
-        },
-    )
-    obj_map = {"目标点": "facility", "每颗星传感器": "sensor", "每颗星": "satellite",
-               "该星传感器": "sensor", "该星": "satellite"}
+    """约束输入（仿 ATK 约束页）：按作用对象分页签，每类约束=启用开关+输入框。"""
+    st.caption("仿 ATK 约束页：按作用对象分页签，每类约束一个启用开关，勾选后填参数。"
+               "角度单位 °、距离 m、时间 s；方位角必须同时填 Min 和 Max。")
+    scopes = ([("facility", "目标点"), ("sensor", "每颗星传感器"), ("satellite", "每颗星")]
+              if allow_facility else [("sensor", "该星传感器"), ("satellite", "该星")])
+    init = {}
+    for c in initial_constraints or []:
+        obj = c.get("object", "sensor")
+        name = c.get("name", "")
+        if name in CONSTRAINT_META:
+            init[(obj, name)] = _parse_constraint_state(name, c.get("params", ""))
+    if not initial_constraints:
+        # 保持旧默认：目标点（逐星面板=该星传感器）太阳地平仰角 ≥10°
+        d_obj = "facility" if allow_facility else "sensor"
+        init[(d_obj, "SunGroundElevAngle")] = _parse_constraint_state(
+            "SunGroundElevAngle", "Min 10")
+
     rows = []
-    for _, r in edited.iterrows():
-        if not r.get("enable"):
-            continue
-        t = (r.get("type") or "").strip()
-        o = obj_map.get(r.get("object"), "sensor")
-        if not t:
-            continue
-        mn, mx = r.get("min"), r.get("max")
-        mn_s = None if mn is None or pd.isna(mn) else f"{float(mn):g}"
-        mx_s = None if mx is None or pd.isna(mx) else f"{float(mx):g}"
-        ex = (r.get("extra") or "").strip()
-        if t == "AzimuthAngle":
-            params = f"Min {mn_s} Max {mx_s}" if (mn_s and mx_s) else "Min 0 Max 360"
-            if ex:
-                params += " " + ex
-        elif t in ("LineOfSight", "fieldofview", "TerrainMask"):
-            params = ex or "On"
-        elif t in ("LOSSunExclusion", "LOSLunarExclusion",
-                   "BSSunExclusion", "BSLunarExclusion"):
-            params = mn_s or "0"
-        else:
-            parts = []
-            if mn_s:
-                parts.append(f"Min {mn_s}")
-            if mx_s:
-                parts.append(f"Max {mx_s}")
-            params = " ".join(parts)
-            if ex:
-                params += " " + ex
-        rows.append({"object": o, "name": t, "params": params})
+    tabs = st.tabs([lab for _, lab in scopes])
+    for tab, (scope, _label) in zip(tabs, scopes):
+        with tab:
+            for group_title, names in CONSTRAINT_GROUPS:
+                st.markdown(f"**{group_title}**")
+                for name in names:
+                    label, kind, unit, defaults, step = CONSTRAINT_META[name]
+                    base = f"{prefix}_c_{scope}_{name}"
+                    s0 = init.get((scope, name), {})
+                    title = label + (f"（{unit}）" if unit else "")
+                    if kind == "minmax":
+                        c0, c1, c2, c3 = st.columns([1.25, 1.0, 1.0, 0.85])
+                        en = c0.checkbox(title, value=bool(s0.get("en", False)),
+                                         key=f"{base}_en")
+                        mn = c1.number_input(
+                            "Min" + (f"（{unit}）" if unit else ""),
+                            value=s0.get("min") if s0.get("min") is not None else defaults[0],
+                            step=step, disabled=not en, key=f"{base}_min")
+                        mx = c2.number_input(
+                            "Max" + (f"（{unit}）" if unit else ""),
+                            value=s0.get("max") if s0.get("max") is not None else defaults[1],
+                            step=step, disabled=not en, key=f"{base}_max")
+                        ex_opts = ["", "ExcludeIntervals", "IncludeIntervals"]
+                        ex_i = ex_opts.index(s0["extra"]) if s0.get("extra") in ex_opts else 0
+                        ex = c3.selectbox("附加", ex_opts, index=ex_i,
+                                          disabled=not en, key=f"{base}_extra")
+                        if en:
+                            p = _build_constraint_params(
+                                name, {"min": float(mn), "max": float(mx), "extra": ex})
+                            if p:
+                                rows.append({"object": scope, "name": name, "params": p})
+                    elif kind == "onoff":
+                        c0, c1 = st.columns([1.25, 0.85])
+                        en = c0.checkbox(title, value=bool(s0.get("en", False)),
+                                         key=f"{base}_en")
+                        oo = c1.selectbox("状态", ["On", "Off"],
+                                          index=0 if s0.get("onoff", "On") == "On" else 1,
+                                          disabled=not en, key=f"{base}_onoff")
+                        if en:
+                            rows.append({"object": scope, "name": name, "params": oo})
+                    else:  # single：规避角
+                        c0, c1 = st.columns([1.25, 0.85])
+                        en = c0.checkbox(title, value=bool(s0.get("en", False)),
+                                         key=f"{base}_en")
+                        val = c1.number_input(
+                            "最小夹角（°）",
+                            value=s0.get("val") if s0.get("val") is not None else defaults[0],
+                            step=step, disabled=not en, key=f"{base}_val")
+                        if en:
+                            rows.append({"object": scope, "name": name,
+                                         "params": _build_constraint_params(
+                                             name, {"val": float(val)})})
+    st.caption("时间约束（开始/结束/时长/时段）与通信约束暂未实现；"
+               "通信约束仅适用于发射/接收对象，本软件不涉及。")
     st.caption(f"当前启用 {len(rows)} 条约束。")
     return rows
 

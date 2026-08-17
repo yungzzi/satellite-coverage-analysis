@@ -295,10 +295,21 @@ def main():
         if len(sat_cfgs) != len(recs):
             print(f"警告：sat_cfgs 数量 {len(sat_cfgs)} ≠ 卫星数 {len(recs)}，按序号尽量对齐", flush=True)
 
-    shards = make_shards(recs, args.per_shard)
+    pointing = json.loads(args.pointing) if args.pointing else None
+    has_spinning = (pointing or {}).get("type") == "Spinning" or any(
+        (c or {}).get("pointing", {}).get("type") == "Spinning" for c in (sat_cfgs or []))
+    if has_spinning:
+        # Spinning 初始相位跨实例不锚定（§10.18）：强制单实例单分片，保证一次分析内相位一致、可复现
+        per_shard = len(recs)
+        max_inst = 1
+        if args.per_shard != len(recs) or args.max_inst not in (None, 1):
+            print("提示：检测到 Spinning 旋转指向，为保持相位一致已强制单实例单分片", flush=True)
+    else:
+        per_shard = args.per_shard
+        max_inst = decide_max_inst(args.max_inst)
+    shards = make_shards(recs, per_shard)
     n_shards = len(shards)
-    max_inst = decide_max_inst(args.max_inst)
-    print(f"分片: {n_shards} 片（每片≤{args.per_shard}）| 并行上限: {max_inst} | "
+    print(f"分片: {n_shards} 片（每片≤{per_shard}）| 并行上限: {max_inst} | "
           f"可用内存: {avail_memory_gb():.1f} GB", flush=True)
     print(f"传感器: {args.sensor_type} {parse_sensor_params(args.sensor_params)} "
           f"min_elev={args.min_elev} angles={'有' if angles else '无'}", flush=True)
@@ -322,7 +333,7 @@ def main():
            "sensor_type": args.sensor_type,
            "sensor_params": parse_sensor_params(args.sensor_params),
            "min_elev": args.min_elev,
-           "pointing": json.loads(args.pointing) if args.pointing else None,
+           "pointing": pointing,
            "constraints": json.loads(args.constraints) if args.constraints else None}
     all_results = {}
     failed = []

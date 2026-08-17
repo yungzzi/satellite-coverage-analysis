@@ -1037,3 +1037,26 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   （00:49:41），不再等于固定 550km（00:46:12）；逐星覆盖路径结果一致。
 - 语义说明：近圆轨道下平均轨道高度≈实际高度；椭圆轨道是近似（仍远好于全局固定 550km）。
   GUI 勾选提示与结果 warning 均已注明“按 TLE 平均轨道高度近似，待官方修复后切换真跟踪”。
+
+### 10.30 Spinning 旋转指向：单实例方案落地（2026-08-17 晚）
+
+**背景**：§10.18 定案 Spinning 初始相位跨实例不锚定（ASLR 相关），GUI/Connect 均无法锚定。
+用户拍板尝试“全部放进同一个 ATK 实例”的兜底方案：利用“同实例内相位确定、结果可复现”的性质。
+
+**实测（2 星 × 8h × 杭州，SimpleCone45 + Spinning 0/-90/30° Continuous 6°/s，offset 360）**
+- 同一实例内连续算 3 次（含 Reset 后重算）：**逐毫秒完全一致**（1 vs 2、1 vs 3 均 True）。
+- 同一配置两个独立实例（生产 runner 路径，提权真机）：19 vs 18 窗口，首窗 00:47:41 vs 00:47:17
+  ——跨实例漂移在生产路径同样存在，符合 §10.18 结论。
+
+**落地**
+- worker：`build_point_cmd` 新增 Spinning（Connect `Point ... Spinning <Az> <El> <ConeAngle>
+  {Continuous|Unidirectional|Bidirectional [Start Stop]} <Rate> <Offset>`），Define 与 XML 两条路线通用。
+- runner：检测到全局或逐星指向含 Spinning 时，**强制单实例单分片**（`per_shard=len(recs)`、
+  `max_inst=1`），保证一次分析内所有旋转传感器相位一致、可复现。
+- GUI（atk_ui）：重新开放“Spinning 旋转”指向（方位角/高度角/锥角/扫描模式/转速/初始偏差角，
+  单向/双向可填开始/结束角），并注明“同实例内可复现；跨实例初始相位不锚定，结果为代表性实现”。
+- AppTest：Continuous / Unidirectional 两种模式渲染与返回均正常。
+
+**使用口径**：Spinning 结果视为“一次代表性实现”——同一次分析内确定且可复现；不同次运行
+（新 ATK 进程）相位可能不同。需要跨运行稳定比较时，优先用相位不变量（总覆盖时长/覆盖率/重访），
+或按待办把“多进程取范围/聚合”做起来。

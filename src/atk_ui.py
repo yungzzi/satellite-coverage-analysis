@@ -180,16 +180,23 @@ def pointing_ui(prefix: str) -> dict | None:
             st.caption(f"已保存指向文件：{dst.name}")
             return {"type": "External", "file": str(dst).replace("\\", "/")}
     elif mode == "Targeted 目标指向":
-        aim = st.selectbox("瞄准模式", ["追踪（推荐）", "固定指向（待复核，暂不可用）"],
+        aim = st.selectbox("瞄准模式", ["追踪（推荐）", "固定指向"],
                            key=f"{prefix}_pt_aim",
-                           help="追踪=实时指向目标；固定指向=相对目标加固定姿态偏移（写法待 GUI 样例复核）。")
+                           help="追踪=实时指向目标；固定指向=相对目标方向叠加固定偏置姿态。")
         if aim.startswith("追踪"):
             trk = st.selectbox("追踪模式", ["接收", "发射", "转发"],
                                key=f"{prefix}_pt_trk",
                                help="按信号方向调整指向；对几何覆盖三种模式都指向目标，转发多用于中继。")
             tm = {"接收": 0, "发射": 1, "转发": 2}[trk]
-            return {"type": "Targeted", "track_mode": tm}
-        st.warning("固定指向（目标点+固定姿态偏移）的 XML 写法待 GUI 样例复核，暂不可用。")
+            return {"type": "Targeted", "target_mode": 0, "track_mode": tm}
+        om = st.selectbox("偏置姿态类型", ["YPR", "Euler", "Quaternion", "AzEl", "matrix"],
+                          key=f"{prefix}_pt_om",
+                          help="与 Fixed 指向同款姿态方法（欧拉角/四元数等）；在目标方向基础上叠加该偏移。")
+        op = fixed_method_inputs(om, prefix=f"{prefix}_pt_of")
+        if op is not None:
+            return {"type": "Targeted", "target_mode": 1,
+                    "offset_method": om, "offset_params": op}
+        st.warning("请完成偏置姿态参数输入。")
     elif "Spinning" in mode:
         st.warning("Spinning 初始相位跨进程随机，已反馈官方，暂不可用。")
     return None

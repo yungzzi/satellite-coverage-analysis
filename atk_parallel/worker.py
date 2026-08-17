@@ -164,8 +164,9 @@ def patch_pointing_targeted(xml_path: str, scenario: str, facility: str,
                            targets: dict, out_path: str) -> str:
     """把指定传感器（S{idx}）的 <Pointing> 改为目标指向（PointType=2）。
 
-    正确写法来自 GUI 场景传感器2（§10.26）：AssignedTargets 内是
-    <ObjectsPath Path="/Scenario/<场景名>/Facility/<地面站>"/>，不是内联文本路径。"""
+    targets[idx] = {"mode": 0, "track_mode": int}  → 追踪
+                 = {"mode": 1, "offset": "<Fixed>...</Fixed>"} → 固定指向+偏置
+    写法来自 GUI 场景传感器2（§10.26/§10.27）。"""
     with open(xml_path, "rb") as f:
         b = f.read()
     t = b.decode("gbk", errors="replace")
@@ -173,16 +174,24 @@ def patch_pointing_targeted(xml_path: str, scenario: str, facility: str,
 
     def repl(m):
         idx = int(m.group(2))
-        tm = targets.get(idx)
-        if tm is None:
+        spec = targets.get(idx)
+        if spec is None:
             return m.group(0)
         blk = m.group(0)
         blk = re.sub(r"<PointType>\d+</PointType>", "<PointType>2</PointType>", blk, count=1)
-        new_tgt = (
-            "<Targeted>\n<TargetMode>0</TargetMode>\n<Sequence>323</Sequence>\n"
-            f"<TrackingMode>{int(tm)}</TrackingMode>\n<AssignedTargets>\n"
-            f'<ObjectsPath Path="/Scenario/{scenario}/Facility/{facility}"/>\n'
-            "</AssignedTargets>\n</Targeted>")
+        if spec["mode"] == 0:
+            new_tgt = ("<Targeted>\n<TargetMode>0</TargetMode>\n<Sequence>323</Sequence>\n"
+                       + "<TrackingMode>" + str(int(spec["track_mode"]))
+                       + "</TrackingMode>\n<AssignedTargets>\n"
+                       + "<ObjectsPath Path=\"/Scenario/" + scenario
+                       + "/Facility/" + facility + "\"/>\n"
+                       + "</AssignedTargets>\n</Targeted>")
+        else:
+            new_tgt = ("<Targeted>\n<TargetMode>1</TargetMode>\n"
+                       + spec["offset"].rstrip() + "\n"
+                       + "<AssignedTargets>\n<ObjectsPath Path=\"/Scenario/" + scenario
+                       + "/Facility/" + facility + "\"/>\n"
+                       + "</AssignedTargets>\n</Targeted>")
         blk = re.sub(r"(?s)<Targeted>.*?</Targeted>", new_tgt, blk, count=1)
         return blk
 
@@ -238,19 +247,44 @@ def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
         cmd("Define", f'"*/Satellite/{nm}/Sensor/S{i}" SimpleCone {fov}')
     cmd("New", "/ Facility Hangzhou")
     cmd("SetPosition", f"*/Facility/Hangzhou Geodetic {float(cfg['lat'])} {float(cfg['lon'])} 0.0")
+    cal_idx = {}
+    for i in range(len(names)):
+        _pt = (eff_sat(i, cfg).get("pointing") or {})
+        if _pt.get("type") == "Targeted" and _pt.get("target_mode") == 1:
+            cname = f"CAL{i}"
+            cmd("New", f'/ "*/Satellite/{names[0]}/Sensor" {cname}')
+            cmd("Define", f'"*/Satellite/{names[0]}/Sensor/{cname}" SimpleCone {fov}')
+            _om = _pt.get("offset_method", "YPR")
+            _op = _pt.get("offset_params") or []
+            cmd("Point", f'"*/Satellite/{names[0]}/Sensor/{cname}" Fixed {_om} '
+                 + " ".join(str(x) for x in _op))
+            cal_idx[i] = cname
     cmd("Animate", "* Start")
     cmd("Animate", "* Reset")
     raw = os.path.join(tempfile.gettempdir(), f"xmlroute_raw_{port}.atk")
     cmd("Save", f'/ * "{raw.replace(chr(92), "/")}"')
     blocks = {}
     tgt = {}
+    raw_txt = ""
+    if any((eff_sat(j, cfg).get("pointing") or {}).get("type") == "Targeted"
+           for j in range(len(names))):
+        raw_txt = open(raw, "rb").read().decode("gbk", errors="replace")
     for i in range(len(names)):
         eff = eff_sat(i, cfg)
         if eff["type"] in XML_ROUTE_TYPES:
             blocks[i] = build_pattern_block(eff["type"], eff["params"])
         pt = eff.get("pointing") or {}
         if pt.get("type") == "Targeted":
-            tgt[i] = pt.get("track_mode", 2)
+            if pt.get("target_mode") == 1:
+                cname = cal_idx.get(i)
+                m = re.search(rf'(?s)<Sensor Name="{cname}"[^>]*>.*?(<Fixed>.*?</Fixed>)', raw_txt) \
+                    if cname else None
+                offset = m.group(1) if m else (
+                    "<Fixed>\n<Qs>1</Qs>\n<Qx>0</Qx>\n<Qy>0</Qy>\n<Qz>0</Qz>\n"
+                    "<PointingMethod>0</PointingMethod>\n<Sequence>323</Sequence>\n</Fixed>")
+                tgt[i] = {"mode": 1, "offset": offset}
+            else:
+                tgt[i] = {"mode": 0, "track_mode": pt.get("track_mode", 2)}
     try:
         out_path = raw
         if blocks:

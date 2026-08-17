@@ -942,3 +942,28 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   ObjectsPath 全路径（场景名去空格）；Targeted 强制 XML 路线；Define 路线不出现 Targeted。
 - atk_ui：GUI 重新开放"Targeted 目标指向"（瞄准模式=追踪，追踪模式=接收/发射/转发）；
   固定指向仍标注"待复核"。
+
+### 10.27 Targeted 固定指向定案（2026-08-17，用户 GUI 场景传感器2）
+
+**结构（来自 Test for spinning bug.atk 传感器2，瞄准模式=固定指向）**
+- `PointType=2` + `<Targeted><TargetMode>1</TargetMode><Fixed>...</Fixed>
+  <AssignedTargets><ObjectsPath Path="/Scenario/<场景名>/Facility/<地面站>"/></AssignedTargets></Targeted>`。
+- 偏置姿态存在 Targeted 内的 `<Fixed>` 子块（四元数 Qs/Qx/Qy/Qz + PointingMethod + Sequence），
+  与 Fixed 指向同一套方法枚举（欧拉角/四元数/YPR/AzEl/matrix）。
+
+**实现（校准传感器方案，避免手搓姿态转换）**
+- worker：Targeted+固定指向时，先在该场景里用 Connect `Point Fixed <方法> <参数>`
+  建一个"校准传感器"，Save 后从 XML 读出它的 `<Fixed>` 四元数块，原样写进目标传感器的
+  `<Targeted><Fixed>` 偏移——由 ATK 自己算姿态，不自己实现欧拉角/四元数转换。
+- GUI（atk_ui）：固定指向可选"偏置姿态类型"= YPR/Euler/Quaternion/AzEl/matrix（与 Fixed 同款）。
+
+**语义实测（6 星 × 8h × 杭州 5km）**
+| 配置 | 窗口 |
+| --- | --- |
+| 追踪（参考） | 8 |
+| 固定指向 单位偏置（YPR 0 0 0） | 1（=天底） |
+| 固定指向 YPR 俯仰 30° | 6（两遍一致；与普通 Fixed 侧摆 30° 完全一致） |
+| 固定指向 四元数绕 Z 30° | 1 |
+
+结论：ATK 的"目标定向·固定指向"实际是**机身固定姿态 + 关联目标**（不是相对目标方向叠加偏移）；
+覆盖窗口与普通 Fixed 指向相同。界面照此实现，用户可放心使用。

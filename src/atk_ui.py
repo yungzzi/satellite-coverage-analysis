@@ -281,6 +281,11 @@ def pointing_ui(prefix: str) -> dict | None:
         offset = c6.number_input("初始偏差角(°)", value=0.0, min_value=0.0, max_value=360.0,
                                  step=1.0, key=f"{prefix}_sp_off",
                                  help="旋转初始角；跨实例不锚定，同参数两次运行相位可能不同。")
+        parallel = st.checkbox(
+            "旋转星分片并行（各片相位独立随机，更快）",
+            value=False, key=f"{prefix}_sp_parallel",
+            help="默认关闭：所有旋转星聚为单个 ATK 实例，相位一致、可复现（旋转星多时会慢）；"
+                 "开启后旋转星也按普通分片并行，各片相位独立随机，结果视为代表性实现。")
         sa, ea = 0.0, 360.0
         if scan != "Continuous":
             c7, c8 = st.columns(2)
@@ -291,7 +296,8 @@ def pointing_ui(prefix: str) -> dict | None:
         return {"type": "Spinning", "azimuth": float(az), "elevation": float(el),
                 "cone_angle": float(cone), "scan": scan,
                 "start_angle": float(sa), "stop_angle": float(ea),
-                "rate": float(rate), "offset": float(offset)}
+                "rate": float(rate), "offset": float(offset),
+                "parallel": bool(parallel)}
     return None
 
 
@@ -491,6 +497,8 @@ def _cfg_to_toml_lines(cfg: dict, path: str) -> list:
         for k, v in pt.items():
             if isinstance(v, list):
                 inner.append(f"{k} = [" + ", ".join(repr(float(x)) for x in v) + "]")
+            elif isinstance(v, bool):
+                inner.append(f"{k} = {'true' if v else 'false'}")
             elif isinstance(v, str):
                 inner.append(f"{k} = {_tq(v)}")
             else:

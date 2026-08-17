@@ -977,3 +977,31 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 | 四元数绕Y 30° | HJ-1B:1 | HJ-1B:1 |
 
 结论坐实：ATK 的"目标定向·固定指向"与普通 Fixed 几何完全等价（目标仅登记不参与转向）。
+
+### 10.28 SAR「跟踪父高度」接入 + 实测定案：XML 加载路线不生效（2026-08-17）
+
+**需求**：用户要求 GUI 里补上 ATK 的「跟踪父高度」勾选框（SAR 的 父高度/跟踪父高度 二选一）。
+
+**实现（端到端已接上）**
+- atk_ui：SAR 参数改为 6 元 `[MinElev, MaxElev, Fwd, Aft, Altitude, Track(0/1)]`，
+  勾选「跟踪父高度」后固定父高度输入被隐藏；TOML 持久化同规则（`sensor_params` 原样写回）。
+- worker：`build_pattern_block` 的 SAR 块已按 `TrackParentAlt` 写出（与 ATK 自身 Save 的
+  XML 完全一致：`Define ... SAR 12 70 30 30 TrackParentAltitude On` → Save 后即
+  `<TrackParentAlt>1</TrackParentAlt>`）。
+- GUI 在勾选状态下加了如实说明：本版本该开关经 XML 路线暂不生效（见下），保留选项待官方修复。
+
+**决定性实测（1 颗 YAOGAN-50 02，实际轨道约 963 km，8h × 杭州点，毫秒级窗口对比）**
+| 配置 | 结果 | 说明 |
+| --- | --- | --- |
+| TrackParentAlt=1 + Altitude=550000 | 与固定 550km **逐毫秒一致（0.0s）** | 开关被忽略，按 Altitude 固定值算 |
+| TrackParentAlt=1 + Altitude=0 | 与固定 550km 仅差 ~7s | 差异来自 Altitude=0 而非跟踪实际高度 |
+| TrackParentAlt=0 + Altitude=550000 | 基准 | 固定 550km |
+| TrackParentAlt=0 + Altitude=970000 | 与固定 550km 差最大 208.6s | 父高度确实影响窗口 |
+
+结论：ATK 4.0.1-rc.5 的 SAR 只有 XML 加载路线能算出窗口（纯 Connect `Define` 路线 0 窗口，
+§10.1/§10.3），而 **XML 加载时 `<TrackParentAlt>` 标志不生效，实际始终用 `<Altitude>` 固定值**。
+与 Spinning 相位一样属 rc.5 的序列化/加载缺陷，建议并入官方反馈材料。
+
+**GUI 待用户复核（可选）**：在 ATK GUI 里对 YAOGAN-50 02 建 3 个 SAR 传感器
+（跟踪父高度 / 固定 550km / 固定 970km）算同一时段，若勾选项窗口≈970km 组则 GUI 内存内生效
+（仅 XML 加载失效）；若≈550km 组则 GUI 同样失效，一并写进反馈。

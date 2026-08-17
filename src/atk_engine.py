@@ -150,6 +150,41 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
         sat_cfgs.append(entry)
         sat_params.append({"name": sat.name, **info})
 
+    # SAR“跟踪父高度”：ATK 4.0.1-rc.5 的开关经 XML 加载 / 内存 Define 均不生效（§10.28），
+    # 这里按各星 TLE 平均轨道高度近似替代，使“跟踪”语义在当前版本可用。
+    def _sar_track(sensor_params):
+        return (sensor_params is not None and len(sensor_params) > 5
+                and int(sensor_params[5]) == 1)
+
+    _track_warned = False
+    if sensor_type == "SAR" and _sar_track(sensor_params):
+        for i, (rec, sat) in enumerate(zip(recs, sats)):
+            sp = [float(x) for x in sensor_params]
+            sp[4] = _tle_mean_altitude_km(rec) * 1000.0
+            sp[5] = 0
+            e2 = dict(sat_cfgs[i]) if sat_cfgs[i] else {}
+            e2["sensor_type"] = "SAR"
+            e2["sensor_params"] = sp
+            sat_cfgs[i] = e2
+            if not _track_warned:
+                sensor_warnings.append(
+                    f"SAR“跟踪父高度”：本版本 ATK 开关不生效，已按 {sat.name} 等各星"
+                    "TLE 平均轨道高度近似计算（近圆轨道下接近真实高度）。")
+                _track_warned = True
+        sensor_params = None
+    else:
+        for i, (rec, sat, entry) in enumerate(zip(recs, sats, sat_cfgs)):
+            if entry and _sar_track(entry.get("sensor_params")):
+                sp = [float(x) for x in entry["sensor_params"]]
+                sp[4] = _tle_mean_altitude_km(rec) * 1000.0
+                sp[5] = 0
+                entry["sensor_params"] = sp
+                if not _track_warned:
+                    sensor_warnings.append(
+                        f"{sat.name}（NORAD {int(sat.model.satnum) if getattr(sat, 'model', None) else ''}）："
+                        "SAR“跟踪父高度”本版本 ATK 开关不生效，已按该星 TLE 平均轨道高度近似。")
+                    _track_warned = True
+
     lat, lon = float(region["lat"]), float(region["lon"])
     step = int(cfg.get("step_minutes", 1))
     t0 = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)

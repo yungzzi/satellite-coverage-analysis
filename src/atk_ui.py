@@ -211,13 +211,13 @@ def pointing_ui(prefix: str) -> dict | None:
     mode = st.selectbox(
         "指向模式",
         ["天底（默认，不设置）", "Fixed 固定指向", "GrazingAlt 入射高度",
-         "External 外部指向文件", "Targeted 目标指向",
-         "Spinning 旋转（暂不可用）"],
+         "External 外部指向文件", "Targeted 目标指向", "Spinning 旋转"],
         key=f"{prefix}_pt_mode",
         help="Fixed=固定姿态偏置（侧摆，支持 YPR/欧拉/四元数/AzEl/矩阵）；"
              "GrazingAlt=入射高度指向；External=外部指向文件；"
              "Targeted=始终指向目标点（凝视观测，XML 写法已由 GUI 场景确认）；"
-             "Spinning 初始相位跨进程随机，暂不可用。")
+             "Spinning=旋转扫描（同实例内可复现，跨实例初始相位不锚定，"
+             "启用时全部分析在单个 ATK 实例中计算）。")
     if mode == "Fixed 固定指向":
         m = st.selectbox("姿态方法", ["YPR", "Euler", "Quaternion", "AzEl", "matrix"],
                          key=f"{prefix}_pt_method")
@@ -258,8 +258,40 @@ def pointing_ui(prefix: str) -> dict | None:
             return {"type": "Targeted", "target_mode": 1,
                     "offset_method": om, "offset_params": op}
         st.warning("请完成偏置姿态参数输入。")
-    elif "Spinning" in mode:
-        st.warning("Spinning 初始相位跨进程随机，已反馈官方，暂不可用。")
+    elif mode == "Spinning 旋转":
+        st.caption("说明：旋转扫描在同一次分析（单个 ATK 实例）内相位确定、结果可复现；"
+                   "跨实例初始相位不锚定，同参数两次运行相位可能不同，结果视为一次代表性实现。")
+        c1, c2, c3 = st.columns(3)
+        az = c1.number_input("方位角(°)", value=0.0, min_value=-180.0, max_value=360.0,
+                             step=1.0, key=f"{prefix}_sp_az",
+                             help="旋转轴指向的方位角（相对参考方向）")
+        el = c2.number_input("高度角(°)", value=-90.0, min_value=-90.0, max_value=90.0,
+                             step=1.0, key=f"{prefix}_sp_el",
+                             help="旋转轴指向的高度角（-90=指向天底）")
+        cone = c3.number_input("锥角(°)", value=30.0, min_value=0.1, max_value=90.0,
+                               step=1.0, key=f"{prefix}_sp_cone",
+                               help="旋转扫描的锥角（扫描范围）")
+        c4, c5, c6 = st.columns(3)
+        scan = c4.selectbox("扫描模式", ["Continuous", "Unidirectional", "Bidirectional"],
+                            key=f"{prefix}_sp_scan",
+                            help="Continuous=匀速连续旋转；Unidirectional=单向扫描；"
+                                 "Bidirectional=来回扫描")
+        rate = c5.number_input("转速(°/s)", value=1.0, min_value=0.001, step=0.1,
+                               key=f"{prefix}_sp_rate")
+        offset = c6.number_input("初始偏差角(°)", value=0.0, min_value=0.0, max_value=360.0,
+                                 step=1.0, key=f"{prefix}_sp_off",
+                                 help="旋转初始角；跨实例不锚定，同参数两次运行相位可能不同。")
+        sa, ea = 0.0, 360.0
+        if scan != "Continuous":
+            c7, c8 = st.columns(2)
+            sa = c7.number_input("开始角(°)", value=0.0, min_value=0.0, max_value=360.0,
+                                 step=1.0, key=f"{prefix}_sp_sa")
+            ea = c8.number_input("结束角(°)", value=360.0, min_value=0.0, max_value=360.0,
+                                 step=1.0, key=f"{prefix}_sp_ea")
+        return {"type": "Spinning", "azimuth": float(az), "elevation": float(el),
+                "cone_angle": float(cone), "scan": scan,
+                "start_angle": float(sa), "stop_angle": float(ea),
+                "rate": float(rate), "offset": float(offset)}
     return None
 
 

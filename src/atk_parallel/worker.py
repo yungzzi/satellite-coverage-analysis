@@ -82,6 +82,16 @@ def build_point_cmd(pointing) -> str:
         return f"GrazingAlt {pointing['azimuth']} {pointing['altitude']}"
     if t == "External":
         return f'External "{pointing["file"]}"'
+    if t == "Spinning":
+        # Point <Sensor> Spinning <Az> <El> <ConeAngle> {ScanMethod} [Start Stop] <Rate> <Offset>
+        scan = pointing.get("scan", "Continuous")
+        parts = ["Spinning", str(pointing["azimuth"]), str(pointing["elevation"]),
+                 str(pointing["cone_angle"]), scan]
+        if scan != "Continuous":
+            parts += [str(pointing.get("start_angle", 0)),
+                      str(pointing.get("stop_angle", 360))]
+        parts += [str(pointing.get("rate", 1.0)), str(pointing.get("offset", 0.0))]
+        return " ".join(parts)
     raise ValueError(f"暂不支持的指向类型：{t}")
 
 

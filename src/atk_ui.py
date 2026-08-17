@@ -45,6 +45,29 @@ CONSTRAINT_GROUPS = [
                 "BSSunExclusion", "BSLunarExclusion"]),
 ]
 
+# 各类约束的参数含义（界面悬浮提示）
+CONSTRAINT_HELP = {
+    "AzimuthAngle": "方位角约束：目标相对平台在水平面上的投影方向角；取值须落在 Min~Max 区间内（ATK 要求同时填写）。",
+    "ElevationAngle": "仰角约束：目标相对平台的高度角（俯仰角）；例如地面站对卫星的最小仰角要求。",
+    "Range": "距离约束：两对象之间的直线距离（m），须落在 Min~Max 区间内。",
+    "AzimuthRate": "方位角变化率（°/s）：方位角随时间的变化速率，用于链路稳定性判断。",
+    "ElevationRate": "仰角变化率（°/s）：仰角随时间的变化速率。",
+    "RangeRate": "距离变化率（m/s）：距离随时间的变化速率（与多普勒频移相关）。",
+    "AngularRate": "角变化率（°/s）：目标相对平台的旋转速度，判断链路稳定性。",
+    "Altitude": "高度约束（m）：访问对象相对地面的高度，须落在 Min~Max 区间内。",
+    "PropagationDelay": "传播延时（s）：两对象间信号传输所需时间，须落在 Min~Max 区间内。",
+    "LineOfSight": "视线约束：On=要求两对象间视线不被中心天体（地球）遮挡；Off=不检查。",
+    "fieldofview": "视场约束：On=目标必须落在传感器视场内（与传感器类型参数一致）；Off=不检查。",
+    "TerrainMask": "地形约束：On=考虑地形高程对视线的遮挡；Off=不考虑。",
+    "SunElevationAngle": "太阳仰角（°）：太阳相对分析对象的高度角约束。",
+    "SunGroundElevAngle": "太阳地平仰角（°）：太阳相对地面当地水平面的高度角，用于白昼/夜间判断。",
+    "LunarElevationAngle": "月球仰角（°）：月球相对分析对象的高度角约束。",
+    "LOSSunExclusion": "视线太阳规避角（°）：视线与太阳方向的夹角下限，实际夹角小于该值时访问无效。",
+    "LOSLunarExclusion": "视线月球规避角（°）：视线与月球方向的夹角下限。",
+    "BSSunExclusion": "视轴太阳规避角（°）：传感器视轴与太阳方向的夹角下限（光学传感器避光）。",
+    "BSLunarExclusion": "视轴月球规避角（°）：传感器视轴与月球方向的夹角下限。",
+}
+
 
 def fixed_method_inputs(method: str, prefix: str = "cov_pt") -> list | None:
     """按姿态方法渲染参数输入，返回参数列表（或 None）。"""
@@ -298,8 +321,6 @@ def _build_constraint_params(name: str, st0: dict) -> str:
 def constraints_ui(prefix: str, allow_facility: bool,
                    initial_constraints=None) -> list:
     """约束输入（仿 ATK 约束页）：按作用对象分页签，每类约束=启用开关+输入框。"""
-    st.caption("仿 ATK 约束页：按作用对象分页签，每类约束一个启用开关，勾选后填参数。"
-               "角度单位 °、距离 m、时间 s；方位角必须同时填 Min 和 Max。")
     scopes = ([("facility", "目标点"), ("sensor", "每颗星传感器"), ("satellite", "每颗星")]
               if allow_facility else [("sensor", "该星传感器"), ("satellite", "该星")])
     init = {}
@@ -315,61 +336,72 @@ def constraints_ui(prefix: str, allow_facility: bool,
             "SunGroundElevAngle", "Min 10")
 
     rows = []
-    tabs = st.tabs([lab for _, lab in scopes])
-    for tab, (scope, _label) in zip(tabs, scopes):
-        with tab:
-            for group_title, names in CONSTRAINT_GROUPS:
-                st.markdown(f"**{group_title}**")
-                for name in names:
-                    label, kind, unit, defaults, step = CONSTRAINT_META[name]
-                    base = f"{prefix}_c_{scope}_{name}"
-                    s0 = init.get((scope, name), {})
-                    title = label + (f"（{unit}）" if unit else "")
-                    if kind == "minmax":
-                        c0, c1, c2, c3 = st.columns([1.25, 1.0, 1.0, 0.85])
-                        en = c0.checkbox(title, value=bool(s0.get("en", False)),
-                                         key=f"{base}_en")
-                        mn = c1.number_input(
-                            "Min" + (f"（{unit}）" if unit else ""),
-                            value=s0.get("min") if s0.get("min") is not None else defaults[0],
-                            step=step, disabled=not en, key=f"{base}_min")
-                        mx = c2.number_input(
-                            "Max" + (f"（{unit}）" if unit else ""),
-                            value=s0.get("max") if s0.get("max") is not None else defaults[1],
-                            step=step, disabled=not en, key=f"{base}_max")
-                        ex_opts = ["", "ExcludeIntervals", "IncludeIntervals"]
-                        ex_i = ex_opts.index(s0["extra"]) if s0.get("extra") in ex_opts else 0
-                        ex = c3.selectbox("附加", ex_opts, index=ex_i,
-                                          disabled=not en, key=f"{base}_extra")
-                        if en:
-                            p = _build_constraint_params(
-                                name, {"min": float(mn), "max": float(mx), "extra": ex})
-                            if p:
-                                rows.append({"object": scope, "name": name, "params": p})
-                    elif kind == "onoff":
-                        c0, c1 = st.columns([1.25, 0.85])
-                        en = c0.checkbox(title, value=bool(s0.get("en", False)),
-                                         key=f"{base}_en")
-                        oo = c1.selectbox("状态", ["On", "Off"],
-                                          index=0 if s0.get("onoff", "On") == "On" else 1,
-                                          disabled=not en, key=f"{base}_onoff")
-                        if en:
-                            rows.append({"object": scope, "name": name, "params": oo})
-                    else:  # single：规避角
-                        c0, c1 = st.columns([1.25, 0.85])
-                        en = c0.checkbox(title, value=bool(s0.get("en", False)),
-                                         key=f"{base}_en")
-                        val = c1.number_input(
-                            "最小夹角（°）",
-                            value=s0.get("val") if s0.get("val") is not None else defaults[0],
-                            step=step, disabled=not en, key=f"{base}_val")
-                        if en:
-                            rows.append({"object": scope, "name": name,
-                                         "params": _build_constraint_params(
-                                             name, {"val": float(val)})})
-    st.caption("时间约束（开始/结束/时长/时段）与通信约束暂未实现；"
-               "通信约束仅适用于发射/接收对象，本软件不涉及。")
-    st.caption(f"当前启用 {len(rows)} 条约束。")
+    with st.expander("约束配置（基本 + 光照，默认折叠）", expanded=False):
+        st.caption("通用含义：Min=下限、Max=上限，访问仅当参数落在 [Min, Max] 区间内才有效；"
+                   "开关类选 On/Off；规避角只填一个最小夹角。角度单位 °、距离 m、时间 s；"
+                   "方位角必须同时填 Min 和 Max。")
+        tabs = st.tabs([lab for _, lab in scopes])
+        for tab, (scope, _label) in zip(tabs, scopes):
+            with tab:
+                for group_title, names in CONSTRAINT_GROUPS:
+                    st.markdown(f"**{group_title}**")
+                    for name in names:
+                        label, kind, unit, defaults, step = CONSTRAINT_META[name]
+                        base = f"{prefix}_c_{scope}_{name}"
+                        s0 = init.get((scope, name), {})
+                        title = label + (f"（{unit}）" if unit else "")
+                        help_txt = CONSTRAINT_HELP.get(name, "")
+                        if kind == "minmax":
+                            c0, c1, c2, c3 = st.columns([1.25, 1.0, 1.0, 0.85])
+                            en = c0.checkbox(title, value=bool(s0.get("en", False)),
+                                             key=f"{base}_en", help=help_txt)
+                            mn = c1.number_input(
+                                "Min" + (f"（{unit}）" if unit else ""),
+                                value=s0.get("min") if s0.get("min") is not None else defaults[0],
+                                step=step, disabled=not en, key=f"{base}_min",
+                                help="下限：参数须 ≥ 此值（只填一边表示单侧限制）")
+                            mx = c2.number_input(
+                                "Max" + (f"（{unit}）" if unit else ""),
+                                value=s0.get("max") if s0.get("max") is not None else defaults[1],
+                                step=step, disabled=not en, key=f"{base}_max",
+                                help="上限：参数须 ≤ 此值（只填一边表示单侧限制）")
+                            ex_opts = ["", "ExcludeIntervals", "IncludeIntervals"]
+                            ex_i = ex_opts.index(s0["extra"]) if s0.get("extra") in ex_opts else 0
+                            ex = c3.selectbox("附加", ex_opts, index=ex_i,
+                                              disabled=not en, key=f"{base}_extra",
+                                              help="ExcludeIntervals=排除该区间内的时间片；"
+                                                   "IncludeIntervals=只保留该区间内的时间片。")
+                            if en:
+                                p = _build_constraint_params(
+                                    name, {"min": float(mn), "max": float(mx), "extra": ex})
+                                if p:
+                                    rows.append({"object": scope, "name": name, "params": p})
+                        elif kind == "onoff":
+                            c0, c1 = st.columns([1.25, 0.85])
+                            en = c0.checkbox(title, value=bool(s0.get("en", False)),
+                                             key=f"{base}_en", help=help_txt)
+                            oo = c1.selectbox("状态", ["On", "Off"],
+                                              index=0 if s0.get("onoff", "On") == "On" else 1,
+                                              disabled=not en, key=f"{base}_onoff",
+                                              help="On=启用该项检查；Off=不检查。")
+                            if en:
+                                rows.append({"object": scope, "name": name, "params": oo})
+                        else:  # single：规避角
+                            c0, c1 = st.columns([1.25, 0.85])
+                            en = c0.checkbox(title, value=bool(s0.get("en", False)),
+                                             key=f"{base}_en", help=help_txt)
+                            val = c1.number_input(
+                                "最小夹角（°）",
+                                value=s0.get("val") if s0.get("val") is not None else defaults[0],
+                                step=step, disabled=not en, key=f"{base}_val",
+                                help="最小允许夹角：实际夹角小于该值即不满足。")
+                            if en:
+                                rows.append({"object": scope, "name": name,
+                                             "params": _build_constraint_params(
+                                                 name, {"val": float(val)})})
+        st.caption("时间约束（开始/结束/时长/时段）与通信约束暂未实现；"
+                   "通信约束仅适用于发射/接收对象，本软件不涉及。")
+        st.caption(f"当前启用 {len(rows)} 条约束。")
     return rows
 
 
@@ -386,7 +418,6 @@ def panel(prefix: str, allow_facility: bool, initial: dict | None = None) -> dic
         st.caption(f"未改动，保留已保存指向：{initial['pointing']}")
     elif pointing is None:
         pointing = None
-    st.markdown("**约束（基本 + 光照）**")
     constraints = constraints_ui(prefix + "_c", allow_facility,
                                  initial.get("constraints"))
     if not constraints and initial.get("constraints"):

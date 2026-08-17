@@ -525,86 +525,6 @@ def _render_atk_sat_editor(cov_sats) -> list:
         return rows
 
 
-def _atk_cfg_file() -> Path:
-    p = sl.PROJECT_ROOT / "data" / "atk_sat_config.toml"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def _tq(s) -> str:
-    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _cfg_to_toml_lines(cfg: dict, prefix: str) -> list:
-    lines = []
-    if cfg.get("sensor_type"):
-        lines.append(f"{prefix}sensor_type = {_tq(cfg['sensor_type'])}")
-    if cfg.get("sensor_params"):
-        lines.append(f"{prefix}sensor_params = ['"
-                     + ", ".join(repr(float(x)) for x in cfg["sensor_params"])
-                     + "]")
-    if cfg.get("pointing"):
-        pt = cfg["pointing"]
-        inner = []
-        for k, v in pt.items():
-            if isinstance(v, list):
-                inner.append(f"{k} = [" + ", ".join(repr(float(x)) for x in v) + "]")
-            elif isinstance(v, str):
-                inner.append(f"{k} = {_tq(v)}")
-            else:
-                inner.append(f"{k} = {repr(float(v))}")
-        lines.append(f"{prefix}pointing = {{ " + ", ".join(inner) + " }")
-    for c in cfg.get("constraints") or []:
-        lines.append(f"{prefix}[[constraints]]")
-        lines.append(f"{prefix}object = {_tq(c['object'])}")
-        lines.append(f"{prefix}name = {_tq(c['name'])}")
-        lines.append(f"{prefix}params = {_tq(c['params'])}")
-    return lines
-
-
-def _persist_atk_cfg(global_cfg=None, sat_cfgs=None) -> None:
-    g = dict(global_cfg) if global_cfg is not None else (st.session_state.get("atk_global_cfg") or {})
-    s = dict(sat_cfgs) if sat_cfgs is not None else (st.session_state.get("atk_sat_cfgs") or {})
-    lines = ["# ATK 传感器配置（程序维护，可手改）", ""]
-    lines.append("[global]")
-    lines += _cfg_to_toml_lines(g, "")
-    lines.append("")
-    lines.append("[sats]")
-    for nid, c in s.items():
-        lines.append(f"[sats.{nid}]")
-        lines += _cfg_to_toml_lines(c, "")
-        lines.append("")
-    _atk_cfg_file().write_text("\n".join(lines), encoding="utf-8")
-
-
-def _load_atk_cfg() -> tuple:
-    p = _atk_cfg_file()
-    if not p.exists():
-        return {}, {}
-    import tomllib
-    try:
-        with open(p, "rb") as f:
-            d = tomllib.load(f)
-    except Exception:
-        return {}, {}
-    g = dict(d.get("global") or {})
-    s = {str(k): dict(v) for k, v in (d.get("sats") or {}).items()}
-    return g, s
-
-
-def _atk_sat_pool(cov_sats) -> list:
-    names = [_strip_collection_label(n) for n in cov_sats]
-    if not names:
-        return []
-    src = sl.collection_sources_dedup(names)
-    cfgs = st.session_state.get("atk_sat_cfgs") or {}
-    pool = []
-    for x in src:
-        pool.append({"norad": int(x["norad"]), "name": x["name"],
-                     "已配置": "●" if str(x["norad"]) in cfgs else ""})
-    return pool
-
-
 def _name_search(keyword: str) -> list:
     """按名字搜索（附带界面上的 所属国/发射年份/高度 过滤），搜索与重置共用。"""
     return sl.search_metadata(
@@ -1612,11 +1532,9 @@ if tab_analysis.open:
 
         with st.container(border=True):
             st.markdown("**ATK 全局设置（所有星的默认值）**")
-            p0, p1 = st.columns(2)
-            cov_fov = p0.number_input("全局视场半角(°)（SimpleCone 用）", value=10.0,
-                                      min_value=1.0, max_value=89.0, step=1.0,
-                                      key="cov_fov", help="全局 SimpleCone 视场半角；逐星可覆盖")
-            cov_elev = p1.number_input("最小仰角(°)（目标点额外约束）", value=0.0,
+            cov_fov = 10.0  # SimpleCone 全局视场半角由下方面板输入决定并覆盖
+            cov_elev = st.number_input("最小仰角(°)（目标点额外约束）",
+                                       value=float(_g_cfg.get("min_elevation_deg", 0.0)),
                                        min_value=0.0, max_value=85.0, step=1.0,
                                        key="cov_elev",
                                        help="加在目标点地面站上的最小仰角；SAR 想只用自己的仰角范围就填 0")
@@ -1625,11 +1543,13 @@ if tab_analysis.open:
             cov_step = 1
             cov_refine = 1
             _g_panel = aui.panel("atk_g", allow_facility=True, initial=_g_cfg)
+            _g_full = dict(_g_panel)
+            _g_full["min_elevation_deg"] = float(cov_elev)
             if st.button("保存全局设置为默认", key="btn_atk_global_save", type="primary"):
-                aui.persist(global_cfg=_g_panel)
-                st.session_state["atk_global_cfg"] = _g_panel
-                flash("已保存全局默认设置。", kind="success")
-            st.session_state["atk_global_cfg"] = _g_panel
+                aui.persist(global_cfg=_g_full)
+                st.session_state["atk_global_cfg"] = _g_full
+                flash("已保存全局默认设置（含最小仰角）。", kind="success")
+            st.session_state["atk_global_cfg"] = _g_full
 
         with st.container(border=True):
             st.markdown("**逐星配置（覆盖全局）**")

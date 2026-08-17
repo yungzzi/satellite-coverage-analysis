@@ -118,16 +118,28 @@ def sensor_type_ui(prefix: str, initial_type: str = "SimpleCone",
                              step=5.0, key=f"{prefix}_maxc")
         sparams = [i, o, mc, xc]
     elif stype == "SAR":
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         mel = c1.number_input("最小入射仰角(°)", value=float(ip[0]) if len(ip) > 0 else 12.0,
                               min_value=0.0, max_value=89.0,
                               step=1.0, key=f"{prefix}_mel")
         xel = c2.number_input("最大入射仰角(°)", value=float(ip[1]) if len(ip) > 1 else 70.0,
                               min_value=0.0, max_value=89.0,
                               step=1.0, key=f"{prefix}_xel")
-        alt = c3.number_input("父高度(m)", value=float(ip[4]) if len(ip) > 4 else 550000.0,
-                              min_value=0.0, step=1000.0,
-                              key=f"{prefix}_alt")
+        track = st.checkbox(
+            "跟踪父高度（用卫星实际高度）",
+            value=bool(ip[5]) if len(ip) > 5 else False,
+            key=f"{prefix}_sar_track",
+            help="SAR 足印由仰角范围+天线离地高度换算。勾选=每个时刻用卫星实际轨道高度"
+                 "（推荐，椭圆轨道更真实）；取消=用下面固定的父高度。")
+        if track:
+            alt = 550000.0
+            st.caption("已跟踪父高度：下面的父高度输入被忽略。")
+            st.caption("注意：已实测本版本 ATK（4.0.1-rc.5）经 XML 场景加载计算 SAR 时，"
+                       "该开关暂不生效，实际仍按固定父高度 550 km 计算；保留此选项供官方修复后自动生效。")
+        else:
+            alt = st.number_input("父高度(m)", value=float(ip[4]) if len(ip) > 4 else 550000.0,
+                                  min_value=0.0, step=1000.0, key=f"{prefix}_alt",
+                                  help="SAR 地面足印换算用的天线离地高度；勾选“跟踪父高度”时此项被忽略。")
         c4, c5 = st.columns(2)
         fwd = c4.number_input("前向排除角(°)", value=float(ip[2]) if len(ip) > 2 else 30.0,
                               min_value=0.0, max_value=89.0,
@@ -135,7 +147,7 @@ def sensor_type_ui(prefix: str, initial_type: str = "SimpleCone",
         aft = c5.number_input("后向排除角(°)", value=float(ip[3]) if len(ip) > 3 else 30.0,
                               min_value=0.0, max_value=89.0,
                               step=1.0, key=f"{prefix}_aft")
-        sparams = [mel, xel, fwd, aft, alt]
+        sparams = [mel, xel, fwd, aft, float(alt), 1 if track else 0]
     else:
         fv = st.number_input("视场半角(°)（SimpleCone）",
                              value=float(ip[0]) if len(ip) > 0 else 10.0, min_value=1.0,
@@ -310,7 +322,10 @@ def panel(prefix: str, allow_facility: bool, initial: dict | None = None) -> dic
                                     initial.get("sensor_params"))
     pointing = pointing_ui(prefix + "_p")
     if pointing is None and initial.get("pointing"):
-        st.caption(f"已保存指向：{initial['pointing']}")
+        pointing = dict(initial["pointing"])
+        st.caption(f"未改动，保留已保存指向：{initial['pointing']}")
+    elif pointing is None:
+        pointing = None
     st.markdown("**约束（基本 + 光照）**")
     constraints = constraints_ui(prefix + "_c", allow_facility,
                                  initial.get("constraints"))
@@ -330,14 +345,21 @@ def _tq(s) -> str:
     return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _cfg_to_toml_lines(cfg: dict, prefix: str) -> list:
+def _cfg_to_toml_lines(cfg: dict, path: str) -> list:
+    """返回配置表（path 如 'global' / 'sats.28890'）的 TOML 行。
+
+    persist() 负责先写 [path] 表头；标量键写在当前表下，
+    约束数组表用绝对路径 [[path.constraints]]，避免 TOML 表头逃逸到顶层。
+    """
     lines = []
     if cfg.get("sensor_type"):
-        lines.append(f"{prefix}sensor_type = {_tq(cfg['sensor_type'])}")
+        lines.append(f"sensor_type = {_tq(cfg['sensor_type'])}")
     if cfg.get("sensor_params"):
-        lines.append(f"{prefix}sensor_params = ["
+        lines.append("sensor_params = ["
                      + ", ".join(repr(float(x)) for x in cfg["sensor_params"])
                      + "]")
+    if cfg.get("min_elevation_deg") is not None:
+        lines.append(f"min_elevation_deg = {float(cfg['min_elevation_deg']):g}")
     if cfg.get("pointing"):
         pt = cfg["pointing"]
         inner = []
@@ -348,12 +370,12 @@ def _cfg_to_toml_lines(cfg: dict, prefix: str) -> list:
                 inner.append(f"{k} = {_tq(v)}")
             else:
                 inner.append(f"{k} = {repr(float(v))}")
-        lines.append(f"{prefix}pointing = {{ " + ", ".join(inner) + " }")
+        lines.append("pointing = { " + ", ".join(inner) + " }")
     for c in cfg.get("constraints") or []:
-        lines.append(f"{prefix}[[constraints]]")
-        lines.append(f"{prefix}object = {_tq(c['object'])}")
-        lines.append(f"{prefix}name = {_tq(c['name'])}")
-        lines.append(f"{prefix}params = {_tq(c['params'])}")
+        lines.append(f"[[{path}.constraints]]")
+        lines.append(f"object = {_tq(c['object'])}")
+        lines.append(f"name = {_tq(c['name'])}")
+        lines.append(f"params = {_tq(c['params'])}")
     return lines
 
 
@@ -362,12 +384,12 @@ def persist(global_cfg=None, sat_cfgs=None) -> None:
     s = dict(sat_cfgs) if sat_cfgs is not None else (st.session_state.get("atk_sat_cfgs") or {})
     lines = ["# ATK 传感器配置（程序维护，可手改）", ""]
     lines.append("[global]")
-    lines += _cfg_to_toml_lines(g, "")
+    lines += _cfg_to_toml_lines(g, "global")
     lines.append("")
     lines.append("[sats]")
     for nid, c in s.items():
         lines.append(f"[sats.{nid}]")
-        lines += _cfg_to_toml_lines(c, "")
+        lines += _cfg_to_toml_lines(c, f"sats.{nid}")
         lines.append("")
     cfg_file().write_text("\n".join(lines), encoding="utf-8")
 

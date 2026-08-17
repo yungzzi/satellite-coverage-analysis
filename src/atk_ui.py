@@ -177,12 +177,14 @@ def sensor_type_ui(prefix: str, initial_type: str = "SimpleCone",
             value=bool(ip[5]) if len(ip) > 5 else False,
             key=f"{prefix}_sar_track",
             help="SAR 足印由仰角范围+天线离地高度换算。勾选=每个时刻用卫星实际轨道高度"
-                 "（推荐，椭圆轨道更真实）；取消=用下面固定的父高度。")
+                 "（本版本 ATK 开关不生效，软件按该星 TLE 平均轨道高度近似）；"
+                 "取消=用下面固定的父高度。")
         if track:
             alt = 550000.0
             st.caption("已跟踪父高度：下面的父高度输入被忽略。")
-            st.caption("注意：已实测本版本 ATK（4.0.1-rc.5）经 XML 场景加载计算 SAR 时，"
-                       "该开关暂不生效，实际仍按固定父高度 550 km 计算；保留此选项供官方修复后自动生效。")
+            st.caption("说明：本版本 ATK 的“跟踪父高度”开关不生效，"
+                       "软件已自动改用该星 TLE 平均轨道高度近似计算（更贴近真实）；"
+                       "待官方修复后自动切换为真跟踪。")
         else:
             alt = st.number_input("父高度(m)", value=float(ip[4]) if len(ip) > 4 else 550000.0,
                                   min_value=0.0, step=1000.0, key=f"{prefix}_alt",

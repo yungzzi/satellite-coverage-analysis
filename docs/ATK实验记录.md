@@ -784,3 +784,365 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
   `area_summary.json`（网格点数/资产/覆盖分钟/均值/最大值）。
 - 实测（6 星，30~31°N / 120~121°E，0.5°）：SimpleCone45 → 9 网格点、72/481 覆盖分钟、
   最大 100%；SAR(12,70,30,30,550km) → 232/481 覆盖分钟、assets 正确列出 6 颗。
+
+### 10.22 真正无头（隐藏桌面）+ GUI 复杂传感器（2026-08-15，codex/gui-atk-sensors-headless）
+
+**真正无头：独立非交互桌面**
+- 老问题：`--headless` 只关 2D/3D 视图，ATK 主窗口仍会创建；旧机制（SW_HIDE + 启动后
+  EnumWindows 隐藏）在窗口创建到隐藏之间会闪窗，且不稳定。
+- 修复：`atk_parallel/headless.py` 新增 `launch_on_hidden_desktop()`——用
+  `CreateDesktopW` 建独立非交互桌面，`CreateProcessW` 的 `lpDesktop` 指向该桌面，
+  ATK 所有窗口都开在用户看不到的桌面上，**从根上不闪窗**；进程退出后由守护线程
+  自动 `CloseDesktop` 防泄漏。桌面创建失败时回退旧机制。
+- runner 的 `launch_atk`（产品主路径）与 `launch_headless`（SAR/HalfPower XML 路线、
+  CD 区域）都走隐藏桌面；根 `atk_parallel/` 与 `src/atk_parallel/` 两份同步。
+
+**GUI 复杂传感器（⑤页）**
+- 选"覆盖引擎=ATK"后出现"传感器类型"下拉：SimpleCone / Rectangular / HalfPower /
+  Conical / SAR，按类型显示参数输入（矩形双半角、半功率频率+天线直径、复杂圆锥
+  内外锥角+时钟角、SAR 入射仰角范围+前后向排除角+父高度）。
+- 复杂传感器用统一参数；逐星视场半角/幅宽仅对 SimpleCone 生效；上方"最小仰角"
+  仍是额外地面站约束（SAR 想只用自身仰角范围就填 0）。
+- 结果区与 analysis_meta.json 记录 sensor_type / sensor_params。
+
+### 10.23 传感器指向 + 约束（2026-08-15，codex/atk-pointing-constraints）
+
+**指向（Pointing）**
+- Fixed：Connect `Point <sensor> Fixed <方法> <参数>` 生效，支持 YPR / Euler /
+  Quaternion / AzEl / matrix 全方法（GUI ⑤页"传感器指向"折叠区全部提供）。
+  实测：SimpleCone 天底 1 窗口 → Fixed YPR 俯仰 30° = 6 窗口（侧摆扩大感知，确定性两遍一致）。
+- Targeted：**Connect `Point ... Targeted ...` 在 4.0.1-rc.5 全 NACK**（与 SAR/HalfPower
+  Define 同类通道问题）；改走 **XML 注入**：`<PointType>3</PointType>` +
+  `<Targeted><TargetMode>0</TargetMode><TrackingMode>2</TrackingMode>
+  <AssignedTargets>Facility/Hangzhou</AssignedTargets>`。实测 SimpleCone 1→6 窗口、
+  SAR 5→7 窗口，确定性两遍一致。Targeted 自动走 XML 双实例路线（与 SAR/HalfPower 共用）。
+- GrazingAlt：`Point <sensor> GrazingAlt <方位角> <入射高度>` 生效（天底 1 → 2 窗口）。
+- External：透传外部指向文件路径（GUI 上传 .sp 到 data/user_files/），需要用户自备
+  ATK 格式指向文件，未单独验证。
+- Spinning：仍禁用（等官方回复）。
+
+**约束（SetConstraint）**
+- 作用对象：facility（地面站=目标点）/ sensor（每颗星传感器）/ satellite（每颗星）。
+- GUI 常用表单：太阳高度角（SunGroundElevAngle Min）、方位角（AzimuthAngle Min/Max）、
+  距离（Range Min/Max，km 自动转 m）、视线开关（LineOfSight On）。
+- 高级 JSON 透传：`[{"object":"facility|sensor|satellite","name":"约束名","params":"参数串"}]`，
+  params 与官方 SetConstraint 命令参数一致，原样转发给 ATK（覆盖速率/高度/传播延迟/
+  月球/太阳排除/地形遮蔽等全部约束）。
+- 实测：SunGroundElevAngle Min 80（杭州夏季太阳高度上限约 75°）→ 0 窗口；
+  Range ≤100 km → 0 窗口；Min 5 / 宽松距离 → 基线 1 窗口。
+
+**验证矩阵（6 星 × 8h × 杭州 5km，ATK 引擎）**
+
+| 配置 | 窗口数（两遍） |
+| --- | --- |
+| 天底基线（SimpleCone45） | 1 / 1 |
+| Fixed YPR 俯仰 30° | 6 / 6 |
+| Targeted 目标跟踪 | 6 / 6 |
+| GrazingAlt(90°, 10km) | 2 |
+| SAR(12,70,30,30,550km) 天底 | 5 / 5 |
+| SAR + Targeted | 7 / 7 |
+| SunGroundElevAngle Min 80 | 0 |
+| SunGroundElevAngle Min 5 | 1 |
+| Range ≤100km | 0 |
+
+注意：Targeted 走 XML 路线时 SimpleCone 用全局半角（逐星视场半角表不参与）。
+
+### 10.24 第 5 页重构 + ATK 逐星参数 + 约束全 GUI（2026-08-16，codex/gui-page5-redesign）
+
+**第 5 页布局**
+- 改为**单栏**（st.container(border=True) 分组）：目标区域与时间 / 卫星来源 / 引擎参数。
+- **覆盖引擎置顶**（segmented_control），**默认 ATK**（后续大概率走 ATK）。
+- **引擎差异化**：
+  - 自研：视场半角/最小仰角/步长/边界精化/幅宽开关 + 原"传感器参数表（逐星，自研）"
+    （只在此分支显示）；
+  - ATK：全局传感器类型+参数、传感器指向、约束（全 GUI 表格，去掉 JSON）、
+    **逐星 ATK 参数表**（NORAD/视场半角/最小仰角/传感器类型/参数）。
+
+**ATK 逐星参数（atk_engine）**
+- cfg.sat_sensor_overrides：按 NORAD 覆盖视场半角/最小仰角，或整颗星换传感器类型+参数；
+  优先级：ATK 逐星表 > 自研逐星表 > 全局。
+- 引擎按（最小仰角, 传感器类型, 参数）分组，每组一次 ATK 计算（XML 路线组内同质，兼容 SAR/HalfPower/Targeted）。
+- 实测（6 星 × 8h × 杭州 5km，SimpleCone）：HJ-1B fov45 → 1 窗口（72s）；fov10 → 0；
+  fov60 → 1 窗口（288s，更长）；min_elevation=30 逐星生效；28890 逐星换 Conical 生效；
+  两遍一致。
+
+**约束全 GUI（去掉高级 JSON）**
+- 约束页（§10.29 起改为 ATK 同款布局）：按作用对象分页签（目标点/每颗星传感器/每颗星），
+  每类约束=启用开关+输入框（Min/Max、On/Off 或单值规避角）；按类型自动拼 SetConstraint
+  参数（方位角必填 Min+Max、开关类用 On/Off、排除角类用单值）。
+- 实测：SunGroundElevAngle Min 80 → 0 窗口（与 JSON 透传一致）。
+
+### 10.29 约束页改为 ATK 同款「开关+输入框」布局（2026-08-17，codex/constraints-atk-style）
+
+- 去掉 data_editor 表格，改为仿 ATK 约束属性页：作用对象=页签（全局=目标点/每颗星传感器/
+  每颗星；逐星=该星传感器/该星），每组内按 ATK 文档分「基本约束」（方位角/仰角/距离/
+  三种变化率/角变化率/高度/传播延时/视线/视场/地形）与「光照约束」（太阳仰角/太阳地平仰角/
+  月球仰角/四种太阳月球规避角）。
+- 每类约束：启用开关 + Min/Max（minmax 型，默认值与 ATK DefaultSensor.atk 一致：
+  如仰角 0~90°、距离 0~4e7 m、高度 0~2e8 m）；视线/视场/地形 = On/Off；
+  规避角 = 单值（最小夹角）。
+- 参数串保持与 SetConstraint 文档一致（`Min X Max Y` / `On|Off` / 单值，
+  方位角必须同时给 Min/Max，支持 ExcludeIntervals/IncludeIntervals 附加）；
+  数值统一普通十进制（避免科学计数法进命令）。
+- 兼容旧配置：已有 {object,name,params} 照常解析回显；旧默认「目标点（逐星=该星传感器）
+  太阳地平仰角 Min 10」保留。时间/通信约束仍不实现（页面注明）。
+- 验证：AppTest 渲染 3+2 页签无异常；旧参数串→控件→重建参数串逐条一致；
+  勾选/填值/取消勾选后输出与预期一致。
+
+### 10.25 不分组单实例逐传感器 + GUI 两栏 + Targeted 误判纠正（2026-08-16，codex/atk-persat-unified）
+
+**重要纠正（覆盖 §10.23 的 Targeted 结论）**
+- §10.23 曾记录"Targeted 走 XML 注入（PointType=3）生效"。决定性复测推翻：
+  6 星"对杭州仰角>0 连续时段"参考值 = 8 段；枚举 PointType×TargetMode×TrackingMode×
+  外层 `<AssignedTarget>` 共 30+ 组合均无法复现 8 窗口；PointType=3 实为 **GrazingAlt**，
+  之前"Targeted 生效"的 6 个窗口是 GrazingAlt(0,0) 的假象。
+- 结论：Targeted 的真实 XML 写法未确认（Connect `Point ... Targeted` 在 rc.5 全 NACK，
+  且无 GUI 生成的样例可对照）→ **GUI 中将 Targeted 置为"待复核，暂不可用"**；
+  等拿到 GUI 手动建的 Targeted 场景（.atk）再定 XML 写法。
+
+**不分组、单实例、逐传感器（用户拍板）**
+- worker 重写：一次 ATK 实例内每颗星独立配置（类型/参数/指向/约束）：
+  - 无 SAR/HalfPower → Define 路线：逐传感器 `Define/Point/SetConstraint`；
+  - 有 SAR/HalfPower → XML 路线：实例 1 建 SimpleCone 占位 → Save →
+    **逐传感器改 `<Pattern>`**（五种类型块全部确认：SimpleCone=0/Rect=1/Conical=3/
+    HalfPower=4/SAR=5）→ 实例 2 Load → 逐传感器 Point/SetConstraint → 计算；
+  - 两类传感器可混在同一实例（不再分组）。
+- runner 新增 `--sat-cfgs`（按 TLE 顺序，分片切片）；engine 单次调用（临时目录只有 all.tle）。
+- 逐星约束作用于该星传感器/卫星级；目标点级约束（含最小仰角）在全局。
+
+**GUI 两栏（仿 ATK）**
+- `src/atk_ui.py`：全局/逐星共用"定义（类型+参数+指向）+ 约束（基本+光照）"面板，
+  带已保存配置回显；持久化 `data/atk_sat_config.toml`（TOML 读写）。
+- ⑤页 ATK 分支：全局面板（默认值）+ 逐星两栏（左：卫星列表单击选中；右：该星定义/约束 +
+  保存/清除，清除=回退全局）。
+- 约束只做"基本 + 光照（太阳/月球）"，时间约束暂不做（Connect 无命令、需 XML 注入验证）；
+  术语统一为"光照"，避免与 ATK 文档对不上。
+
+**验证（6 星 × 8h × 杭州 5km）**
+| 用例 | 结果 |
+| --- | --- |
+| 默认（全局 SimpleCone45，无逐星） | 1 窗口（回归一致） |
+| 单实例混合：SimpleCone60/Conical(10,45,0,360)/Rect(40,60)/SAR(12,70,30,30,550km)/SimpleCone10/Fixed YPR30 | 运行成功、临时目录仅 all.tle、两遍一致 |
+| 逐星 33321 fov10 | 0（窄锥漏擦边） |
+| 逐星 33321 fov60 | 1 窗口更长（288s vs 72s） |
+| 光照 SunGroundElevAngle Min 80 | 0 |
+| AppTest（强制⑤页）ATK/自研两分支 | 无异常；全局/逐星面板、卫星列表均渲染 |
+
+### 10.26 Targeted 定案：正确 XML 写法（用户 GUI 场景破案）（2026-08-17）
+
+**破案经过**
+- 用户用 ATK GUI 手动建了"目标定向"传感器（Test for spinning bug.atk 传感器2），
+  导出其 XML 作为 Ground Truth：
+  - `PointType = 2`（之前试过 2 但目标路径格式不对）；
+  - `<AssignedTargets>` 内是 **`<ObjectsPath Path="/Scenario/<场景名>/Facility/<地面站>"/>`**
+    （子元素+完整绝对路径），不是内联文本路径；
+  - 追踪 = `TargetMode 0`；转发 = `TrackingMode 2`。
+- 之前"Targeted 走 XML 不生效"的根因有二：① AssignedTargets 写成了内联文本；
+  ② 场景名从 AllInstanceNames 解析时带**尾随空格**（`/Scenario/Scenario1 /Facility/...`），
+  导致 ATK Load 挂死（相对路径 `Facility/Hangzhou` 同样会挂死）。
+
+**验证（6 星 × 8h × 杭州 5km，参考值=仰角>0 连续时段合计 8）**
+| 用例 | 结果 |
+| --- | --- |
+| 全局 Targeted（接收/发射/转发 0/1/2） | 各 8 窗口，且逐星分布与 skyfield 参考完全一致 |
+| 转发确定性（两遍） | 8 / 8 一致 |
+| 仅 33321 逐星 Targeted | HJ-1B 1 窗口（该星仰角>0=1），其余按全局 |
+| 相对路径 / 尾随空格 | ATK Load 挂死（已规避） |
+
+**GUI 瞄准/追踪模式语义（回答用户）**
+- 瞄准模式：追踪=实时指向目标；固定指向=相对目标加固定姿态偏移（TargetMode=1，写法待样例）。
+- 追踪模式：接收/发射/转发 = 按信号方向调整指向；几何覆盖三者都指向目标（实测窗口一致），
+  转发多用于中继。用户选"追踪+转发"正确。
+
+**实现**
+- worker：`patch_pointing_targeted` 逐传感器把 Pointing 改为 PointType=2 +
+  ObjectsPath 全路径（场景名去空格）；Targeted 强制 XML 路线；Define 路线不出现 Targeted。
+- atk_ui：GUI 重新开放"Targeted 目标指向"（瞄准模式=追踪，追踪模式=接收/发射/转发）；
+  固定指向仍标注"待复核"。
+
+### 10.27 Targeted 固定指向定案（2026-08-17，用户 GUI 场景传感器2）
+
+**结构（来自 Test for spinning bug.atk 传感器2，瞄准模式=固定指向）**
+- `PointType=2` + `<Targeted><TargetMode>1</TargetMode><Fixed>...</Fixed>
+  <AssignedTargets><ObjectsPath Path="/Scenario/<场景名>/Facility/<地面站>"/></AssignedTargets></Targeted>`。
+- 偏置姿态存在 Targeted 内的 `<Fixed>` 子块（四元数 Qs/Qx/Qy/Qz + PointingMethod + Sequence），
+  与 Fixed 指向同一套方法枚举（欧拉角/四元数/YPR/AzEl/matrix）。
+
+**实现（校准传感器方案，避免手搓姿态转换）**
+- worker：Targeted+固定指向时，先在该场景里用 Connect `Point Fixed <方法> <参数>`
+  建一个"校准传感器"，Save 后从 XML 读出它的 `<Fixed>` 四元数块，原样写进目标传感器的
+  `<Targeted><Fixed>` 偏移——由 ATK 自己算姿态，不自己实现欧拉角/四元数转换。
+- GUI（atk_ui）：固定指向可选"偏置姿态类型"= YPR/Euler/Quaternion/AzEl/matrix（与 Fixed 同款）。
+
+**语义实测（6 星 × 8h × 杭州 5km）**
+| 配置 | 窗口 |
+| --- | --- |
+| 追踪（参考） | 8 |
+| 固定指向 单位偏置（YPR 0 0 0） | 1（=天底） |
+| 固定指向 YPR 俯仰 30° | 6（两遍一致；与普通 Fixed 侧摆 30° 完全一致） |
+| 固定指向 四元数绕 Z 30° | 1 |
+
+结论：ATK 的"目标定向·固定指向"实际是**机身固定姿态 + 关联目标**（不是相对目标方向叠加偏移）；
+覆盖窗口与普通 Fixed 指向相同。界面照此实现，用户可放心使用。
+**五组偏置逐星对照（Fixed vs 目标定向·固定指向，每组逐星分布完全一致）**
+| 偏置 | Fixed | 目标定向·固定指向 |
+| --- | --- | --- |
+| YPR 0° | HJ-1B:1 | HJ-1B:1 |
+| YPR 15° | HJ-1B:1 | HJ-1B:1 |
+| YPR 30° | BJ1:2, HJ1B:1, HY1B:1, YG2:1, HJ1A:1 | 同左 |
+| YPR 45° | 同 YPR30 | 同左 |
+| 四元数绕Y 30° | HJ-1B:1 | HJ-1B:1 |
+
+结论坐实：ATK 的"目标定向·固定指向"与普通 Fixed 几何完全等价（目标仅登记不参与转向）。
+
+### 10.28 SAR「跟踪父高度」接入 + 实测定案：XML 加载路线不生效（2026-08-17）
+
+**需求**：用户要求 GUI 里补上 ATK 的「跟踪父高度」勾选框（SAR 的 父高度/跟踪父高度 二选一）。
+
+**实现（端到端已接上）**
+- atk_ui：SAR 参数改为 6 元 `[MinElev, MaxElev, Fwd, Aft, Altitude, Track(0/1)]`，
+  勾选「跟踪父高度」后固定父高度输入被隐藏；TOML 持久化同规则（`sensor_params` 原样写回）。
+- worker：`build_pattern_block` 的 SAR 块已按 `TrackParentAlt` 写出（与 ATK 自身 Save 的
+  XML 完全一致：`Define ... SAR 12 70 30 30 TrackParentAltitude On` → Save 后即
+  `<TrackParentAlt>1</TrackParentAlt>`）。
+- GUI 在勾选状态下加了如实说明：本版本该开关经 XML 路线暂不生效（见下），保留选项待官方修复。
+
+**决定性实测（1 颗 YAOGAN-50 02，实际轨道约 963 km，8h × 杭州点，毫秒级窗口对比）**
+| 配置 | 结果 | 说明 |
+| --- | --- | --- |
+| TrackParentAlt=1 + Altitude=550000 | 与固定 550km **逐毫秒一致（0.0s）** | 开关被忽略，按 Altitude 固定值算 |
+| TrackParentAlt=1 + Altitude=0 | 与固定 550km 仅差 ~7s | 差异来自 Altitude=0 而非跟踪实际高度 |
+| TrackParentAlt=0 + Altitude=550000 | 基准 | 固定 550km |
+| TrackParentAlt=0 + Altitude=970000 | 与固定 550km 差最大 208.6s | 父高度确实影响窗口 |
+
+结论：ATK 4.0.1-rc.5 的 SAR 只有 XML 加载路线能算出窗口（纯 Connect `Define` 路线 0 窗口，
+§10.1/§10.3），而 **XML 加载时 `<TrackParentAlt>` 标志不生效，实际始终用 `<Altitude>` 固定值**。
+与 Spinning 相位一样属 rc.5 的序列化/加载缺陷，建议并入官方反馈材料。
+
+**GUI 待用户复核（可选）**：在 ATK GUI 里对 YAOGAN-50 02 建 3 个 SAR 传感器
+（跟踪父高度 / 固定 550km / 固定 970km）算同一时段，若勾选项窗口≈970km 组则 GUI 内存内生效
+（仅 XML 加载失效）；若≈550km 组则 GUI 同样失效，一并写进反馈。
+
+**补充复测（2026-08-17 晚，worker 子进程正规路线，两行 TLE）**
+- 内存 re-Define 路线也失效：Load 后对同一传感器 `Define ... SAR 12 70 30 30 TrackParentAltitude On`
+  → 窗口与 XML 原样（track=1/alt=550km）**逐窗口完全一致**，即 rc.5 连内存 Define 也不认该开关
+  （与 §10.3 “Define 对 SAR 静默失效”一致），混合路线排除。
+- 对照：固定 970km 首窗 00:49:41、固定 550km 首窗 00:46:12（毫秒级），差别明显。
+
+**工程替代方案（已落地，语义可用）**
+- 在 atk_engine 层：SAR 勾选“跟踪父高度”时，ATK 开关虽不生效，但软件自动把 `<Altitude>`
+  替换为**该星 TLE 平均轨道高度**（`_tle_mean_altitude_km` ×1000，m），`TrackParentAlt` 写 0；
+  全局 SAR 跟踪自动展开为逐星参数，逐星覆盖同样处理；结果页给出说明性 warning。
+- 验证（生产路径 run_atk_windows，YG-50-02 ≈963km）：跟踪父高度首窗 **00:49:35** ≈ 固定 970km
+  （00:49:41），不再等于固定 550km（00:46:12）；逐星覆盖路径结果一致。
+- 语义说明：近圆轨道下平均轨道高度≈实际高度；椭圆轨道是近似（仍远好于全局固定 550km）。
+  GUI 勾选提示与结果 warning 均已注明“按 TLE 平均轨道高度近似，待官方修复后切换真跟踪”。
+
+### 10.30 Spinning 旋转指向：单实例方案落地（2026-08-17 晚）
+
+**背景**：§10.18 定案 Spinning 初始相位跨实例不锚定（ASLR 相关），GUI/Connect 均无法锚定。
+用户拍板尝试“全部放进同一个 ATK 实例”的兜底方案：利用“同实例内相位确定、结果可复现”的性质。
+
+**实测（2 星 × 8h × 杭州，SimpleCone45 + Spinning 0/-90/30° Continuous 6°/s，offset 360）**
+- 同一实例内连续算 3 次（含 Reset 后重算）：**逐毫秒完全一致**（1 vs 2、1 vs 3 均 True）。
+- 同一配置两个独立实例（生产 runner 路径，提权真机）：19 vs 18 窗口，首窗 00:47:41 vs 00:47:17
+  ——跨实例漂移在生产路径同样存在，符合 §10.18 结论。
+
+**落地**
+- worker：`build_point_cmd` 新增 Spinning（Connect `Point ... Spinning <Az> <El> <ConeAngle>
+  {Continuous|Unidirectional|Bidirectional [Start Stop]} <Rate> <Offset>`），Define 与 XML 两条路线通用。
+- runner：检测到全局或逐星指向含 Spinning 时，**强制单实例单分片**（`per_shard=len(recs)`、
+  `max_inst=1`），保证一次分析内所有旋转传感器相位一致、可复现。
+- GUI（atk_ui）：重新开放“Spinning 旋转”指向（方位角/高度角/锥角/扫描模式/转速/初始偏差角，
+  单向/双向可填开始/结束角），并注明“同实例内可复现；跨实例初始相位不锚定，结果为代表性实现”。
+- AppTest：Continuous / Unidirectional 两种模式渲染与返回均正常。
+
+**使用口径**：Spinning 结果视为“一次代表性实现”——同一次分析内确定且可复现；不同次运行
+（新 ATK 进程）相位可能不同。需要跨运行稳定比较时，优先用相位不变量（总覆盖时长/覆盖率/重访），
+或按待办把“多进程取范围/聚合”做起来。
+
+### 10.31 Spinning 规模化：旋转星单实例 + 普通星并行（A/B 模式，2026-08-18）
+
+**问题**：旋转星强制单实例后，若旋转星很多（成百上千颗），单实例串行会明显变慢（约 0.4s/颗建
+传感器+Point+Assign）。用户问“旋转传感器太多怎么办”。
+
+**方案 A（默认）——旋转星聚一个实例，非旋转星照常并行**
+- runner 按“是否旋转”分组分片：所有旋转星进同一个分片（一个 ATK 实例，相位一致、可复现），
+  非旋转星按 `--per-shard` 并行；两者可在同一轮并行（旋转片单独一个端口/进程）。
+- 全局指向为 Spinning 时全部星视为旋转 → 退化为单实例单分片。
+- 分片改为按索引组构造，`angles`/`sat_cfgs` 按索引切片（不再要求连续顺序）。
+
+**方案 B（可选）——旋转星也分片并行**
+- 开启 `--spin-parallel` 或 Spinning 指向参数 `parallel=true`（GUI 勾选框）后，旋转星按普通
+  顺序分片，各片相位独立随机，结果视为代表性实现（快，但失去“同实例相位一致”的强保证）。
+
+**实测（3 星：1 颗逐星 Spinning + 2 颗 SimpleCone，8h × 杭州）**
+| 模式 | 分片 | 结果 |
+| --- | --- | --- |
+| A（默认） | 片0=[旋转星]（1 实例）、片1=[2 颗普通星] 并行 | 旋转星 4 窗口；普通片独立计算，正常合并 |
+| B（--spin-parallel） | 片0=[旋转星+1 普通]、片1=[1 普通] | 旋转星 14 窗口（相位与该次运行相关，与 A 不同） |
+
+- GUI：Spinning 指向新增“旋转星分片并行（各片相位独立随机，更快）”勾选框，默认关；
+  指向 TOML 持久化支持 bool 字段。
+
+### 10.32 逐星卫星姿态（AddAttitude）尝试：Connect 命令层未实现（2026-08-18）
+
+**目标**：给每颗星配置“整星姿态”（卫星本体偏置，如 YPR 俯仰 30°），与传感器级指向解耦。
+
+**实测（rc.5 Connect）**
+- `AddAttitude <Sat> YPR "<t0>" <seq> y p r`、`Attitude`、`GetAttitude`：**全部 NACK**；
+- 同路径下 `Position`、`SetState` 也 NACK（卫星命令族整体缺失，文档有、实现无）；
+- 仅 `SetAttitude <Sat> Standard` ACK（只设姿态模式，不带数据）。
+- 这与当初 Targeted / SAR Define 的情况一致：Connect 命令层未实现，只能走 **XML 注入**。
+
+**XML 结构线索**：`DefaultSatellite.atk` 里有 `<Attitude><AttPropType>0</AttPropType><AttGen>
+<AttGenType>0</AttGenType><LHAttOffsetQuats>1</LHAttOffsetQuats><LHAttOffsetQuatx>0</LHAttOffsetQuatx>…`
+，但全安装示例里没有非默认 `AttGenType` 的存档，非默认写法无 ground truth。
+
+**结论与下一步**：本分支不保留无效代码（已还原）。要做整星姿态，需要用户像 Targeted 那次一样：
+在 ATK GUI 里给卫星设一个姿态（如固定姿态 YPR 30°）保存场景，把 .atk 给我；读 XML 后按
+“Save → 改 <Attitude> → Load”路线实现（与 SAR/Pattern、Targeted 同款）。
+
+### 10.33 整星标准姿态族落地（2026-08-18，codex/sat-attitude-std）
+
+**Ground truth 来源**：用户把 `Test for spinning bug.atk` 扩充到 10 颗星，其中 GAOFEN 2/8/9
+分别设 AttGenType=1/2/3（GUI 保存），其余为 0；ATK 组件头文件 `ICEnum.h` 给出枚举：
+`EVeProfile`：0=Nadir+ECF速度约束（固连系VVLH，默认）、1=Nadir+ECI速度约束（惯性系VVLH）、
+2=ECI速度对齐+Nadir约束、3=ECF速度对齐+Nadir约束、4=Sun对齐+Nadir约束。
+
+**实现（XML 注入，与 SAR/Pattern、Targeted 同路线）**
+- worker：`build_attitude_xml_block` 生成 `<Attitude><AttPropType>0</AttPropType><AttGen>
+  <AttGenType>{0-4}</AttGenType><LHAttOffsetQuats>1</LHAttOffsetQuats>+偏移四元数 qx/qy/qz</AttGen>
+  <AttGenArray/></Attitude>`；`patch_satellite_attitude` 按卫星名替换/插入 `<Attitude>` 块；
+  `need_xml` 检测到任意星有姿态配置时走 XML 路线。
+- atk_engine：逐星 attitude 透传；全局 attitude 注入每颗星（逐星优先）。
+- atk_ui：面板新增“卫星姿态（可选）”——姿态类型（0-4 中文名）+ 偏移四元数 qx/qy/qz；
+  TOML 持久化（profile 整数、offset 列表）。
+- loader_app：全局/逐星 attitude 接入 cfg 与 sat_sensor_overrides。
+
+**验证**
+- 单元：块生成正确；替换旧 `<Attitude>` / 无块时插入均正常。
+- 端到端（YG-50-02 × 8h × 杭州，SimpleCone45）：profile 0 为 4 窗口，profile 4（太阳对齐）
+  为 5 窗口且时刻不同 → **AttGenType 在 Load 后真实生效**（与 TrackParentAlt 不同，XML 姿态
+  类型被 ATK 尊重）；profile 0 vs 1 窗口相同属合理（两者 Z 轴都对地，SimpleCone 圆对称看不出
+  绕天底自转差）。
+- AppTest：面板渲染、初始回显、切换类型正常；TOML 读写往返一致。
+
+**说明**：偏移四元数语义（qs 隐含）尚无非零 ground truth，先按“单位四元数由 ATK 内部归一化”
+对待，后续有 GUI 非零样例再校准。非标准姿态（整星固定/旋转/目标指向）仍需 GUI 样例，未做。
+
+### 10.34 整星非标准姿态（固定/旋转/目标指向）：rc.5 无 ground truth、疑似不生效（2026-08-18）
+
+用户按要求在 ATK GUI 给 YAOGAN 1/2/3 分别配置整星固定/旋转/目标指向姿态并保存
+（`Test for spinning bug.atk`，14 颗星，2.68MB），但：
+- 三颗星 `<Attitude>` / `<AttitudeTool>` / `<AttCtrl>` 的规范化签名 **MD5 完全一致**——
+  三种不同设置不可能产生相同 XML，设置未写入文件；
+- 全 ATK 安装（70 个 .atk/.xml、465 个卫星实例）只有 `AttitudeDefine Type="AttitudeSatelliteLegacy"`
+  + 标准 `<Attitude><AttGenType>0-4</AttGenType>`，**没有任何固定/旋转/目标指向整星姿态的序列化样例**；
+- 文件中 `AttSpin/AttManeuver` 只出现在 `<AttitudeTool>`（GUI 编辑工具状态，14 星全同、时间 2010），
+  传感器 Fixed/Targeted 是 Pointing（传感器级，已有实现）。
+
+**结论**：rc.5 的旧式(Legacy)卫星姿态体系只序列化/生效“标准姿态族”（AttGenType 0-4，已实现并验证）；
+GUI 里的整星固定/旋转/目标指向未写入场景、动画也不转（用户实测）——与 Spinning 相位、
+SAR 跟踪父高度同类，疑似 rc.5 缺陷或 Legacy 体系不支持，建议并入官方反馈。整星姿态先以标准族为准；
+固定/旋转/目标指向的需求走传感器级指向（已有：Fixed/Spinning/Targeted）。

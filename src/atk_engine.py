@@ -107,8 +107,14 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
     os.environ["ATK_ROOT"] = root
 
     sats = sl.records_to_satellites(recs)
-    # 逐星有效参数：与自研引擎同一套解析（逐星表 > 全局默认；幅宽/GEO 回退同规则）
-    fovs, elevs = [], []
+    overrides_by_norad = {}
+    for o in cfg.get("sat_sensor_overrides") or []:
+        try:
+            overrides_by_norad[int(o["norad"])] = o
+        except (KeyError, TypeError, ValueError):
+            continue
+    # 逐星有效配置（ATK 逐星表 > 自研逐星表 > 全局；幅宽/GEO 回退同自研规则）
+    sat_cfgs = []
     sat_params, sensor_warnings = [], []
     for rec, sat in zip(recs, sats):
         norad = int(sat.model.satnum) if getattr(sat, "model", None) else int(_rec_get(rec, "norad"))
@@ -123,13 +129,72 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
             sensor_warnings.append(
                 f"{sat.name}（NORAD {norad}，{tag}）：填了幅宽但高轨/静止卫星"
                 f"没有条带成像概念，已改按视场半角 {fov_back}° 计算")
-        if sat_cfg.get("swath_km"):
-            alt = _tle_mean_altitude_km(rec)
-            fovs.append(round(float(cov.swath_to_half_angle_deg(alt, sat_cfg["swath_km"])), 6))
-        else:
-            fovs.append(float(sat_cfg["fov_half_angle_deg"]))
-        elevs.append(float(sat_cfg["min_elevation_deg"]))
+        ov = overrides_by_norad.get(norad)
+        entry = None
+        if ov:
+            entry = {}
+            if ov.get("fov_half_angle_deg") is not None:
+                entry["fov_half_angle_deg"] = float(ov["fov_half_angle_deg"])
+                info["fov_half_angle_deg"] = entry["fov_half_angle_deg"]
+                info["source"] = "atk_override"
+            if ov.get("sensor_type"):
+                entry["sensor_type"] = ov["sensor_type"]
+            if ov.get("sensor_params") is not None:
+                entry["sensor_params"] = [float(x) for x in ov["sensor_params"]]
+            if ov.get("pointing"):
+                entry["pointing"] = ov["pointing"]
+            if ov.get("attitude"):
+                entry["attitude"] = ov["attitude"]
+            if ov.get("constraints"):
+                entry["constraints"] = ov["constraints"]
+            if ov.get("sat_constraints"):
+                entry["sat_constraints"] = ov["sat_constraints"]
+        sat_cfgs.append(entry)
         sat_params.append({"name": sat.name, **info})
+
+    # SAR“跟踪父高度”：ATK 4.0.1-rc.5 的开关经 XML 加载 / 内存 Define 均不生效（§10.28），
+    # 这里按各星 TLE 平均轨道高度近似替代，使“跟踪”语义在当前版本可用。
+    def _sar_track(sensor_params):
+        return (sensor_params is not None and len(sensor_params) > 5
+                and int(sensor_params[5]) == 1)
+
+    _track_warned = False
+    if sensor_type == "SAR" and _sar_track(sensor_params):
+        for i, (rec, sat) in enumerate(zip(recs, sats)):
+            sp = [float(x) for x in sensor_params]
+            sp[4] = _tle_mean_altitude_km(rec) * 1000.0
+            sp[5] = 0
+            e2 = dict(sat_cfgs[i]) if sat_cfgs[i] else {}
+            e2["sensor_type"] = "SAR"
+            e2["sensor_params"] = sp
+            sat_cfgs[i] = e2
+            if not _track_warned:
+                sensor_warnings.append(
+                    f"SAR“跟踪父高度”：本版本 ATK 开关不生效，已按 {sat.name} 等各星"
+                    "TLE 平均轨道高度近似计算（近圆轨道下接近真实高度）。")
+                _track_warned = True
+        sensor_params = None
+    else:
+        for i, (rec, sat, entry) in enumerate(zip(recs, sats, sat_cfgs)):
+            if entry and _sar_track(entry.get("sensor_params")):
+                sp = [float(x) for x in entry["sensor_params"]]
+                sp[4] = _tle_mean_altitude_km(rec) * 1000.0
+                sp[5] = 0
+                entry["sensor_params"] = sp
+                if not _track_warned:
+                    sensor_warnings.append(
+                        f"{sat.name}（NORAD {int(sat.model.satnum) if getattr(sat, 'model', None) else ''}）："
+                        "SAR“跟踪父高度”本版本 ATK 开关不生效，已按该星 TLE 平均轨道高度近似。")
+                    _track_warned = True
+
+    # 全局整星姿态：注入每颗星（逐星已有姿态时不覆盖）
+    _gatt = cfg.get("attitude")
+    if _gatt:
+        for i in range(len(sat_cfgs)):
+            e = dict(sat_cfgs[i]) if sat_cfgs[i] else {}
+            if "attitude" not in e:
+                e["attitude"] = _gatt
+            sat_cfgs[i] = e
 
     lat, lon = float(region["lat"]), float(region["lon"])
     step = int(cfg.get("step_minutes", 1))
@@ -146,65 +211,56 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
     t0_atk = _atk_time(dt_list[0].strftime("%Y-%m-%d %H:%M:%S"))
     t1_atk = _atk_time(t1_true.strftime("%Y-%m-%d %H:%M:%S"))
 
-    # 按最小仰角分组，每组一次 ATK 计算
-    groups = {}
-    for i, e in enumerate(elevs):
-        groups.setdefault(e, []).append(i)
-
     tmp = Path(tempfile.mkdtemp(prefix="atk_engine_"))
+    tle_path = tmp / "all.tle"
+    cfgs_path = tmp / "sat_cfgs.json"
+    out_dir = tmp / "out"
+    _write_two_line_tle(recs, tle_path)
+    with open(cfgs_path, "w", encoding="utf-8") as f:
+        json.dump(sat_cfgs, f, ensure_ascii=False)
+    if progress:
+        progress(0.5, "ATK 计算中（单实例，逐星配置）")
+    cmd = [
+        sys.executable, "-m", "atk_parallel.runner",
+        "--tle", str(tle_path),
+        "--t0", t0_atk, "--t1", t1_atk,
+        "--lat", str(lat), "--lon", str(lon),
+        "--fov", str(float(cfg.get("fov_half_angle_deg", 10.0))),
+        "--min-elev", str(float(cfg.get("min_elevation_deg", 0.0))),
+        "--sensor-type", sensor_type,
+        "--sat-cfgs", str(cfgs_path),
+        "--per-shard", str(max(1000, len(recs))),
+        "--max-inst", "1",
+        "--out-dir", str(out_dir),
+    ]
+    if sensor_params is not None:
+        cmd += ["--sensor-params", ",".join(str(x) for x in sensor_params)]
+    if cfg.get("pointing"):
+        cmd += ["--pointing", json.dumps(cfg["pointing"], ensure_ascii=False)]
+    if cfg.get("constraints"):
+        cmd += ["--constraints", json.dumps(cfg["constraints"], ensure_ascii=False)]
+    p = subprocess.run(cmd, cwd=str(SRC_DIR), capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", timeout=3600)
+    if p.returncode != 0:
+        raise RuntimeError(f"ATK 引擎运行失败：\n{p.stdout[-1200:]}\n{p.stderr[-1200:]}")
+    merged = out_dir / "merged_windows.csv"
+    if not merged.exists():
+        raise RuntimeError(f"ATK 引擎未产出窗口文件：{merged}")
     windows_by_norad = {}
-    try:
-        for gi, (elev, idxs) in enumerate(sorted(groups.items())):
-            group_recs = [recs[i] for i in idxs]
-            tle_path = tmp / f"g{gi}.tle"
-            angles_path = tmp / f"g{gi}_angles.json"
-            out_dir = tmp / f"g{gi}_out"
-            _write_two_line_tle(group_recs, tle_path)
-            with open(angles_path, "w", encoding="utf-8") as f:
-                json.dump([fovs[i] for i in idxs], f)
-            if progress:
-                progress((gi + 1) / (len(groups) + 1),
-                         f"ATK 计算中（仰角 {elev}° 组 {gi + 1}/{len(groups)}）")
-            cmd = [
-                sys.executable, "-m", "atk_parallel.runner",
-                "--tle", str(tle_path),
-                "--t0", t0_atk, "--t1", t1_atk,
-                "--lat", str(lat), "--lon", str(lon),
-                "--fov", str(float(cfg.get("fov_half_angle_deg", 10.0))),
-                "--min-elev", str(elev),
-                "--sensor-type", sensor_type,
-                "--angles-file", str(angles_path),
-                "--per-shard", str(max(1000, len(group_recs))),
-                "--max-inst", "1",
-                "--out-dir", str(out_dir),
-            ]
-            if sensor_params is not None:
-                cmd += ["--sensor-params", ",".join(str(x) for x in sensor_params)]
-            p = subprocess.run(cmd, cwd=str(SRC_DIR), capture_output=True,
-                               text=True, encoding="utf-8", errors="replace",
-                               timeout=3600)
-            if p.returncode != 0:
-                raise RuntimeError(
-                    f"ATK 引擎运行失败（仰角 {elev}° 组）：\n"
-                    f"{p.stdout[-1200:]}\n{p.stderr[-1200:]}")
-            merged = out_dir / "merged_windows.csv"
-            if not merged.exists():
-                raise RuntimeError(f"ATK 引擎未产出窗口文件：{merged}")
-            with open(merged, encoding="utf-8-sig", newline="") as f:
-                for row in csv.DictReader(f):
-                    try:
-                        norad = int(row["norad"])
-                    except (TypeError, ValueError):
-                        continue
-                    windows_by_norad.setdefault(norad, []).append((
-                        datetime.strptime(str(row["start_utc"])[:19], "%Y-%m-%d %H:%M:%S")
-                        .replace(tzinfo=timezone.utc),
-                        datetime.strptime(str(row["end_utc"])[:19], "%Y-%m-%d %H:%M:%S")
-                        .replace(tzinfo=timezone.utc),
-                        1.0,
-                    ))
-    finally:
-        pass  # 临时目录保留便于排查（系统 TEMP，不污染工程）
+    with open(merged, encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            try:
+                norad = int(row["norad"])
+            except (TypeError, ValueError):
+                continue
+            windows_by_norad.setdefault(norad, []).append((
+                datetime.strptime(str(row["start_utc"])[:19], "%Y-%m-%d %H:%M:%S")
+                .replace(tzinfo=timezone.utc),
+                datetime.strptime(str(row["end_utc"])[:19], "%Y-%m-%d %H:%M:%S")
+                .replace(tzinfo=timezone.utc),
+                1.0,
+            ))
+
 
     windows_by_sat, all_windows = [], []
     for rec, sat in zip(recs, sats):

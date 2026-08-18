@@ -694,6 +694,8 @@ def build_outputs(all_windows, cfg, t0, t1, n_sats_total, sat_params=None):
         "sensor_override_count": sum(1 for p in (sat_params or [])
                                      if p.get("source") == "override"),
         "engine": cfg.get("engine", "self"),
+        "sensor_type": cfg.get("sensor_type", "SimpleCone"),
+        "sensor_params": cfg.get("sensor_params"),
         "n_satellites_total": n_sats_total,
         "n_satellites_covered": int(len(df_summary)),
     }

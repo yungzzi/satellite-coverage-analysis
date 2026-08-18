@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse, csv, ctypes, json, os, re, socket, subprocess, sys, tempfile, time
 from datetime import datetime
 
-from .headless import get_atk_root
+from .headless import get_atk_root, launch_on_hidden_desktop
 
 ATK_ROOT = get_atk_root()
 ATK_EXE = os.path.join(ATK_ROOT, "ATK.exe")
@@ -101,22 +101,27 @@ def wait_port(port: int, timeout_s: float = 120) -> bool:
 
 
 def launch_atk(port: int, new_scenario: bool = True):
-    # 隐藏 ATK 启动时弹出的使用协议/欢迎窗口（SW_HIDE）
-    si = subprocess.STARTUPINFO()
-    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    si.wShowWindow = 0
+    # 真正无头：启动到独立非交互桌面（不闪窗）；失败时回退 SW_HIDE
     args = [ATK_EXE, "--headless", "--port", str(port),
             "--hide-startup", "--hide-welcome", "--no-crash-report"]
     if new_scenario:
         args.insert(2, "--new-scenario")
+    proc = launch_on_hidden_desktop(args, ATK_ROOT)
+    if proc is not None:
+        return proc
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0
     return subprocess.Popen(
         args, cwd=ATK_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         startupinfo=si)
 
 
-def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir, angles=None):
+def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir,
+                    angles=None, sat_cfgs=None):
     """启动一片：ATK + worker，返回 job 字典（不等待）。"""
-    xml_route = cfg.get("sensor_type", "SimpleCone") in ("SAR", "HalfPower")
+    xml_route = (cfg.get("sensor_type", "SimpleCone") in ("SAR", "HalfPower")
+                or (cfg.get("pointing") or {}).get("type") == "Targeted")
     if xml_route:
         # SAR/HalfPower 走 Save→改XML→Load 路线（§7.1），worker 自管两个实例，
         # 调度器不预启动，避免端口被占用。
@@ -134,6 +139,9 @@ def start_shard_job(shard_i, port, shard_file, shard_recs, cfg, out_dir, angles=
         "sensor_type": cfg.get("sensor_type", "SimpleCone"),
         "sensor_params": cfg.get("sensor_params"),
         "min_elev": cfg.get("min_elev"),
+        "pointing": cfg.get("pointing"),
+        "constraints": cfg.get("constraints"),
+        "sat_cfgs": sat_cfgs,
         "xml_route": xml_route,
         "out": out_path,
     }
@@ -240,12 +248,19 @@ def main():
     ap.add_argument("--min-elev", type=float, default=None, help="地面站最小仰角（度，可选）")
     ap.add_argument("--angles-file", default=None,
                     help="逐星 SimpleCone 半角 JSON 列表（与 TLE 顺序一致；仅 SimpleCone 生效）")
+    ap.add_argument("--sat-cfgs", default=None,
+                    help="逐星配置 JSON 列表（与 TLE 顺序一致；元素为 None 或配置 dict，见 worker.py）")
     ap.add_argument("--sensor-type", default="SimpleCone",
                     choices=["SimpleCone", "Rectangular", "HalfPower", "Conical", "SAR"],
                     help="传感器类型（默认 SimpleCone）")
     ap.add_argument("--sensor-params", default=None,
                     help='传感器参数（逗号分隔）：如 "45"、"40,60"、"0.5,0.35"、'
                          '"0,45,0,360"、"12,70,30,30,550000"')
+    ap.add_argument("--pointing", default=None,
+                    help='传感器指向 JSON：{"type":"Fixed|Targeted|GrazingAlt|External",...}')
+    ap.add_argument("--constraints", default=None,
+                    help='约束 JSON 数组：[{"object":"facility|sensor|satellite",'
+                         '"name":"约束名","params":"Min 10"}]')
     ap.add_argument("--area-region", default=None,
                     help='附加区域百分比覆盖率：min_lat,min_lon,max_lat,max_lon（如 "30,120,31,121"）')
     ap.add_argument("--area-granularity", type=float, default=0.5, help="区域网格粒度（度）")
@@ -273,6 +288,12 @@ def main():
             angles = json.load(f)
         if len(angles) != len(recs):
             print(f"警告：angles 数量 {len(angles)} ≠ 卫星数 {len(recs)}，按序号尽量对齐", flush=True)
+    sat_cfgs = None
+    if args.sat_cfgs:
+        with open(args.sat_cfgs, encoding="utf-8-sig") as f:
+            sat_cfgs = json.load(f)
+        if len(sat_cfgs) != len(recs):
+            print(f"警告：sat_cfgs 数量 {len(sat_cfgs)} ≠ 卫星数 {len(recs)}，按序号尽量对齐", flush=True)
 
     shards = make_shards(recs, args.per_shard)
     n_shards = len(shards)
@@ -287,18 +308,22 @@ def main():
     os.makedirs(shard_dir, exist_ok=True)
     shard_files = []
     shard_angles = []
+    shard_cfgs = []
     start = 0
     for i, sh in enumerate(shards):
         p = os.path.join(shard_dir, f"shard_{i}.tle")
         to_two_line_file(sh, p)
         shard_files.append(os.path.abspath(p))
         shard_angles.append(angles[start:start + len(sh)] if angles else None)
+        shard_cfgs.append(sat_cfgs[start:start + len(sh)] if sat_cfgs else None)
         start += len(sh)
 
     cfg = {**vars(args), "fov": args.fov,
            "sensor_type": args.sensor_type,
            "sensor_params": parse_sensor_params(args.sensor_params),
-           "min_elev": args.min_elev}
+           "min_elev": args.min_elev,
+           "pointing": json.loads(args.pointing) if args.pointing else None,
+           "constraints": json.loads(args.constraints) if args.constraints else None}
     all_results = {}
     failed = []
     port_pool = pick_free_ports(max_inst, args.port_base)
@@ -325,7 +350,8 @@ def main():
                 port = port_pool[k]
                 print(f"  [片 {shard_i}] port {port} 尝试 {attempt + 1}（{shard_norad_ranges(shards[shard_i])}）", flush=True)
                 job = start_shard_job(shard_i, port, shard_files[shard_i], shards[shard_i],
-                                      cfg, args.out_dir, angles=shard_angles[shard_i])
+                                      cfg, args.out_dir, angles=shard_angles[shard_i],
+                                      sat_cfgs=shard_cfgs[shard_i])
                 if not job["ready"]:
                     print(f"  [片 {shard_i}] port {port} ATK 端口未就绪", flush=True)
                     try: job["atk"].kill()

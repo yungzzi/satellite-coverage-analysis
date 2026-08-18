@@ -1130,3 +1130,19 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 
 **说明**：偏移四元数语义（qs 隐含）尚无非零 ground truth，先按“单位四元数由 ATK 内部归一化”
 对待，后续有 GUI 非零样例再校准。非标准姿态（整星固定/旋转/目标指向）仍需 GUI 样例，未做。
+
+### 10.34 整星非标准姿态（固定/旋转/目标指向）：rc.5 无 ground truth、疑似不生效（2026-08-18）
+
+用户按要求在 ATK GUI 给 YAOGAN 1/2/3 分别配置整星固定/旋转/目标指向姿态并保存
+（`Test for spinning bug.atk`，14 颗星，2.68MB），但：
+- 三颗星 `<Attitude>` / `<AttitudeTool>` / `<AttCtrl>` 的规范化签名 **MD5 完全一致**——
+  三种不同设置不可能产生相同 XML，设置未写入文件；
+- 全 ATK 安装（70 个 .atk/.xml、465 个卫星实例）只有 `AttitudeDefine Type="AttitudeSatelliteLegacy"`
+  + 标准 `<Attitude><AttGenType>0-4</AttGenType>`，**没有任何固定/旋转/目标指向整星姿态的序列化样例**；
+- 文件中 `AttSpin/AttManeuver` 只出现在 `<AttitudeTool>`（GUI 编辑工具状态，14 星全同、时间 2010），
+  传感器 Fixed/Targeted 是 Pointing（传感器级，已有实现）。
+
+**结论**：rc.5 的旧式(Legacy)卫星姿态体系只序列化/生效“标准姿态族”（AttGenType 0-4，已实现并验证）；
+GUI 里的整星固定/旋转/目标指向未写入场景、动画也不转（用户实测）——与 Spinning 相位、
+SAR 跟踪父高度同类，疑似 rc.5 缺陷或 Legacy 体系不支持，建议并入官方反馈。整星姿态先以标准族为准；
+固定/旋转/目标指向的需求走传感器级指向（已有：Fixed/Spinning/Targeted）。

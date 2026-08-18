@@ -1600,6 +1600,8 @@ if tab_analysis.open:
                     _row["fov_half_angle_deg"] = _c["sensor_params"][0]
                 if _c.get("pointing"):
                     _row["pointing"] = _c["pointing"]
+                if _c.get("attitude"):
+                    _row["attitude"] = _c["attitude"]
                 if _c.get("constraints"):
                     _row["constraints"] = _c["constraints"]
                 _atk_sat_overrides.append(_row)
@@ -1650,6 +1652,8 @@ if tab_analysis.open:
                         cfg["sensor_params"] = _sensor_params
                     if _pointing is not None:
                         cfg["pointing"] = _pointing
+                    if _g_panel.get("attitude"):
+                        cfg["attitude"] = _g_panel["attitude"]
                     if _constraints:
                         cfg["constraints"] = _constraints
                     if _atk_sat_overrides:

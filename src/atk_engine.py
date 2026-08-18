@@ -143,6 +143,8 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
                 entry["sensor_params"] = [float(x) for x in ov["sensor_params"]]
             if ov.get("pointing"):
                 entry["pointing"] = ov["pointing"]
+            if ov.get("attitude"):
+                entry["attitude"] = ov["attitude"]
             if ov.get("constraints"):
                 entry["constraints"] = ov["constraints"]
             if ov.get("sat_constraints"):
@@ -184,6 +186,15 @@ def run_atk_windows(recs, region, cfg, start_str, end_str, progress=None,
                         f"{sat.name}（NORAD {int(sat.model.satnum) if getattr(sat, 'model', None) else ''}）："
                         "SAR“跟踪父高度”本版本 ATK 开关不生效，已按该星 TLE 平均轨道高度近似。")
                     _track_warned = True
+
+    # 全局整星姿态：注入每颗星（逐星已有姿态时不覆盖）
+    _gatt = cfg.get("attitude")
+    if _gatt:
+        for i in range(len(sat_cfgs)):
+            e = dict(sat_cfgs[i]) if sat_cfgs[i] else {}
+            if "attitude" not in e:
+                e["attitude"] = _gatt
+            sat_cfgs[i] = e
 
     lat, lon = float(region["lat"]), float(region["lon"])
     step = int(cfg.get("step_minutes", 1))

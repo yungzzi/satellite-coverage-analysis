@@ -445,6 +445,36 @@ def constraints_ui(prefix: str, allow_facility: bool,
     return rows
 
 
+def attitude_ui(prefix: str, initial=None) -> dict | None:
+    """整星姿态（标准姿态族，AttGenType=EVeProfile 0-4 + 偏移四元数）。"""
+    initial = initial or {}
+    opts = ["不设置", "固连系 VVLH（默认）", "惯性系 VVLH",
+            "ECI 对速度定向", "ECF 对速度定向", "太阳对齐 + 天底约束"]
+    _map = {"固连系 VVLH（默认）": 0, "惯性系 VVLH": 1,
+            "ECI 对速度定向": 2, "ECF 对速度定向": 3,
+            "太阳对齐 + 天底约束": 4}
+    _init = int(initial.get("profile", -1)) if initial.get("profile") is not None else -1
+    _lab = next((k for k, v in _map.items() if v == _init), "不设置")
+    mode = st.selectbox("姿态类型", opts, index=opts.index(_lab),
+                        key=f"{prefix}_mode",
+                        help="整星姿态：决定卫星本体在空间的指向（对地定向/速度定向等），"
+                             "传感器指向相对星体生效。0=固连系VVLH（默认）；1=惯性系VVLH；"
+                             "2=ECI速度定向；3=ECF速度定向；4=太阳对齐。")
+    if mode == "不设置":
+        return None
+    profile = _map[mode]
+    ip = initial.get("offset") or []
+    st.caption("偏移四元数（在基准姿态上叠加的固定旋转；默认全 0）")
+    c1, c2, c3 = st.columns(3)
+    qx = c1.number_input("qx", value=float(ip[0]) if len(ip) > 0 else 0.0,
+                         min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qx")
+    qy = c2.number_input("qy", value=float(ip[1]) if len(ip) > 1 else 0.0,
+                         min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qy")
+    qz = c3.number_input("qz", value=float(ip[2]) if len(ip) > 2 else 0.0,
+                         min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qz")
+    return {"profile": int(profile), "offset": [float(qx), float(qy), float(qz)]}
+
+
 def panel(prefix: str, allow_facility: bool, initial: dict | None = None) -> dict:
     """全局/逐星共用配置面板：定义（类型+参数+指向）+ 约束（基本+光照）。"""
     initial = initial or {}
@@ -452,6 +482,8 @@ def panel(prefix: str, allow_facility: bool, initial: dict | None = None) -> dic
     stype, sparams = sensor_type_ui(prefix + "_d",
                                     initial.get("sensor_type", "SimpleCone"),
                                     initial.get("sensor_params"))
+    st.markdown("**卫星姿态（可选）**")
+    attitude = attitude_ui(prefix + "_a", initial.get("attitude"))
     pointing = pointing_ui(prefix + "_p")
     if pointing is None and initial.get("pointing"):
         pointing = dict(initial["pointing"])
@@ -462,7 +494,7 @@ def panel(prefix: str, allow_facility: bool, initial: dict | None = None) -> dic
                                  initial.get("constraints"))
     if not constraints and initial.get("constraints"):
         st.caption(f"已保存约束 {len(initial['constraints'])} 条（清空表格即可删除）。")
-    return {"sensor_type": stype, "sensor_params": sparams,
+    return {"sensor_type": stype, "sensor_params": sparams, "attitude": attitude,
             "pointing": pointing, "constraints": constraints}
 
 
@@ -504,6 +536,19 @@ def _cfg_to_toml_lines(cfg: dict, path: str) -> list:
             else:
                 inner.append(f"{k} = {repr(float(v))}")
         lines.append("pointing = { " + ", ".join(inner) + " }")
+    if cfg.get("attitude"):
+        at = cfg["attitude"]
+        inner = []
+        for k, v in at.items():
+            if isinstance(v, list):
+                inner.append(f"{k} = [" + ", ".join(repr(float(x)) for x in v) + "]")
+            elif isinstance(v, bool):
+                inner.append(f"{k} = {'true' if v else 'false'}")
+            elif isinstance(v, str):
+                inner.append(f"{k} = {_tq(v)}")
+            else:
+                inner.append(f"{k} = {int(v) if isinstance(v, (int, float)) and float(v).is_integer() else repr(float(v))}")
+        lines.append("attitude = { " + ", ".join(inner) + " }")
     for c in cfg.get("constraints") or []:
         lines.append(f"[[{path}.constraints]]")
         lines.append(f"object = {_tq(c['object'])}")

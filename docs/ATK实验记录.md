@@ -1102,3 +1102,31 @@ cd_grid_xml_probe.py（脚本在 gitignore 的 experiment/ 下，留档）。
 **结论与下一步**：本分支不保留无效代码（已还原）。要做整星姿态，需要用户像 Targeted 那次一样：
 在 ATK GUI 里给卫星设一个姿态（如固定姿态 YPR 30°）保存场景，把 .atk 给我；读 XML 后按
 “Save → 改 <Attitude> → Load”路线实现（与 SAR/Pattern、Targeted 同款）。
+
+### 10.33 整星标准姿态族落地（2026-08-18，codex/sat-attitude-std）
+
+**Ground truth 来源**：用户把 `Test for spinning bug.atk` 扩充到 10 颗星，其中 GAOFEN 2/8/9
+分别设 AttGenType=1/2/3（GUI 保存），其余为 0；ATK 组件头文件 `ICEnum.h` 给出枚举：
+`EVeProfile`：0=Nadir+ECF速度约束（固连系VVLH，默认）、1=Nadir+ECI速度约束（惯性系VVLH）、
+2=ECI速度对齐+Nadir约束、3=ECF速度对齐+Nadir约束、4=Sun对齐+Nadir约束。
+
+**实现（XML 注入，与 SAR/Pattern、Targeted 同路线）**
+- worker：`build_attitude_xml_block` 生成 `<Attitude><AttPropType>0</AttPropType><AttGen>
+  <AttGenType>{0-4}</AttGenType><LHAttOffsetQuats>1</LHAttOffsetQuats>+偏移四元数 qx/qy/qz</AttGen>
+  <AttGenArray/></Attitude>`；`patch_satellite_attitude` 按卫星名替换/插入 `<Attitude>` 块；
+  `need_xml` 检测到任意星有姿态配置时走 XML 路线。
+- atk_engine：逐星 attitude 透传；全局 attitude 注入每颗星（逐星优先）。
+- atk_ui：面板新增“卫星姿态（可选）”——姿态类型（0-4 中文名）+ 偏移四元数 qx/qy/qz；
+  TOML 持久化（profile 整数、offset 列表）。
+- loader_app：全局/逐星 attitude 接入 cfg 与 sat_sensor_overrides。
+
+**验证**
+- 单元：块生成正确；替换旧 `<Attitude>` / 无块时插入均正常。
+- 端到端（YG-50-02 × 8h × 杭州，SimpleCone45）：profile 0 为 4 窗口，profile 4（太阳对齐）
+  为 5 窗口且时刻不同 → **AttGenType 在 Load 后真实生效**（与 TrackParentAlt 不同，XML 姿态
+  类型被 ATK 尊重）；profile 0 vs 1 窗口相同属合理（两者 Z 轴都对地，SimpleCone 圆对称看不出
+  绕天底自转差）。
+- AppTest：面板渲染、初始回显、切换类型正常；TOML 读写往返一致。
+
+**说明**：偏移四元数语义（qs 隐含）尚无非零 ground truth，先按“单位四元数由 ATK 内部归一化”
+对待，后续有 GUI 非零样例再校准。非标准姿态（整星固定/旋转/目标指向）仍需 GUI 样例，未做。

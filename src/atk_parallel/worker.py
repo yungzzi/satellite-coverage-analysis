@@ -170,6 +170,49 @@ def patch_patterns_per_sensor(xml_path: str, blocks: dict, out_path: str) -> str
     return out_path.replace("\\", "/")
 
 
+def build_attitude_xml_block(attitude) -> str:
+    """整星标准姿态 XML 块（AttGenType=EVeProfile 0-4 + 偏移四元数，§10.33 ground truth）。"""
+    profile = int(attitude.get("profile", 0))
+    off = attitude.get("offset") or []
+    qx = float(off[0]) if len(off) > 0 else 0.0
+    qy = float(off[1]) if len(off) > 1 else 0.0
+    qz = float(off[2]) if len(off) > 2 else 0.0
+    return ("<Attitude>\n<AttPropType>0</AttPropType>\n<AttGen>\n"
+            "<StartUTC>2000-01-01 00:00:00.000000</StartUTC>\n"
+            f"<AttGenType>{profile}</AttGenType>\n"
+            "<LHAttOffsetQuats>1</LHAttOffsetQuats>\n"
+            f"<LHAttOffsetQuatx>{qx:g}</LHAttOffsetQuatx>\n"
+            f"<LHAttOffsetQuaty>{qy:g}</LHAttOffsetQuaty>\n"
+            f"<LHAttOffsetQuatz>{qz:g}</LHAttOffsetQuatz>\n"
+            "</AttGen>\n<AttGenArray/>\n</Attitude>")
+
+
+def patch_satellite_attitude(xml_path: str, blocks: dict, out_path: str) -> str:
+    """按卫星名替换 <Attitude> 块（blocks: {卫星名: Attitude块字符串}）。"""
+    with open(xml_path, "rb") as f:
+        b = f.read()
+    t = b.decode("gbk", errors="replace")
+    pat_sat = re.compile(r'(?s)<Satellite Name="([^"]+)"[^>]*>.*?</Satellite>')
+
+    def repl_sat(m):
+        sat = m.group(0)
+        blk = blocks.get(m.group(1))
+        if blk is None:
+            return sat
+        att_pat = re.compile(r'(?s)<Attitude>.*?</Attitude>')
+        if att_pat.search(sat):
+            return att_pat.sub(lambda _: blk, sat, count=1)
+        ad = re.search(r'<AttitudeDefine[^>]*/>', sat)
+        if ad:
+            return sat[:ad.end()] + "\n" + blk + sat[ad.end():]
+        return sat
+
+    t = pat_sat.sub(repl_sat, t)
+    with open(out_path, "wb") as f:
+        f.write(t.encode("gbk", errors="replace"))
+    return out_path.replace("\\", "/")
+
+
 def patch_pointing_targeted(xml_path: str, scenario: str, facility: str,
                            targets: dict, out_path: str) -> str:
     """把指定传感器（S{idx}）的 <Pointing> 改为目标指向（PointType=2）。
@@ -230,6 +273,13 @@ def eff_sat(i: int, cfg: dict) -> dict:
     sat_cons = list(s.get("sat_constraints") or [])
     return {"type": stype, "params": sparams, "pointing": pointing,
             "constraints": cons, "sat_constraints": sat_cons}
+
+
+def eff_attitude(i: int, cfg: dict) -> dict | None:
+    """第 i 颗星的整星姿态（逐星覆盖全局）。"""
+    sc = cfg.get("sat_cfgs") or []
+    s = sc[i] if i < len(sc) and sc[i] else {}
+    return s.get("attitude") or cfg.get("attitude")
 
 
 def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
@@ -304,6 +354,15 @@ def build_and_patch_xml(cfg, port: int, tle: str, t0: str, t1: str) -> str:
             out_path = patch_pointing_targeted(
                 out_path, scenario, "Hangzhou", tgt,
                 os.path.join(tempfile.gettempdir(), f"xmlroute_tgt_{port}.atk"))
+        att_blocks = {}
+        for i, nm in enumerate(names):
+            att = eff_attitude(i, cfg)
+            if att:
+                att_blocks[nm] = build_attitude_xml_block(att)
+        if att_blocks:
+            out_path = patch_satellite_attitude(
+                out_path, att_blocks,
+                os.path.join(tempfile.gettempdir(), f"xmlroute_att_{port}.atk"))
         return out_path
     finally:
         kill_port_owner(port)
@@ -379,10 +438,12 @@ def main():
     }
     need_xml = any(
         (eff_sat(i, cfg)["type"] in XML_ROUTE_TYPES
-         or (eff_sat(i, cfg).get("pointing") or {}).get("type") == "Targeted")
+         or (eff_sat(i, cfg).get("pointing") or {}).get("type") == "Targeted"
+         or eff_attitude(i, cfg))
         for i in range(expected or 0)) or \
         cfg.get("sensor_type", "SimpleCone") in XML_ROUTE_TYPES or \
-        (cfg.get("pointing") or {}).get("type") == "Targeted"
+        (cfg.get("pointing") or {}).get("type") == "Targeted" or \
+        bool(cfg.get("attitude"))
     if need_xml:
         t_xml = time.time()
         run_xml_route(cfg, port, tle, t0, t1, result)

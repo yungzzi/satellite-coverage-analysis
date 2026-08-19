@@ -1101,9 +1101,22 @@ def main(argv=None):
     ap.add_argument("--engine", choices=["self", "atk"], default="self",
                     help="覆盖引擎：self=自研（默认）；atk=本机 ATK（需安装注册，"
                          "仅支持点+半径目标，目标按圆心点判定）")
+    ap.add_argument("--sensor-type", default=None,
+                    help="复杂传感器类型（自研引擎）：SimpleCone/Rectangular/Conical/"
+                         "HalfPower/SAR；缺省=SimpleCone")
     ap.add_argument("--sensor-params", default=None,
                     help="逐星传感器参数表（TOML）；不指定则自动读 data/sensor_params.toml"
                          "（存在才生效）")
+    ap.add_argument("--sensor-values", default=None,
+                    help="复杂传感器参数（逗号分隔数值，配合 --sensor-type）")
+    ap.add_argument("--pointing", default=None,
+                    help="传感器指向 JSON，如 {\"type\":\"Fixed\",\"method\":\"YPR\","
+                         "\"params\":[\"YPR\",0,15,0]}；支持 Fixed/Targeted/GrazingAlt/Spinning")
+    ap.add_argument("--attitude", default=None,
+                    help="整星姿态 JSON，如 {\"profile\":4,\"offset\":[0,0,0]}（0-4）")
+    ap.add_argument("--constraints", default=None,
+                    help="约束 JSON 数组，如 [{\"object\":\"sensor\",\"name\":\"Range\","
+                         "\"params\":\"Min 100000\"}]")
     ap.add_argument("--fov", type=float, default=10.0, help="视场半角（度，全局默认）")
     ap.add_argument("--elev", type=float, default=10.0, help="最小仰角（度）")
     ap.add_argument("--grid", type=float, default=0.2, help="网格间距（度）")
@@ -1199,13 +1212,31 @@ def main(argv=None):
         for w in cov_result.get("sensor_warnings") or []:
             print(w)
     else:
+        import sensor_geometry as sg
         windows_by_sat = []
         sensor_warnings = []
         sensor_override_count = 0
+        _cpx_global = {}
+        if args.sensor_type:
+            _cpx_global["sensor_type"] = args.sensor_type
+        if args.sensor_values:
+            _cpx_global["sensor_params"] = [float(x) for x in str(args.sensor_values).split(",")]
+        if args.pointing:
+            import json as _json
+            _cpx_global["pointing"] = _json.loads(args.pointing)
+        if args.attitude:
+            import json as _json
+            _cpx_global["attitude"] = _json.loads(args.attitude)
+        if args.constraints:
+            import json as _json
+            _cpx_global["constraints"] = _json.loads(args.constraints)
         for sat in sats:
             norad = int(sat.model.satnum) if getattr(sat, "model", None) else None
             sat_cfg, info = cov.resolve_sat_cfg(norad, sensor_overrides, cfg,
                                                 swath_enabled=swath_enabled)
+            _cpx = dict(_cpx_global)
+            if _cpx:
+                sat_cfg.update(_cpx)
             if info.get("source") == "override":
                 sensor_override_count += 1
             tag = cov.orbit_tag(sat)
@@ -1215,7 +1246,9 @@ def main(argv=None):
                 sensor_warnings.append(
                     f"  {sat.name}（NORAD {norad}，{tag}）：幅宽不适用，"
                     f"已按视场半角 {fov_back}° 计算")
-            windows_by_sat.append(cov.analyze_one_satellite(sat, t, dt_list, region, sat_cfg))
+            _fn = sg.compute_covered_series_complex if _cpx else None
+            windows_by_sat.append(cov.analyze_one_satellite(
+                sat, t, dt_list, region, sat_cfg, covered_fn=_fn))
         for w in sensor_warnings:
             print(w)
         t0 = dt_list[0]

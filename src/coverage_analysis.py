@@ -366,7 +366,8 @@ def compute_covered_series(sat, t, dt_list, region, cfg):
     return covered_grid.any(axis=1), covered_grid.mean(axis=1)
 
 
-def analyze_one_satellite(sat, t, dt_list, region, cfg, period_end=None):
+def analyze_one_satellite(sat, t, dt_list, region, cfg, period_end=None,
+                          covered_fn=None):
     """
     分析单颗卫星的覆盖情况，返回窗口列表：
     [(开始datetime, 结束datetime, 窗口内最大覆盖比例), ...]
@@ -389,7 +390,8 @@ def analyze_one_satellite(sat, t, dt_list, region, cfg, period_end=None):
     # ---- 第一步：coarse 秒粗筛（检测步长与输出/选星步长解耦） ----
     dt_coarse = make_dt_series(t_lo, period_end, coarse)
     t_coarse = t.ts.from_datetimes(dt_coarse)
-    covered, ratio = compute_covered_series(sat, t_coarse, dt_coarse, region, cfg)
+    _cov_fn = covered_fn or compute_covered_series
+    covered, ratio = _cov_fn(sat, t_coarse, dt_coarse, region, cfg)
     windows = []
     in_window = False
     for i, c in enumerate(covered):
@@ -413,7 +415,7 @@ def analyze_one_satellite(sat, t, dt_list, region, cfg, period_end=None):
                 continue
             dt_f = make_dt_series(start - margin, end + margin, refine)
             t_f = t.ts.from_datetimes(dt_f)
-            cov_f, _ = compute_covered_series(sat, t_f, dt_f, region, cfg)
+            cov_f, _ = _cov_fn(sat, t_f, dt_f, region, cfg)
             idx = np.where(cov_f)[0]
             if not len(idx):
                 refined.append([start, end, r])
@@ -839,6 +841,13 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
             progress((i + 1) / len(sats), f"分析 {sat.name}（{i + 1}/{len(sats)}）")
         sat_cfg, info = resolve_sat_cfg(sat.norad_id, sensor_params, cfg,
                                         swath_enabled=swath_enabled)
+        # 复杂传感器/姿态/指向/约束：自研复杂引擎（P0-P3，docs/自研复杂传感器理论报告.md）
+        complex_cfg = {}
+        if engine == "self":
+            import sensor_geometry as sg
+            complex_cfg = sg.merge_sat_complex_cfg(sat.norad_id, cfg)
+            if complex_cfg:
+                sat_cfg.update(complex_cfg)
         tag = orbit_tag(sat)
         if sat_cfg.get("swath_km") and tag in ("GEO/静止", "高轨"):
             fov_back = sat_cfg.get("fov_half_angle_deg")
@@ -849,8 +858,12 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
                 f"{sat.name}（NORAD {sat.norad_id}，{tag}）：填了幅宽但高轨/静止卫星"
                 f"没有条带成像概念，已改按视场半角 {fov_back}° 计算")
         sat_params.append({"name": sat.name, **info})
+        _cov_fn = None
+        if engine == "self" and complex_cfg:
+            import sensor_geometry as sg
+            _cov_fn = sg.compute_covered_series_complex
         windows = analyze_one_satellite(sat, t, dt_list, region, sat_cfg,
-                                        period_end=t1_true)
+                                        period_end=t1_true, covered_fn=_cov_fn)
         windows_by_sat.append(windows)
         all_windows.extend((sat.name, w[0], w[1], w[2]) for w in windows)
     if not all_windows:

@@ -1500,6 +1500,7 @@ if tab_analysis.open:
     _pointing = None
     _constraints = []
     _atk_sat_overrides = []
+    _self_sat_overrides = []
     if cov_engine_sel == "self":
         with st.container(border=True):
             st.markdown("**自研引擎参数**")
@@ -1522,6 +1523,42 @@ if tab_analysis.open:
                                          help="窗口边界精化步长（默认 1 秒，P1）；检测步长为 10 秒（config.toml 可改 coarse_step_seconds）")
             st.caption("时间步长越小越准但越慢（1 分钟 + 边界精化是已验证的默认）。")
         _render_self_sensor_table(cov_sats, cov_sw_en)
+        # 复杂传感器/姿态/指向/约束：自研引擎已实现 ATK 同款能力，配置与 ATK 面板同源
+        if "atk_global_cfg" not in st.session_state or "atk_sat_cfgs" not in st.session_state:
+            _g0, _s0 = aui.load_cfg()
+            st.session_state.setdefault("atk_global_cfg", _g0)
+            st.session_state.setdefault("atk_sat_cfgs", _s0)
+        _g_self = st.session_state["atk_global_cfg"]
+        with st.expander(
+                "复杂传感器 / 姿态 / 指向 / 约束（自研引擎已支持，配置与 ATK 同款）",
+                expanded=False):
+            st.caption("自研引擎已实现 ATK 同款能力：传感器 SimpleCone/Rectangular/Conical/"
+                       "HalfPower/SAR，整星姿态族 0-4 + 偏移四元数，指向 Fixed/Targeted/"
+                       "GrazingAlt/Spinning，约束（基本 + 光照）。此处为全局设置；"
+                       "逐星配置可切到 ATK 面板按星保存（同一份 TOML，两引擎共用）。")
+            _g_panel_self = aui.panel("self_c", allow_facility=True, initial=_g_self)
+            st.session_state["self_complex_cfg"] = _g_panel_self
+            if st.button("保存为默认（自研复杂传感器）", key="btn_self_cplx_save"):
+                _g_full_self = dict(_g_panel_self)
+                _g_full_self["min_elevation_deg"] = float(cov_elev)
+                aui.persist(global_cfg=_g_full_self)
+                st.session_state["atk_global_cfg"] = _g_full_self
+                st.session_state["self_complex_cfg"] = _g_full_self
+                flash("已保存全局复杂传感器默认设置（自研引擎生效）。", kind="success")
+        for _nid, _c in st.session_state["atk_sat_cfgs"].items():
+            _row = {"norad": int(_nid)}
+            if _c.get("sensor_type") and _c["sensor_type"] != "SimpleCone":
+                _row["sensor_type"] = _c["sensor_type"]
+                if _c.get("sensor_params"):
+                    _row["sensor_params"] = _c["sensor_params"]
+            if _c.get("pointing"):
+                _row["pointing"] = _c["pointing"]
+            if _c.get("attitude"):
+                _row["attitude"] = _c["attitude"]
+            if _c.get("constraints"):
+                _row["constraints"] = _c["constraints"]
+            if _row != {"norad": int(_nid)}:
+                _self_sat_overrides.append(_row)
     else:
         if "atk_global_cfg" not in st.session_state or "atk_sat_cfgs" not in st.session_state:
             _g0, _s0 = aui.load_cfg()
@@ -1658,6 +1695,23 @@ if tab_analysis.open:
                         cfg["constraints"] = _constraints
                     if _atk_sat_overrides:
                         cfg["sat_sensor_overrides"] = _atk_sat_overrides
+                elif cov_engine_sel == "self":
+                    _sc = st.session_state.get("self_complex_cfg") or {}
+                    _default_cons = [{"object": "facility",
+                                      "name": "SunGroundElevAngle",
+                                      "params": "Min 10"}]
+                    _cs = _sc.get("constraints") or []
+                    _has_custom = (_sc.get("sensor_type") and
+                                   _sc["sensor_type"] != "SimpleCone") \
+                        or bool(_sc.get("pointing")) or bool(_sc.get("attitude")) \
+                        or (_cs and _cs != _default_cons)
+                    if _has_custom:
+                        for _k in ("sensor_type", "sensor_params", "pointing",
+                                   "attitude", "constraints"):
+                            if _sc.get(_k):
+                                cfg[_k] = _sc[_k]
+                        if _self_sat_overrides:
+                            cfg["sat_sensor_overrides"] = _self_sat_overrides
                 if cov_mode == "点+半径":
                     region = {"mode": "circle", "lat": float(cov_lat),
                               "lon": float(cov_lon), "radius_km": float(cov_rad)}

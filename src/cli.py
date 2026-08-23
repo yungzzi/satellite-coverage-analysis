@@ -274,6 +274,16 @@ def _add_select_args(sp, run: bool = False):
     sp.add_argument("--fov", type=float, default=None, help="视场半角（度，默认 10）")
     sp.add_argument("--elev", type=float, default=None, help="最小仰角（度，默认 10）")
     sp.add_argument("--sensor-params", default=None, help="逐星传感器参数表路径")
+    sp.add_argument("--sensor-type", default=None,
+                    help="复杂传感器类型（自研引擎）：SimpleCone/Rectangular/Conical/"
+                         "HalfPower/SAR")
+    sp.add_argument("--sensor-values", default=None,
+                    help="复杂传感器参数（逗号分隔数值，配合 --sensor-type）")
+    sp.add_argument("--pointing", default=None,
+                    help="传感器指向 JSON（Fixed/Targeted/GrazingAlt/Spinning）")
+    sp.add_argument("--attitude", default=None,
+                    help="整星姿态 JSON（{\"profile\":0-4,\"offset\":[...]}）")
+    sp.add_argument("--constraints", default=None, help="约束 JSON 数组")
     sp.add_argument("--k-min", type=int, default=None, help="最少同时可见数 K（默认 1）")
     sp.add_argument("--mrt", type=float, default=None, help="最大重访间隔（分钟）")
     sp.add_argument("--min-event", type=float, default=None, help="单次窗口最短时长(分钟)")
@@ -389,6 +399,16 @@ def _select_argv(a, xlsx: bool, save_as: str | None,
         argv += ["--elev", str(a.elev)]
     if a.sensor_params:
         argv += ["--sensor-params", a.sensor_params]
+    if a.sensor_type:
+        argv += ["--sensor-type", a.sensor_type]
+    if a.sensor_values:
+        argv += ["--sensor-values", a.sensor_values]
+    if a.pointing:
+        argv += ["--pointing", a.pointing]
+    if a.attitude:
+        argv += ["--attitude", a.attitude]
+    if a.constraints:
+        argv += ["--constraints", a.constraints]
     if a.k_min is not None:
         argv += ["--k-min", str(a.k_min)]
     if a.mrt is not None:

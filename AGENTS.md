@@ -52,6 +52,14 @@
    或环境变量 ATK_ROOT 指定。303 全量对拍：逐分钟"有覆盖"480/480 一致、覆盖星数一致；
    差异仅两类——点/圆边缘窗口切分、自研对高轨宽视场的保守近似（ATK 物理更正确）。
    详见 docs/ATK引擎对拍报告.md。
+7. **自研引擎实现 ATK 同款复杂传感器/姿态（2026-08-19，codex/self-engine-complex-sensor）**：
+   自研引擎新增 src/sensor_geometry.py，实现 ATK 已支持的全部能力——传感器类型
+   （SimpleCone/Rectangular/Conical/HalfPower/SAR）、整星姿态族 EVeProfile 0-4 + 偏移四元数、
+   指向（Fixed/Targeted/GrazingAlt/Spinning）、约束（基本 12 + 光照 7），输出仍是覆盖窗口。
+   默认"SimpleCone+天底"路径委托现有 compute_covered_series 保证零回归；GUI/CLI 支持
+   --sensor-type/--sensor-values/--pointing/--attitude/--constraints。ATK 无头对拍：
+   Conical -3.0%、Rectangular -1.6%、HalfPower -3.2%、SAR -29%（父高度语义待 P3 标定）。
+   理论报告：docs/自研复杂传感器理论报告.md；回归：src/validate_self_complex_sensor.py。
 
 ## 5. 覆盖判定默认约定（导师 2026-08-04 已拍板）
 - 目标区域表示：支持两类（已实现，`region_mode` 切换）——① **点 + 半径**（导师要求先按

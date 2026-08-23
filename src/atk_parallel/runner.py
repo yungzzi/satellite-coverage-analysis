@@ -257,7 +257,7 @@ def main():
                     help='传感器参数（逗号分隔）：如 "45"、"40,60"、"0.5,0.35"、'
                          '"0,45,0,360"、"12,70,30,30,550000"')
     ap.add_argument("--pointing", default=None,
-                    help='传感器指向 JSON：{"type":"Fixed|Targeted|GrazingAlt|External",...}')
+        help='传感器指向 JSON：{"type":"Fixed|Targeted|GrazingAlt|Spinning",...}')
     ap.add_argument("--constraints", default=None,
                     help='约束 JSON 数组：[{"object":"facility|sensor|satellite",'
                          '"name":"约束名","params":"Min 10"}]')

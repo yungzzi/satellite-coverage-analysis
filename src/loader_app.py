@@ -382,6 +382,49 @@ def _render_self_sensor_table(cov_sats, cov_sw_en):
                             st.rerun()
 
 
+def _render_sat_cfg_editor(cov_sats, sat_cfgs, prefix):
+    """逐星配置（覆盖全局）：左=卫星列表，右=该星配置（仿 ATK 列表+属性页）。
+
+    自研与 ATK 共用同一份 atk_sat_cfgs（TOML），保证两引擎逐星配置一致。
+    sat_cfgs 为 st.session_state["atk_sat_cfgs"] 的引用，就地增删并持久化。
+    """
+    _pool = aui.sat_pool(cov_sats)
+    if not _pool:
+        st.caption("请先在上方「卫星来源」勾选收藏夹，这里会列出所有卫星；"
+                   "单击选中一颗星后在右侧配置。")
+        return
+    col_l, col_r = st.columns([1, 2])
+    with col_l:
+        _df_pool = pd.DataFrame(_pool, columns=["norad", "name", "已配置"])
+        _sel = st.dataframe(_df_pool, hide_index=True, on_select="rerun",
+                            selection_mode="single-row", key=f"{prefix}_sat_list")
+        _sel_idx = list(_sel.selection.rows)
+        _cur_norad = None
+        if _sel_idx and _sel_idx[0] < len(_pool):
+            _cur_norad = _pool[_sel_idx[0]]["norad"]
+        st.caption("单击选中一颗星 → 右侧打开配置（仿 ATK 的列表+属性页）。")
+    with col_r:
+        if _cur_norad is None:
+            st.caption("在左侧列表选中一颗星后在此配置。")
+            return
+        _cur_cfg = sat_cfgs.get(str(_cur_norad), {})
+        st.markdown(f"**NORAD {_cur_norad} 的设置**")
+        st.caption("此处只对该星生效；空项表示用全局设置。")
+        _panel = aui.panel(f"{prefix}_s_{_cur_norad}", allow_facility=False,
+                           initial=_cur_cfg)
+        _b1, _b2 = st.columns(2)
+        if _b1.button("保存本星配置", key=f"{prefix}_sat_save", type="primary"):
+            sat_cfgs[str(_cur_norad)] = _panel
+            st.session_state["atk_sat_cfgs"] = sat_cfgs
+            aui.persist(sat_cfgs=sat_cfgs)
+            flash(f"已保存 NORAD {_cur_norad} 的配置。", kind="success")
+        if _b2.button("清除本星配置（回退全局）", key=f"{prefix}_sat_clear"):
+            sat_cfgs.pop(str(_cur_norad), None)
+            st.session_state["atk_sat_cfgs"] = sat_cfgs
+            aui.persist(sat_cfgs=sat_cfgs)
+            flash(f"已清除 NORAD {_cur_norad} 的配置。", kind="success")
+
+
 ATK_CONSTRAINT_OPTIONS = [
     "AzimuthAngle", "ElevationAngle", "Range",
     "AzimuthRate", "ElevationRate", "RangeRate", "AngularRate",
@@ -1380,7 +1423,7 @@ if tab_analysis.open:
     cov_engine = st.segmented_control(
         "覆盖引擎",
         ["自研（无需外部软件）", "ATK（需本机安装并注册，推荐）"],
-        default="ATK（需本机安装并注册，推荐）", key="cov_engine",
+        default="自研（无需外部软件）", key="cov_engine",
         help="自研=纯 Python 几何判定（免依赖）；ATK=调用本机 ATK 计算，支持更多传感器类型/指向/约束，"
              "当前只支持点+半径目标（按圆心点判定）。ATK 安装目录可用环境变量 ATK_ROOT 或 config [atk] root 指定。")
     cov_engine_sel = "atk" if cov_engine.startswith("ATK") else "self"
@@ -1533,9 +1576,9 @@ if tab_analysis.open:
                 "复杂传感器 / 姿态 / 指向 / 约束（自研引擎已支持，配置与 ATK 同款）",
                 expanded=False):
             st.caption("自研引擎已实现 ATK 同款能力：传感器 SimpleCone/Rectangular/Conical/"
-                       "HalfPower/SAR，整星姿态族 0-4 + 偏移四元数，指向 Fixed/Targeted/"
+                       "HalfPower/SAR，整星姿态族 0-4 + 偏置（四元数/欧拉/YPR），指向 Fixed/Targeted/"
                        "GrazingAlt/Spinning，约束（基本 + 光照）。此处为全局设置；"
-                       "逐星配置可切到 ATK 面板按星保存（同一份 TOML，两引擎共用）。")
+                       "逐星配置在下方按星设置（同一份 TOML，两引擎共用）。")
             _g_panel_self = aui.panel("self_c", allow_facility=True, initial=_g_self)
             st.session_state["self_complex_cfg"] = _g_panel_self
             if st.button("保存为默认（自研复杂传感器）", key="btn_self_cplx_save"):
@@ -1545,6 +1588,11 @@ if tab_analysis.open:
                 st.session_state["atk_global_cfg"] = _g_full_self
                 st.session_state["self_complex_cfg"] = _g_full_self
                 flash("已保存全局复杂传感器默认设置（自研引擎生效）。", kind="success")
+        with st.container(border=True):
+            st.markdown("**逐星配置（覆盖全局）**")
+            st.caption("同 ATK 面板：左侧选星 → 右侧配置该星；空项表示用全局设置。"
+                       "保存后与 ATK 引擎共用同一份 TOML，两引擎逐星配置一致。")
+            _render_sat_cfg_editor(cov_sats, st.session_state["atk_sat_cfgs"], "self")
         for _nid, _c in st.session_state["atk_sat_cfgs"].items():
             _row = {"norad": int(_nid)}
             if _c.get("sensor_type") and _c["sensor_type"] != "SimpleCone":
@@ -1590,41 +1638,7 @@ if tab_analysis.open:
 
         with st.container(border=True):
             st.markdown("**逐星配置（覆盖全局）**")
-            _pool = aui.sat_pool(cov_sats)
-            if not _pool:
-                st.caption("请先在上方「卫星来源」勾选收藏夹，这里会列出所有卫星；"
-                           "单击选中一颗星后在右侧配置。")
-            else:
-                _col_l, _col_r = st.columns([1, 2])
-                with _col_l:
-                    _df_pool = pd.DataFrame(_pool, columns=["norad", "name", "已配置"])
-                    _sel = st.dataframe(_df_pool, hide_index=True, on_select="rerun",
-                                        selection_mode="single-row", key="atk_sat_list")
-                    _sel_idx = list(_sel.selection.rows)
-                    _cur_norad = None
-                    if _sel_idx and _sel_idx[0] < len(_pool):
-                        _cur_norad = _pool[_sel_idx[0]]["norad"]
-                    st.caption("单击选中一颗星 → 右侧打开配置（仿 ATK 的列表+属性页）。")
-                with _col_r:
-                    if _cur_norad is None:
-                        st.caption("在左侧列表选中一颗星后在此配置。")
-                    else:
-                        _cur_cfg = _sat_cfgs.get(str(_cur_norad), {})
-                        st.markdown(f"**NORAD {_cur_norad} 的设置**")
-                        st.caption("此处只对该星生效；空项表示用全局设置。")
-                        _panel = aui.panel(f"atk_s_{_cur_norad}", allow_facility=False,
-                                           initial=_cur_cfg)
-                        _b1, _b2 = st.columns(2)
-                        if _b1.button("保存本星配置", key="btn_atk_sat_save", type="primary"):
-                            _sat_cfgs[str(_cur_norad)] = _panel
-                            st.session_state["atk_sat_cfgs"] = _sat_cfgs
-                            aui.persist(sat_cfgs=_sat_cfgs)
-                            flash(f"已保存 NORAD {_cur_norad} 的配置。", kind="success")
-                        if _b2.button("清除本星配置（回退全局）", key="btn_atk_sat_clear"):
-                            _sat_cfgs.pop(str(_cur_norad), None)
-                            st.session_state["atk_sat_cfgs"] = _sat_cfgs
-                            aui.persist(sat_cfgs=_sat_cfgs)
-                            flash(f"已清除 NORAD {_cur_norad} 的配置。", kind="success")
+            _render_sat_cfg_editor(cov_sats, _sat_cfgs, "atk")
 
             _atk_sat_overrides = []
             for _nid, _c in _sat_cfgs.items():

@@ -34,6 +34,7 @@ sys.path.insert(0, PYMOD)
 import ATKConnectModule as C
 
 from .report_parser import decode_report, parse_coverage_report
+from sensor_geometry import offset_to_quat
 
 XML_ROUTE_TYPES = ("SAR", "HalfPower")
 SENSOR_TYPE_INDEX = {"SimpleCone": 0, "Rectangular": 1, "Conical": 3,
@@ -174,9 +175,7 @@ def build_attitude_xml_block(attitude) -> str:
     """整星标准姿态 XML 块（AttGenType=EVeProfile 0-4 + 偏移四元数，§10.33 ground truth）。"""
     profile = int(attitude.get("profile", 0))
     off = attitude.get("offset") or []
-    qx = float(off[0]) if len(off) > 0 else 0.0
-    qy = float(off[1]) if len(off) > 1 else 0.0
-    qz = float(off[2]) if len(off) > 2 else 0.0
+    qx, qy, qz = offset_to_quat(off)
     return ("<Attitude>\n<AttPropType>0</AttPropType>\n<AttGen>\n"
             "<StartUTC>2000-01-01 00:00:00.000000</StartUTC>\n"
             f"<AttGenType>{profile}</AttGenType>\n"

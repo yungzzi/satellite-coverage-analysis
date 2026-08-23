@@ -59,7 +59,17 @@
    默认"SimpleCone+天底"路径委托现有 compute_covered_series 保证零回归；GUI/CLI 支持
    --sensor-type/--sensor-values/--pointing/--attitude/--constraints。ATK 无头对拍：
    Conical -3.0%、Rectangular -1.6%、HalfPower -3.2%、SAR -29%（父高度语义待 P3 标定）。
-   理论报告：docs/自研复杂传感器理论报告.md；回归：src/validate_self_complex_sensor.py。
+    理论报告：docs/自研复杂传感器理论报告.md；回归：src/validate_self_complex_sensor.py。
+
+8. **收口一批（2026-08-23）**：
+   - **外部指向文件（External）决定不做**：ATK 只给一句"选择包含指向数据的文件（格式由软件支持，.pattern 文件等）"，
+     无格式无样例；主流程（对地/侧摆/凝视/旋转/SAR）都用不到。STK 官方才说明它是给"creeping line sensor"
+     自定义逐时刻扫描大表用的。GUI 已移除该选项，引擎侧保留明确报错提示。理由：格式无据 + 主流程无需求。
+   - **第 5 页默认覆盖引擎改回自研**（CLI 默认本就是自研），ATK 作为可选引擎，主面板默认即自研。
+   - **自研复杂配置面板仿 ATK**：`aui.panel` 改为左"定义"+右"约束"双栏；自研分支新增"逐星配置（覆盖全局）"
+     列表+属性页，与 ATK 共用同一份 `atk_sat_cfgs`（TOML），保证两引擎逐星配置一致。
+   - **姿态偏置形式三选一**：除偏移四元数外，新增欧拉角 / YPR 角偏移（GUI 下拉；自研引擎 `offset_dcm` 计算；
+     ATK 侧 `build_attitude_xml_block` 换算为偏移四元数写入 XML）。
 
 ## 5. 覆盖判定默认约定（导师 2026-08-04 已拍板）
 - 目标区域表示：支持两类（已实现，`region_mode` 切换）——① **点 + 半径**（导师要求先按

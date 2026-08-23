@@ -211,10 +211,10 @@ def pointing_ui(prefix: str) -> dict | None:
     mode = st.selectbox(
         "指向模式",
         ["天底（默认，不设置）", "Fixed 固定指向", "GrazingAlt 入射高度",
-         "External 外部指向文件", "Targeted 目标指向", "Spinning 旋转"],
+         "Targeted 目标指向", "Spinning 旋转"],
         key=f"{prefix}_pt_mode",
         help="Fixed=固定姿态偏置（侧摆，支持 YPR/欧拉/四元数/AzEl/矩阵）；"
-             "GrazingAlt=入射高度指向；External=外部指向文件；"
+             "GrazingAlt=入射高度指向；"
              "Targeted=始终指向目标点（凝视观测，XML 写法已由 GUI 场景确认）；"
              "Spinning=旋转扫描（同实例内可复现，跨实例初始相位不锚定，"
              "启用时全部分析在单个 ATK 实例中计算）。")
@@ -231,15 +231,6 @@ def pointing_ui(prefix: str) -> dict | None:
         alt = c2.number_input("入射高度(m)", value=10000.0, min_value=0.0, step=1000.0,
                               key=f"{prefix}_pt_alt")
         return {"type": "GrazingAlt", "azimuth": float(az), "altitude": float(alt)}
-    elif mode == "External 外部指向文件":
-        pf = st.file_uploader("指向文件（.sp）", type=["sp", "txt"],
-                              key=f"{prefix}_pt_file",
-                              help="ATK 外部指向文件（.sp）格式见 ATK 官方文档")
-        if pf is not None:
-            dst = sl.USER_FILES_DIR / f"pointing_{int(__import__('time').time())}_{pf.name}"
-            dst.write_bytes(pf.getvalue())
-            st.caption(f"已保存指向文件：{dst.name}")
-            return {"type": "External", "file": str(dst).replace("\\", "/")}
     elif mode == "Targeted 目标指向":
         aim = st.selectbox("瞄准模式", ["追踪（推荐）", "固定指向"],
                            key=f"{prefix}_pt_aim",
@@ -464,36 +455,77 @@ def attitude_ui(prefix: str, initial=None) -> dict | None:
         return None
     profile = _map[mode]
     ip = initial.get("offset") or []
-    st.caption("偏移四元数（在基准姿态上叠加的固定旋转；默认全 0）")
-    c1, c2, c3 = st.columns(3)
-    qx = c1.number_input("qx", value=float(ip[0]) if len(ip) > 0 else 0.0,
-                         min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qx")
-    qy = c2.number_input("qy", value=float(ip[1]) if len(ip) > 1 else 0.0,
-                         min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qy")
-    qz = c3.number_input("qz", value=float(ip[2]) if len(ip) > 2 else 0.0,
-                         min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qz")
-    return {"profile": int(profile), "offset": [float(qx), float(qy), float(qz)]}
+    st.caption("在基准姿态上叠加的固定旋转偏移（默认全 0 = 不偏移）。")
+    _init_type = "四元数（默认）"
+    if isinstance(ip, dict):
+        _init_type = {"euler": "欧拉角", "ypr": "YPR 角",
+                      "quaternion": "四元数（默认）"}.get(
+            str(ip.get("type") or "").lower(), "四元数（默认）")
+    off_label = st.selectbox("偏置形式", ["四元数（默认）", "欧拉角", "YPR 角"],
+                             index=["四元数（默认）", "欧拉角", "YPR 角"].index(_init_type),
+                             key=f"{prefix}_off_type",
+                             help="ATK 偏置形式三选一：四元数(qx,qy,qz)、欧拉角(绕X/Y/Z连续旋转)、YPR角(先偏航/再俯仰/后滚转)")
+    if off_label == "四元数（默认）":
+        _v = ip if isinstance(ip, list) else []
+        c1, c2, c3 = st.columns(3)
+        qx = c1.number_input("qx", value=float(_v[0]) if len(_v) > 0 else 0.0,
+                             min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qx")
+        qy = c2.number_input("qy", value=float(_v[1]) if len(_v) > 1 else 0.0,
+                             min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qy")
+        qz = c3.number_input("qz", value=float(_v[2]) if len(_v) > 2 else 0.0,
+                             min_value=-1.0, max_value=1.0, step=0.01, key=f"{prefix}_qz")
+        offset = [float(qx), float(qy), float(qz)]
+    elif off_label == "欧拉角":
+        _v = ip.get("params") if isinstance(ip, dict) and ip.get("params") else [0.0, 0.0, 0.0]
+        _seq = ip.get("seq", "123") if isinstance(ip, dict) else "123"
+        c1, c2 = st.columns([1, 2])
+        seq = c1.text_input("转序(如 123/321)", value=_seq, key=f"{prefix}_eu_seq",
+                            help="intrinsic 连续旋转：'123'=先绕X、再绕Y、最后绕Z")
+        e1, e2, e3 = c2.columns(3)
+        r1 = e1.number_input("角度1(°)", value=float(_v[0]), step=1.0, key=f"{prefix}_eu_r1")
+        r2 = e2.number_input("角度2(°)", value=float(_v[1]), step=1.0, key=f"{prefix}_eu_r2")
+        r3 = e3.number_input("角度3(°)", value=float(_v[2]), step=1.0, key=f"{prefix}_eu_r3")
+        offset = {"type": "Euler", "seq": seq, "params": [float(r1), float(r2), float(r3)]}
+    else:
+        _v = ip.get("params") if isinstance(ip, dict) and ip.get("params") else [0.0, 0.0, 0.0]
+        _seq = str(ip.get("seq", "YPR")) if isinstance(ip, dict) else "YPR"
+        c1, c2 = st.columns([1, 2])
+        seq = c1.text_input("转序(Y/P/R)", value=_seq, key=f"{prefix}_ypr_seq",
+                            help="默认 YPR=先偏航(绕Z)、再俯仰(绕Y)、最后滚转(绕X)")
+        y1, y2, y3 = c2.columns(3)
+        yaw = y1.number_input("偏航(°)", value=float(_v[0]), step=1.0, key=f"{prefix}_ypr_yaw")
+        pit = y2.number_input("俯仰(°)", value=float(_v[1]), step=1.0, key=f"{prefix}_ypr_pitch")
+        rol = y3.number_input("滚转(°)", value=float(_v[2]), step=1.0, key=f"{prefix}_ypr_roll")
+        offset = {"type": "YPR", "seq": seq, "params": [float(yaw), float(pit), float(rol)]}
+    return {"profile": int(profile), "offset": offset}
 
 
 def panel(prefix: str, allow_facility: bool, initial: dict | None = None) -> dict:
-    """全局/逐星共用配置面板：定义（类型+参数+指向）+ 约束（基本+光照）。"""
+    """全局/逐星共用配置面板：左栏=定义（类型+参数+指向），右栏=约束（基本+光照）。
+
+    ATK 原生样式：左侧"定义"，右侧"约束"；自研与 ATK 引擎共用同一面板，保证口径一致。
+    """
     initial = initial or {}
-    st.markdown("**定义**")
-    stype, sparams = sensor_type_ui(prefix + "_d",
-                                    initial.get("sensor_type", "SimpleCone"),
-                                    initial.get("sensor_params"))
-    st.markdown("**卫星姿态（可选）**")
-    attitude = attitude_ui(prefix + "_a", initial.get("attitude"))
-    pointing = pointing_ui(prefix + "_p")
-    if pointing is None and initial.get("pointing"):
-        pointing = dict(initial["pointing"])
-        st.caption(f"未改动，保留已保存指向：{initial['pointing']}")
-    elif pointing is None:
-        pointing = None
-    constraints = constraints_ui(prefix + "_c", allow_facility,
-                                 initial.get("constraints"))
-    if not constraints and initial.get("constraints"):
-        st.caption(f"已保存约束 {len(initial['constraints'])} 条（清空表格即可删除）。")
+    left, right = st.columns(2, gap="medium")
+    with left:
+        st.markdown("**定义**")
+        stype, sparams = sensor_type_ui(prefix + "_d",
+                                        initial.get("sensor_type", "SimpleCone"),
+                                        initial.get("sensor_params"))
+        st.markdown("**卫星姿态（可选）**")
+        attitude = attitude_ui(prefix + "_a", initial.get("attitude"))
+        pointing = pointing_ui(prefix + "_p")
+        if pointing is None and initial.get("pointing"):
+            pointing = dict(initial["pointing"])
+            st.caption(f"未改动，保留已保存指向：{initial['pointing']}")
+        elif pointing is None:
+            pointing = None
+    with right:
+        st.markdown("**约束（基本 + 光照）**")
+        constraints = constraints_ui(prefix + "_c", allow_facility,
+                                     initial.get("constraints"))
+        if not constraints and initial.get("constraints"):
+            st.caption(f"已保存约束 {len(initial['constraints'])} 条（清空表格即可删除）。")
     return {"sensor_type": stype, "sensor_params": sparams, "attitude": attitude,
             "pointing": pointing, "constraints": constraints}
 

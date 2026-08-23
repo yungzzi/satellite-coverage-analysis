@@ -90,6 +90,74 @@ def offset_quat(offset):
     return (qs, qx, qy, qz)
 
 
+def dcm_to_quat(R):
+    """3×3 旋转矩阵 → 单位四元数 (qs,qx,qy,qz)。标准 Shepperd 算法，qs≥0。"""
+    tr = R[0, 0] + R[1, 1] + R[2, 2]
+    if tr > 0.0:
+        s = math.sqrt(tr + 1.0) * 2.0
+        qs = 0.25 * s
+        qx = (R[2, 1] - R[1, 2]) / s
+        qy = (R[0, 2] - R[2, 0]) / s
+        qz = (R[1, 0] - R[0, 1]) / s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = math.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2.0
+        qs = (R[2, 1] - R[1, 2]) / s
+        qx = 0.25 * s
+        qy = (R[0, 1] + R[1, 0]) / s
+        qz = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = math.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2.0
+        qs = (R[0, 2] - R[2, 0]) / s
+        qx = (R[0, 1] + R[1, 0]) / s
+        qy = 0.25 * s
+        qz = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = math.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2.0
+        qs = (R[1, 0] - R[0, 1]) / s
+        qx = (R[0, 2] + R[2, 0]) / s
+        qy = (R[1, 2] + R[2, 1]) / s
+        qz = 0.25 * s
+    return (qs, qx, qy, qz)
+
+
+def offset_dcm(offset):
+    """把姿态偏移（ATK 偏移形式）转成 3×3 旋转矩阵，作用于基准体轴。
+
+    支持三种 ATK 偏置形式：
+      - 四元数 [qx,qy,qz]（默认，标量由单位化隐含）或 dict {"type":"Quaternion","params":[qx,qy,qz]}
+      - 欧拉角 dict {"type":"Euler","seq":"123","params":[r1,r2,r3]}（intrinsic 连续旋转）
+      - YPR 角 dict {"type":"YPR","seq":"YPR","params":[yaw,pitch,roll]}
+    返回 3×3 旋转矩阵（列向量作用于体轴）。"""
+    if isinstance(offset, dict):
+        t = str(offset.get("type") or "Quaternion").lower()
+        params = offset.get("params") or offset.get("offset") or []
+        try:
+            if t == "euler":
+                return dcm_from_euler(offset.get("seq", "123"), *[float(x) for x in params[:3]])
+            if t == "ypr":
+                return dcm_from_ypr(offset.get("seq", "YPR"), *[float(x) for x in params[:3]])
+            if t == "quaternion":
+                return quat_to_dcm(offset_quat([float(x) for x in params[:3]]))
+        except (TypeError, ValueError):
+            pass
+        # 未知类型回退为单位阵
+        return np.eye(3)
+    return quat_to_dcm(offset_quat(offset))
+
+
+def offset_to_quat(offset):
+    """把任意姿态偏移转成 ATK 偏移四元数 (qx,qy,qz)（标量由单位化隐含，qs≥0）。
+
+    用于把 GUI 里的欧拉/YPR 偏置换算成 XML 的 LHAttOffsetQuatx/y/z。
+    返回 [qx,qy,qz]；不支持时返回 [0,0,0]。"""
+    try:
+        R = offset_dcm(offset)
+    except Exception:
+        return [0.0, 0.0, 0.0]
+    _, qx, qy, qz = dcm_to_quat(R)
+    return [qx, qy, qz]
+
+
 def rotate_vec(q, v):
     """四元数旋转向量（支持 v 为 (3,) 或 (T,3)）。"""
     qs, qx, qy, qz = q
@@ -184,7 +252,7 @@ def body_dcm(r, v_ecf, v_in, sun=None, profile=0, offset=None):
     y = np.cross(z, x)
     C = np.stack([x, y, z], axis=2)          # (T,3,3)：列 = 体轴
     if offset:
-        Roff = quat_to_dcm(offset_quat(offset))
+        Roff = offset_dcm(offset)
         C = np.einsum("ij,tjk->tik", Roff, C)
     return C
 
@@ -241,7 +309,7 @@ def moon_vector_eci(jd):
 def pointing_boresight_ecef(pointing, r, v_ecf, C, target=None, dt_sec=None, jd=None):
     """视轴 b（ECI→体坐标变换后），返回 (T,3)。
 
-    pointing：None=天底；或 {"type": "Fixed"/"Targeted"/"GrazingAlt"/"Spinning"/"External", ...}
+    pointing：None=天底；或 {"type": "Fixed"/"Targeted"/"GrazingAlt"/"Spinning", ...}
     target：circle 模式的目标点 ECEF 坐标（(3,)），Targeted 需要。
     dt_sec：(T,) 相对分析起点的秒数，Spinning 需要。
     jd：太阳对齐姿态需要（由调用方传入，此处不用）。
@@ -318,7 +386,7 @@ def pointing_boresight_ecef(pointing, r, v_ecf, C, target=None, dt_sec=None, jd=
         b_body = b0[None, :] + qs[:, None] * tvec + np.cross(qv, tvec)
         return np.einsum("tij,tj->ti", C, b_body)
     if typ == "External":
-        raise NotImplementedError("External 外部指向文件在 P3 实现（需 .sp 格式样例）")
+        raise NotImplementedError("External 外部指向文件已决定不做（格式无据、主流程无需求）")
     raise ValueError(f"未知指向类型：{typ}")
 
 

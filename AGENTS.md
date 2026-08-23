@@ -82,6 +82,11 @@
    - **SAR 复测推翻“口径差异”收口（2026-08-23）**：68196+SAR(12,70,30,30,550)+08h，
      ATK 6窗/4549s vs 自研 6窗/2890s（**-36.5%**）。窗口数同但时长明显偏少，说明 SAR 入射带/前后排除角
      几何存在真实建模差异，**待诊断**；此前“父高度口径差异、收口”判断作废。
+   - **Rectangular 垂直/水平轴对齐（2026-08-24）**：自研 `pattern_covered` 此前把 `params[0]→沿轨(x)`、`params[1]→跨轨(y)`，
+     与 ATK `Define Rectangular <Vertical> <Horizontal>` 的 **Vertical=跨轨、Horizontal=沿轨** 相反（自研 sensor_frame_axes: x=沿迹、y=跨迹）。
+     已改为 `params[0]=Vertical(跨轨)、params[1]=Horizontal(沿轨)`。GUI 复测：Rect(60,10)→5 窗与 ATK 一致；
+     Rect(10,60) 自研给 0 窗 vs ATK 1 窗——目标恰好卡在 10° 跨轨边界，SGP4 vs 两体 ~1.6° 状态差翻转边缘，非系统性轴向错。
+     对称 Rect(45,45) 不受影响（-1.6% 保持）。
 
 ## 5. 覆盖判定默认约定（导师 2026-08-04 已拍板）
 - 目标区域表示：支持两类（已实现，`region_mode` 切换）——① **点 + 半径**（导师要求先按

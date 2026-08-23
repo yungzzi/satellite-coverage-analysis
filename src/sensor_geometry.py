@@ -411,10 +411,13 @@ def pattern_covered(u_s, sensor_type, sensor_params, eps_ground, min_elev,
         eta = float(sensor_params[0]) if sensor_params else 45.0
         ok = z >= math.cos(math.radians(eta))
     elif stype == "Rectangular":
-        h = float(sensor_params[0]) if sensor_params else 40.0
-        vh = float(sensor_params[1]) if len(sensor_params or []) > 1 else 60.0
-        ok = (z > 0.0) & (np.abs(np.degrees(np.arctan2(x, z))) <= h) \
-            & (np.abs(np.degrees(np.arctan2(y, z))) <= vh)
+        # 与 ATK `Define Rectangular <VerticalHalfAngle> <HorizontalHalfAngle>` 对齐：
+        #   params[0]=Vertical=跨轨(相机上下), params[1]=Horizontal=沿轨(相机左右)。
+        # 自研传感器系 x=沿轨、y=跨轨（sensor_frame_axes），故 params[0] 约束 y(跨轨)、params[1] 约束 x(沿轨)。
+        v_cross = float(sensor_params[0]) if sensor_params else 40.0   # Vertical → 跨轨(y)
+        h_along = float(sensor_params[1]) if len(sensor_params or []) > 1 else 60.0  # Horizontal → 沿轨(x)
+        ok = (z > 0.0) & (np.abs(np.degrees(np.arctan2(y, z))) <= v_cross) \
+            & (np.abs(np.degrees(np.arctan2(x, z))) <= h_along)
     elif stype == "Conical":
         inner = float(sensor_params[0]) if sensor_params else 0.0
         outer = float(sensor_params[1]) if len(sensor_params or []) > 1 else 45.0

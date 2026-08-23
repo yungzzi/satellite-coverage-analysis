@@ -70,6 +70,12 @@
      列表+属性页，与 ATK 共用同一份 `atk_sat_cfgs`（TOML），保证两引擎逐星配置一致。
    - **姿态偏置形式三选一**：除偏移四元数外，新增欧拉角 / YPR 角偏移（GUI 下拉；自研引擎 `offset_dcm` 计算；
      ATK 侧 `build_attitude_xml_block` 换算为偏移四元数写入 XML）。
+   - **Targeted 对拍定案（2026-08-23）**：用 68196 TLE + 地面站2(30.25,120.17) + 2026-08-14 08h，
+     生产 ATK 引擎（worker XML patch）vs 自研，5 窗口/4667s vs 4651s（0.3%），逐窗口起止差 2~4 s。
+     ⚠️ 旧基准“GUI 91.282s 单窗口”实为 **Spinning 传感器1** 的输出，不是 Targeted；Targeted 实际给 5 个 ~16 分钟通视窗口。
+     connect 模式 `Point ... Targeted` 与 `Load / Scenario` 均 NACK（Targeted 只能走 XML patch）。
+   - **旋转轴口径**：自研 Spinning 轴=本体系 az/el（默认 az0/el−90 = 天底，与轨道法线夹角 90°）；ATK 轴=四元数。
+     ATK 相位跨实例不锚定（ASLR），故 Spinning 只做“自研两次一致 + 窗口数落 ATK 统计范围”，不做逐窗口对拍。
 
 ## 5. 覆盖判定默认约定（导师 2026-08-04 已拍板）
 - 目标区域表示：支持两类（已实现，`region_mode` 切换）——① **点 + 半径**（导师要求先按

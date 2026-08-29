@@ -379,3 +379,15 @@ matplotlib（甘特图）、requests（下载数据）、pulp（整数规划求�
 - [x] P1/P2/P3 全部修复 + 窗口级精确评估（2026-08-10，Q171）：检测步长 10s（coarse_step_seconds）+ 精化 1s（跳过横跨全时段窗口 + 内部空隙切分）；选星新增 evaluate_windows_exact（最终覆盖率/空窗/连续判定按窗口精确回算到秒，搜索仍 1 分钟片）；P2 ilp_select_min_max_gap 传 mid*step_minutes；P3 时间栅格统一左闭右开 + circle_overlap_ratio 改 np.clip；validate_selection 42/42（新增精确评估/P2 step>1/float 用例）、validate_china_remote（P1 断言 10s粗筛+1s精化 vs 10s细算 96=96、偏差 0.32%）、validate_loader 43/43、validate_sensor_params 33/33、validate_n2yo_crosscheck 通过；文献 6 篇 PDF 已提交（Q167）
 - [x] 高精度决策开关（2026-08-10，Q173/Q175）：run_selection 增 decision_step_seconds（0=默认 1 分钟决策；10=决策矩阵 10s 仅贪心，ILP 自动跳过并注明原因）；GUI ⑤页加"决策矩阵用 10 秒（高精度，仅贪心）"复选框（打开时算法下拉禁用），CLI 增 --decision-step-seconds；summary/Excel 显示"决策步长 10 秒（高精度，仅贪心）"；validate_selection 44/44、CLI 冒烟通过、默认路径行为不变
 - [x] 用户可见文案去 Q 编号 + 行话改白话（2026-08-10，Q176）：GUI/CLI 不再出现 Q 编号（Q 仅内部注释/文档）；"选星决策矩阵"改"按 10 秒精细判定覆盖（更精确，仅用贪心算法）"，"决策步长"改"覆盖判定粒度"，帮助文字用白话解释"把时段切成小段逐段统计、段越短越精细"；README 同步；validate_selection 44/44、validate_sensor_params 33/33- [x] ATK 可选覆盖引擎（2026-08-15）：⑤页覆盖引擎单选 + CLI select/run --engine self|atk；303 全量对拍逐分钟 480/480 一致、覆盖星数一致（docs/ATK引擎对拍报告.md）；自研默认不变
+
+## 13. SIRIAgent 区域时间覆盖/选星接入基线（2026-08-29）
+- 接入方式：走 B，现有 Python 引擎封装成独立 FastAPI 计算服务；SIRIAgent Flask/Vercel 后端负责 skill 注册、意图与转发。正式注册格式仍待平台研发提供。
+- 区域：冻结平台同版本浙江 11 地市边界并确认源坐标系，在米制等面积投影中生成裁剪后的 5 km 网格单元；代表点做几何判定，裁剪面积作权重。原“点+半径”模式独立保留，不用于城市网格。
+- 时间：分析时段是输入，默认 8 小时；核心输出必须保留卫星×网格的覆盖窗口。现有“任一点覆盖”的区域汇总窗口不能直接用于区域选星。
+- 传感器：分辨率只筛选候选池；光学用矩形 Profile，SAR 用原生入射角带；姿态/指向为固定输入，不做行为优化。同一时刻必须生成与网格无关的统一足印，逐点 Targeted 只能标为潜在可达。
+- 区域达标：先求全部面积达标（beta=1），不可行再求至少 90% 面积（beta=0.9），不得静默继续降低。
+- 五任务：①最少星满足单元时间覆盖率；②最少星满足单元 MRT；③给定 N 先最大化达标面积、再最大化面积—时间平均；④给定 N 最小化面积分位 MRT；⑤给定 N 最小化面积加权 ART（贪心近似）。
+- 算法：任务② K_sim=1 使用滑窗集合覆盖 x-only 模型、重复约束去重；严格模式正向贪心，90% 模式反向删除，之后交给 ILP。按需约束生成仅作基准实验。ILP 证明 + 秒级窗口复核通过才可称最优。
+- 命名铁律：`K_sim` 是同时覆盖卫星数，`N_obs` 是观测机会次数；平台旧 `coverage_target_pct` 是累计空间覆盖比例，不能直接当单元时间覆盖率阈值。
+- 文档：`docs/SIRIAgent区域时间覆盖与选星数学依据.md`、`docs/SIRIAgent区域时间覆盖与选星实现方案.md`、`docs/SIRIAgent后端部署白话说明.md`；答疑记录 Q184~Q186。
+- 尚未拍板“只留复杂引擎”，禁止借本接入任务擅自退役旧引擎。

@@ -23,6 +23,8 @@ import itertools
 import sys
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -126,15 +128,21 @@ def test_empty_and_invalid_requests() -> None:
     )
     assert zero.recommended.feasible
     assert zero.recommended.selected_sat_indices == ()
-    try:
-        rs.run_regional_mrt_selection(
-            store, mrt_target_s=1_800.0, area_target_pct=100.0, min_simultaneous=2
-        )
-    except NotImplementedError as exc:
-        assert "K=1" in str(exc)
-    else:
-        raise AssertionError("K>1 没有明确拒绝。")
-    print("[通过] MRT≥分析时长的空组合和 K>1 边界")
+    k2 = rm.compute_regional_metrics(store, [0, 1], min_simultaneous=2)
+    assert np.isclose(k2.grid_metrics[0].temporal_coverage_pct, 100.0 / 6.0)
+    assert np.isclose(k2.grid_metrics[1].temporal_coverage_pct, 0.0)
+    result = rs.run_regional_mrt_selection(
+        store,
+        mrt_target_s=2_400.0,
+        area_target_pct=50.0,
+        min_simultaneous=2,
+        method="both",
+        time_limit_s=30,
+    )
+    assert result.recommended.min_simultaneous == 2
+    assert result.recommended.feasible
+    assert len(result.recommended.selected_sat_indices) == 2
+    print("[通过] MRT≥分析时长的空组合和 K=2 同时覆盖")
 
 
 def test_temporal_selection() -> None:
@@ -166,6 +174,17 @@ def test_temporal_selection() -> None:
                 assert result.ilp.status == "proven_optimal"
         else:
             assert result.recommended.achieved_area_pct < target_area
+    k2 = rs.run_regional_temporal_selection(
+        store,
+        temporal_coverage_target_pct=10.0,
+        area_target_pct=50.0,
+        min_simultaneous=2,
+        method="both",
+        time_limit_s=30,
+    )
+    assert k2.recommended.min_simultaneous == 2
+    assert k2.recommended.feasible
+    assert len(k2.recommended.selected_sat_indices) == 2
     print("[通过] 任务①时间覆盖率的穷举、贪心和 ILP 一致")
 
 
@@ -207,6 +226,17 @@ def test_budget_selection() -> None:
         time_limit_s=30,
     )
     assert len(exact.recommended.selected_sat_indices) == 2
+    k2 = rs.run_regional_budget_selection(
+        store,
+        n_budget=2,
+        temporal_coverage_target_pct=10.0,
+        min_simultaneous=2,
+        method="both",
+        time_limit_s=30,
+    )
+    assert k2.recommended.min_simultaneous == 2
+    assert k2.recommended.feasible
+    assert len(k2.recommended.selected_sat_indices) <= 2
     print("[通过] 任务③预算字典序目标与穷举一致")
 
 
@@ -258,14 +288,18 @@ def test_quantile_mrt_selection() -> None:
             assert result.area_quantile_mrt_s <= result.mrt_threshold_s + 1e-9
             assert len(result.selected_sat_indices) <= budget
             assert result.status == "proven_discrete_optimal"
-    try:
-        rs.select_min_area_quantile_mrt(
-            store, area_target_pct=50.0, n_budget=1, min_simultaneous=2
-        )
-    except NotImplementedError as exc:
-        assert "K=1" in str(exc)
-    else:
-        raise AssertionError("任务④未明确拒绝 K>1。")
+    k2 = rs.select_min_area_quantile_mrt(
+        store,
+        area_target_pct=50.0,
+        n_budget=2,
+        min_simultaneous=2,
+        method="ilp",
+        time_limit_s=30,
+    )
+    assert k2.feasible
+    assert k2.min_simultaneous == 2
+    assert abs(k2.area_quantile_mrt_s - 2_400.0) < 1e-9
+    assert len(k2.selected_sat_indices) <= 2
     print("[通过] 任务④面积分位 MRT 二分与全子集穷举一致")
 
 
@@ -311,12 +345,10 @@ def test_art_selection() -> None:
     actual = _art_score(exact.metrics)
     assert len(exact.selected_sat_indices) == 2
     assert all(abs(left - right) < 1e-9 for left, right in zip(actual, optimum))
-    try:
-        rs.run_regional_art_selection(store, n_budget=1, min_simultaneous=2)
-    except NotImplementedError as exc:
-        assert "K=1" in str(exc)
-    else:
-        raise AssertionError("任务⑤未明确拒绝 K>1。")
+    k2 = rs.run_regional_art_selection(store, n_budget=2, min_simultaneous=2)
+    assert k2.min_simultaneous == 2
+    assert k2.feasible
+    assert len(k2.selected_sat_indices) == 2
     print("[通过] 任务⑤ ART 贪心/局部改进与全子集穷举一致")
 
 

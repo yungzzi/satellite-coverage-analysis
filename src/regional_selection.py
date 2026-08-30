@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""区域选星任务①/②/③/④（当前均为 K=1）。
+"""区域选星任务①～⑤（当前均为 K=1）。
 
 任务②给定“每个网格最大空窗 MRT 不超过 ``mrt_target_s``”，任务①给定“每个网格
 时间覆盖率不低于 ``temporal_coverage_target_pct``”；两者都要求至少
@@ -14,6 +14,8 @@
   再在面积相同的方案中最大化面积加权时间覆盖率；ILP 用两阶段求解保持字典序目标。
 * 任务④给定最多 ``N`` 颗卫星时，对面积分位 MRT 上限做离散二分，每次复用任务②的
   可行性模型，最后用窗口级指标计算真实分位 MRT。
+* 任务⑤给定最多 ``N`` 颗卫星时，以面积加权 ART 为主目标做贪心、单星交换和反向删除，
+  同时报告面积分位 MRT 以暴露局部薄弱区域。
 
 最终可行性不以离散模型为准，而是重新调用 ``regional_metrics`` 的窗口级指标复核。
 因此分钟/检测步长边界误差不会被包装成“已满足”。本模块不修改旧的单点选星入口。
@@ -247,6 +249,52 @@ class AreaQuantileMrtSelectionResult:
             "evaluations": self.evaluations,
             "evaluated_thresholds_s": list(self.evaluated_thresholds_s),
             "selection": self.selection.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class ArtSelectionResult:
+    """任务⑤的一次贪心/局部改进结果。"""
+
+    method: str
+    selected_sat_indices: tuple[int, ...]
+    selected_sat_ids: tuple[int, ...]
+    selected_sat_names: tuple[str, ...]
+    n_budget: int
+    exact_budget: bool
+    mrt_area_quantile_pct: float
+    area_weighted_art_s: float
+    area_quantile_mrt_s: float
+    area_weighted_mrt_s: float
+    area_weighted_temporal_coverage_pct: float
+    feasible: bool
+    status: str
+    note: str
+    iterations: int
+    exchange_count: int
+    deletion_count: int
+    metrics: RegionalMetricsResult
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "method": self.method,
+            "selected_sat_indices": list(self.selected_sat_indices),
+            "selected_sat_ids": list(self.selected_sat_ids),
+            "selected_sat_names": list(self.selected_sat_names),
+            "n_budget": self.n_budget,
+            "exact_budget": self.exact_budget,
+            "mrt_area_quantile_pct": self.mrt_area_quantile_pct,
+            "area_weighted_art_s": self.area_weighted_art_s,
+            "area_quantile_mrt_s": self.area_quantile_mrt_s,
+            "area_weighted_mrt_s": self.area_weighted_mrt_s,
+            "area_weighted_temporal_coverage_pct": self.area_weighted_temporal_coverage_pct,
+            "feasible": self.feasible,
+            "status": self.status,
+            "note": self.note,
+            "iterations": self.iterations,
+            "exchange_count": self.exchange_count,
+            "deletion_count": self.deletion_count,
+            "metrics": self.metrics.to_city_dict(),
         }
 
 
@@ -1673,6 +1721,254 @@ def select_min_area_quantile_mrt(
     )
 
 
+def _evaluate_art(
+    store: OpportunityStore, selected: Sequence[int]
+) -> RegionalMetricsResult:
+    """用统一窗口指标评估任务⑤的 ART 目标。"""
+
+    return compute_regional_metrics(
+        store,
+        selected_sat_indices=selected,
+        min_simultaneous=1,
+    )
+
+
+def _score_art(
+    metrics: RegionalMetricsResult, mrt_area_quantile_pct: float
+) -> tuple[float, float, float, float]:
+    """任务⑤字典序评分：ART、面积分位 MRT、面积加权 MRT、覆盖率。"""
+
+    city = metrics.city
+    return (
+        float(city.area_weighted_art_s),
+        _area_quantile_mrt(metrics, mrt_area_quantile_pct),
+        float(city.area_weighted_mrt_s),
+        -float(city.area_weighted_temporal_coverage_pct),
+    )
+
+
+def _score_art_better(
+    candidate: tuple[float, ...], current: tuple[float, ...], tolerance: float = 1e-9
+) -> bool:
+    """带数值容差的字典序“小于”比较。"""
+
+    for left, right in zip(candidate, current):
+        if left < right - tolerance:
+            return True
+        if left > right + tolerance:
+            return False
+    return False
+
+
+def _score_art_not_worse(
+    candidate: tuple[float, ...], current: tuple[float, ...], tolerance: float = 1e-9
+) -> bool:
+    """判断候选是否不劣于当前解（用于安全反向删除）。"""
+
+    return _score_art_better(candidate, current, tolerance) or all(
+        abs(left - right) <= tolerance for left, right in zip(candidate, current)
+    )
+
+
+def _art_result(
+    store: OpportunityStore,
+    selected: Sequence[int],
+    *,
+    n_budget: int,
+    exact_budget: bool,
+    mrt_area_quantile_pct: float,
+    status: str,
+    note: str,
+    iterations: int,
+    exchange_count: int,
+    deletion_count: int,
+) -> ArtSelectionResult:
+    selected_tuple = tuple(sorted({int(index) for index in selected}))
+    metrics = _evaluate_art(store, selected_tuple)
+    identities = [_satellite_identity(store, index) for index in selected_tuple]
+    return ArtSelectionResult(
+        method="greedy_local_search",
+        selected_sat_indices=selected_tuple,
+        selected_sat_ids=tuple(item[0] for item in identities),
+        selected_sat_names=tuple(item[1] for item in identities),
+        n_budget=n_budget,
+        exact_budget=exact_budget,
+        mrt_area_quantile_pct=mrt_area_quantile_pct,
+        area_weighted_art_s=float(metrics.city.area_weighted_art_s),
+        area_quantile_mrt_s=_area_quantile_mrt(metrics, mrt_area_quantile_pct),
+        area_weighted_mrt_s=float(metrics.city.area_weighted_mrt_s),
+        area_weighted_temporal_coverage_pct=float(
+            metrics.city.area_weighted_temporal_coverage_pct
+        ),
+        feasible=len(selected_tuple) <= n_budget
+        and (not exact_budget or len(selected_tuple) == n_budget),
+        status=status,
+        note=note,
+        iterations=iterations,
+        exchange_count=exchange_count,
+        deletion_count=deletion_count,
+        metrics=metrics,
+    )
+
+
+def greedy_select_art(
+    store: OpportunityStore,
+    *,
+    n_budget: int,
+    exact_budget: bool = False,
+    mrt_area_quantile_pct: float = 90.0,
+    min_simultaneous: int = 1,
+    max_local_rounds: int = 3,
+) -> ArtSelectionResult:
+    """任务⑤：预算内贪心降低面积加权 ART，并做交换与反向删除。"""
+
+    if int(n_budget) != n_budget or int(n_budget) < 0:
+        raise ValueError("n_budget 必须是非负整数。")
+    n_budget = int(n_budget)
+    if not 0.0 <= float(mrt_area_quantile_pct) <= 100.0:
+        raise ValueError("mrt_area_quantile_pct 必须在 0～100 之间。")
+    mrt_area_quantile_pct = float(mrt_area_quantile_pct)
+    if int(min_simultaneous) != min_simultaneous or min_simultaneous <= 0:
+        raise ValueError("min_simultaneous 必须是正整数。")
+    if int(min_simultaneous) != 1:
+        raise NotImplementedError("当前任务⑤先实现 K=1；K>1 后续接入。")
+    if int(max_local_rounds) != max_local_rounds or int(max_local_rounds) < 0:
+        raise ValueError("max_local_rounds 必须是非负整数。")
+    max_local_rounds = int(max_local_rounds)
+    if exact_budget and n_budget > store.n_satellites:
+        raise ValueError("exact_budget=True 时，n_budget 不能超过候选卫星数。")
+
+    limit = min(n_budget, store.n_satellites)
+    usable = sorted({sat_index for sat_index, _ in store.windows})
+    selected: list[int] = []
+    current = _evaluate_art(store, selected)
+    iterations = 0
+
+    # 正向贪心：每轮选择让 ART 字典序下降最多的卫星。
+    while len(selected) < min(limit, len(usable)):
+        current_score = _score_art(current, mrt_area_quantile_pct)
+        best_index: int | None = None
+        best_metrics: RegionalMetricsResult | None = None
+        best_score = current_score
+        for sat_index in usable:
+            if sat_index in selected:
+                continue
+            trial = _evaluate_art(store, [*selected, sat_index])
+            score = _score_art(trial, mrt_area_quantile_pct)
+            if best_metrics is None or _score_art_better(score, best_score):
+                best_index = sat_index
+                best_metrics = trial
+                best_score = score
+        if best_index is None or best_metrics is None:
+            break
+        if not exact_budget and not _score_art_better(best_score, current_score):
+            break
+        selected.append(best_index)
+        current = best_metrics
+        iterations += 1
+
+    if exact_budget and len(selected) < limit:
+        # 恰好 N 颗时，剩余位置可由无覆盖机会的卫星填充，不改变 ART。
+        for sat_index in range(store.n_satellites):
+            if sat_index not in selected:
+                selected.append(sat_index)
+                if len(selected) >= limit:
+                    break
+        current = _evaluate_art(store, selected)
+
+    # 单星交换：避免“第一颗选错后，后续永远补不回来”的贪心局部陷阱。
+    exchange_count = 0
+    for _round in range(max_local_rounds):
+        if not selected:
+            break
+        current_score = _score_art(current, mrt_area_quantile_pct)
+        best_swap: tuple[int, int] | None = None
+        best_metrics = None
+        best_score = current_score
+        for old_index in selected:
+            for new_index in usable:
+                if new_index in selected:
+                    continue
+                trial_selected = [new_index if item == old_index else item for item in selected]
+                trial = _evaluate_art(store, trial_selected)
+                score = _score_art(trial, mrt_area_quantile_pct)
+                if best_metrics is None or _score_art_better(score, best_score):
+                    best_swap = (old_index, new_index)
+                    best_metrics = trial
+                    best_score = score
+        if best_swap is None or best_metrics is None or not _score_art_better(best_score, current_score):
+            break
+        old_index, new_index = best_swap
+        selected[selected.index(old_index)] = new_index
+        current = best_metrics
+        exchange_count += 1
+        iterations += 1
+
+    # 反向删除：最多预算模式下，删除不损失目标值的冗余卫星。
+    deletion_count = 0
+    if not exact_budget:
+        changed = True
+        while changed:
+            changed = False
+            current_score = _score_art(current, mrt_area_quantile_pct)
+            for sat_index in list(selected):
+                trial_selected = [item for item in selected if item != sat_index]
+                trial = _evaluate_art(store, trial_selected)
+                if _score_art_not_worse(
+                    _score_art(trial, mrt_area_quantile_pct), current_score
+                ):
+                    selected = trial_selected
+                    current = trial
+                    deletion_count += 1
+                    changed = True
+                    break
+
+    return _art_result(
+        store,
+        selected,
+        n_budget=n_budget,
+        exact_budget=exact_budget,
+        mrt_area_quantile_pct=mrt_area_quantile_pct,
+        status="feasible_heuristic",
+        note="贪心降低面积加权 ART，并完成单星交换和安全反向删除；结果是近似解。",
+        iterations=iterations,
+        exchange_count=exchange_count,
+        deletion_count=deletion_count,
+    )
+
+
+def run_regional_art_selection(
+    store: OpportunityStore,
+    *,
+    n_budget: int,
+    exact_budget: bool = False,
+    mrt_area_quantile_pct: float = 90.0,
+    min_simultaneous: int = 1,
+    max_local_rounds: int = 3,
+    refine_step_seconds: float | None = None,
+    timescale: Any | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> ArtSelectionResult:
+    """任务⑤总入口；可选地先统一精化一次区域机会窗口。"""
+
+    effective_store = store
+    if refine_step_seconds is not None:
+        effective_store = refine_regional_opportunity_windows(
+            store,
+            refine_step_seconds=refine_step_seconds,
+            timescale=timescale,
+            cfg=config,
+        )
+    return greedy_select_art(
+        effective_store,
+        n_budget=n_budget,
+        exact_budget=exact_budget,
+        mrt_area_quantile_pct=mrt_area_quantile_pct,
+        min_simultaneous=min_simultaneous,
+        max_local_rounds=max_local_rounds,
+    )
+
+
 def _recommend(
     greedy: SelectionResult | None,
     ilp: SelectionResult | None,
@@ -1771,6 +2067,7 @@ __all__ = [
     "BudgetSelectionResult",
     "RegionalBudgetSelectionResult",
     "AreaQuantileMrtSelectionResult",
+    "ArtSelectionResult",
     "build_bin_candidates",
     "greedy_select_mrt",
     "ilp_select_mrt",
@@ -1782,4 +2079,6 @@ __all__ = [
     "ilp_select_budget",
     "run_regional_budget_selection",
     "select_min_area_quantile_mrt",
+    "greedy_select_art",
+    "run_regional_art_selection",
 ]

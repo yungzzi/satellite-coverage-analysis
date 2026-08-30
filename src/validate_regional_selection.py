@@ -9,6 +9,7 @@ r"""区域选星任务②自检。
 * 100% 面积目标时最少卫星数为 2；
 * 90% 面积目标时最少卫星数仍为 2（两个等面积网格，单星只有 50%）；
 * 50% 面积目标时最少卫星数为 1，用来覆盖降级模式；
+* 任务①时间覆盖率门槛在相同小例子上与穷举一致；
 * 贪心+反向删除和 K=1 滑动窗口 ILP 与穷举最优值一致；
 * 真实杭州机会窗口能够直接交给任务②，而不会重新传播轨道。
 """
@@ -37,6 +38,23 @@ def brute_force_minimum(store, *, mrt_target_s: float, area_target_pct: float) -
         for subset in itertools.combinations(range(store.n_satellites), size):
             metrics = rm.compute_regional_metrics(
                 store, subset, mrt_target_s=mrt_target_s
+            )
+            if (metrics.city.qualified_area_pct or 0.0) + 1e-9 >= area_target_pct:
+                return size
+    return None
+
+
+def brute_force_temporal_minimum(
+    store, *, temporal_coverage_target_pct: float, area_target_pct: float
+) -> int | None:
+    """任务①的小规模基准：枚举所有子集，寻找最少颗数。"""
+
+    for size in range(store.n_satellites + 1):
+        for subset in itertools.combinations(range(store.n_satellites), size):
+            metrics = rm.compute_regional_metrics(
+                store,
+                subset,
+                temporal_coverage_target_pct=temporal_coverage_target_pct,
             )
             if (metrics.city.qualified_area_pct or 0.0) + 1e-9 >= area_target_pct:
                 return size
@@ -86,6 +104,38 @@ def test_empty_and_invalid_requests() -> None:
     print("[通过] MRT≥分析时长的空组合和 K>1 边界")
 
 
+def test_temporal_selection() -> None:
+    store = synthetic_store()
+    for target_q, target_area, expected in (
+        (30.0, 100.0, 1),
+        (50.0, 50.0, 1),
+        (50.0, 100.0, None),
+    ):
+        optimum = brute_force_temporal_minimum(
+            store,
+            temporal_coverage_target_pct=target_q,
+            area_target_pct=target_area,
+        )
+        assert optimum == expected
+        result = rs.run_regional_temporal_selection(
+            store,
+            temporal_coverage_target_pct=target_q,
+            area_target_pct=target_area,
+            method="both",
+            time_limit_s=30,
+        )
+        assert result.recommended.feasible is (expected is not None)
+        if expected is not None:
+            assert len(result.recommended.selected_sat_indices) == expected
+            if result.ilp and result.ilp.status not in {"unsupported", "skipped"}:
+                assert result.ilp.feasible
+                assert len(result.ilp.selected_sat_indices) == expected
+                assert result.ilp.status == "proven_optimal"
+        else:
+            assert result.recommended.achieved_area_pct < target_area
+    print("[通过] 任务①时间覆盖率的穷举、贪心和 ILP 一致")
+
+
 def test_real_opportunity_store() -> None:
     ts = sl.load.timescale(builtin=True)
     tle_path = ROOT / "data" / "test_data" / "jilin1_all.tle"
@@ -107,7 +157,12 @@ def test_real_opportunity_store() -> None:
 
 
 def main() -> int:
-    tests = [test_small_exact_agreement, test_empty_and_invalid_requests, test_real_opportunity_store]
+    tests = [
+        test_small_exact_agreement,
+        test_empty_and_invalid_requests,
+        test_temporal_selection,
+        test_real_opportunity_store,
+    ]
     for test in tests:
         test()
     print(f"区域选星任务②自检通过：{len(tests)}/{len(tests)}")

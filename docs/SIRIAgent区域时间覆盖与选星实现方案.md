@@ -109,6 +109,16 @@ tests/
 
 不能直接把“5 km”换算成固定经纬度差，因为经度一度对应的距离随纬度变化。
 
+首个实现固定为浙江附近的 Lambert 方位等面积投影：
+
+```text
++proj=laea +lat_0=29.5 +lon_0=120.0 +datum=WGS84 +units=m +no_defs +type=crs
+```
+
+格网原点固定为该投影的 $(0,0)$，首版边长为 $5000\ \mathrm{m}$。为消除
+“投影 → 经纬度 → 投影”带来的毫米级浮点噪声，格网生成阶段会将**计算坐标**统一到
+厘米精度；这只是数值稳定措施，不是把 5 km 空间分辨率改成 1 cm，也不改变边界的业务口径。
+
 ### 4.3 建议数据类
 
 ```python
@@ -117,7 +127,7 @@ class RegionGridCell:
     grid_id: str
     representative_lat: float
     representative_lon: float
-    area_km2: float
+    area_m2: float
 
 @dataclass(frozen=True)
 class RegionGrid:
@@ -126,8 +136,9 @@ class RegionGrid:
     cells: tuple[RegionGridCell, ...]
     boundary_hash: str
     projected_crs: str
-    grid_size_km: float
+    grid_size_m: float
     grid_origin_xy: tuple[float, float]
+    geometry_precision_m: float
 ```
 
 热路径只使用代表点数组和面积数组；裁剪后的 Shapely 几何主要用于生成、可视化和审计，不必在每次轨道计算中传递。
@@ -135,17 +146,22 @@ class RegionGrid:
 ### 4.4 核心函数
 
 ```python
-def load_city_boundary(path: Path, adcode: str) -> CityBoundary: ...
+def load_city_boundary(path: Path, adcode: str | None = None) -> CityBoundary: ...
 
 def build_clipped_grid(
     boundary: CityBoundary,
-    grid_size_km: float = 5.0,
-    projected_crs: str | None = None,
-    fixed_origin_xy: tuple[float, float] | None = None,
+    grid_size_m: float = 5000.0,
+    projected_crs: str = ZHEJIANG_EQUAL_AREA_CRS,
+    fixed_origin_xy: tuple[float, float] = (0.0, 0.0),
 ) -> RegionGrid: ...
 ```
 
 网格首次生成后应缓存为版本化文件。相同边界哈希、投影、格长和原点不得重复生成。
+
+首个代码交付实现于 `src/region_grid.py`：已经具备边界读取、裁剪格网、面积权重、代表点、
+边界哈希和调试 GeoJSON 导出（`save_grid_geojson`）；自动缓存暂缓到平台边界版本和服务端
+存储位置确定后再接入，避免先把错误边界版本持久化。`src/validate_region_grid.py` 覆盖规则整格、
+凹形/带洞单元的内部代表点、同格离散面、可复现性，以及杭州真实边界在 5 km / 2.5 km 下的面积守恒。
 
 ## 5. 第二层：逐星逐网格观测机会
 

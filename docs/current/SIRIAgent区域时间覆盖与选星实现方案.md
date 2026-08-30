@@ -392,6 +392,25 @@ def city_mean_observable_duration(values, areas, horizon_s) -> float: ...
 `proven_optimal`。`src/validate_regional_selection.py` 新增小规模全子集穷举对照，验证任务③的
 面积优先、平均覆盖率次优先语义以及“最多/恰好 N 颗”两种预算口径。
 
+### 8.0.3 当前已落地：任务④（K=1，给定预算最小化面积分位 MRT）
+
+任务④的目标是：给定最多 `N` 颗卫星和面积比例 `β`，让至少 `β` 的城市面积拥有不超过某个
+MRT 的网格，求这个面积分位 MRT 尽可能小。对方案 `X`，面积分位定义为
+\(M_{\beta}(X)=\inf\{M:\sum_g a_g\mathbf{1}[\operatorname{MRT}_X(g)\le M]
+\ge \beta\sum_g a_g\}\)。
+
+`select_min_area_quantile_mrt(...)` 当前只支持 `K=1`，默认使用 ILP：
+
+1. 将 MRT 上限离散为 `decision_step_s` 的整数桶；
+2. 对每个候选桶调用任务②的 MRT 可行性模型，检查满足 `β` 面积是否能在 `N` 颗以内完成；
+3. 利用可行性随 MRT 上限单调变宽的性质做二分，得到最低可行桶；
+4. 对最终卫星组合重新计算原始窗口的每个网格 MRT，并输出真实面积分位值。
+
+也支持 `method="greedy"` 或 `method="both"`。贪心结果只属于近似解；ILP 状态
+`proven_discrete_optimal` 只表示离散 MRT 桶上的二分已完成，不能把决策步长误解为秒级连续全局证明。
+若启用 `refine_step_seconds=1`，会先统一精化一次机会窗口，再进行整个二分过程。自检脚本用两网格
+人工窗口穷举核对了 `β=50%/100%` 和不同卫星预算；`K>1` 仍待后续接入。
+
 ### 8.1 共同预处理
 
 1. 删除全时段、全网格都无覆盖的卫星；
@@ -435,15 +454,16 @@ def city_mean_observable_duration(values, areas, horizon_s) -> float: ...
 
 贪心版本也按同一字典序语义比较候选，不使用随意加权和。
 
-### 8.5 任务④
+### 8.5 任务④（K=1 版本已落地）
 
-对 MRT 上限做离散二分，每次调用任务②的预算可行性模型：
+对 MRT 上限做离散二分，每次调用任务②的预算可行性模型，当前入口为：
 
 ```python
-def select_min_area_quantile_mrt(..., beta, n_budget) -> SelectionResult: ...
+def select_min_area_quantile_mrt(..., area_target_pct, n_budget) -> AreaQuantileMrtSelectionResult: ...
 ```
 
-最后对离散最优值附近用秒级窗口复核并报告真实值。
+最后用窗口级指标复核并报告真实面积分位值；需要更高时间精度时，调用方可在选星前启用
+`refine_step_seconds=1`。该实现只证明离散 MRT 桶上的最优性。
 
 ### 8.6 任务⑤
 
@@ -749,7 +769,8 @@ x-only 按需约束
 - [x] 将按需秒级边界精化接入任务②复核；
 - [x] 接入任务①（`K=1` 时间覆盖率门槛）；
 - [x] 接入任务③（K=1 预算下的两阶段字典序优化）；
-- [ ] 接入任务④、⑤；
+- [x] 接入任务④（K=1 面积分位 MRT 的离散二分）；
+- [ ] 接入任务⑤；
 - [ ] 接入 `K>1` 的通用 `y[g,k]` 模型。
 
 ### 阶段 F：FastAPI 最小 demo

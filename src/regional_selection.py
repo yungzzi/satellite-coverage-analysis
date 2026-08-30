@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""区域选星任务①/②/③（当前均为 K=1）。
+"""区域选星任务①/②/③/④（当前均为 K=1）。
 
 任务②给定“每个网格最大空窗 MRT 不超过 ``mrt_target_s``”，任务①给定“每个网格
 时间覆盖率不低于 ``temporal_coverage_target_pct``”；两者都要求至少
@@ -12,6 +12,8 @@
   覆盖。90% 模式增加网格达标变量 ``z_g``，严格 100% 模式直接约束所有网格。
 * 任务③给定最多（或恰好）``N`` 颗卫星时，先最大化达到时间覆盖率门槛的城市面积，
   再在面积相同的方案中最大化面积加权时间覆盖率；ILP 用两阶段求解保持字典序目标。
+* 任务④给定最多 ``N`` 颗卫星时，对面积分位 MRT 上限做离散二分，每次复用任务②的
+  可行性模型，最后用窗口级指标计算真实分位 MRT。
 
 最终可行性不以离散模型为准，而是重新调用 ``regional_metrics`` 的窗口级指标复核。
 因此分钟/检测步长边界误差不会被包装成“已满足”。本模块不修改旧的单点选星入口。
@@ -201,6 +203,50 @@ class RegionalBudgetSelectionResult:
             "greedy": self.greedy.to_dict() if self.greedy else None,
             "ilp": self.ilp.to_dict() if self.ilp else None,
             "recommended": self.recommended.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class AreaQuantileMrtSelectionResult:
+    """任务④的面积分位 MRT 结果。"""
+
+    task: str
+    area_target_pct: float
+    n_budget: int
+    method: str
+    mrt_threshold_s: float
+    area_quantile_mrt_s: float
+    selected_sat_indices: tuple[int, ...]
+    selected_sat_ids: tuple[int, ...]
+    selected_sat_names: tuple[str, ...]
+    achieved_area_pct: float
+    area_weighted_mrt_s: float
+    feasible: bool
+    status: str
+    note: str
+    evaluations: int
+    evaluated_thresholds_s: tuple[float, ...]
+    selection: SelectionResult
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task": self.task,
+            "area_target_pct": self.area_target_pct,
+            "n_budget": self.n_budget,
+            "method": self.method,
+            "mrt_threshold_s": self.mrt_threshold_s,
+            "area_quantile_mrt_s": self.area_quantile_mrt_s,
+            "selected_sat_indices": list(self.selected_sat_indices),
+            "selected_sat_ids": list(self.selected_sat_ids),
+            "selected_sat_names": list(self.selected_sat_names),
+            "achieved_area_pct": self.achieved_area_pct,
+            "area_weighted_mrt_s": self.area_weighted_mrt_s,
+            "feasible": self.feasible,
+            "status": self.status,
+            "note": self.note,
+            "evaluations": self.evaluations,
+            "evaluated_thresholds_s": list(self.evaluated_thresholds_s),
+            "selection": self.selection.to_dict(),
         }
 
 
@@ -1380,6 +1426,253 @@ def run_regional_budget_selection(
     )
 
 
+def _area_quantile_mrt(metrics: RegionalMetricsResult, area_target_pct: float) -> float:
+    """按网格真实面积计算 MRT 的面积分位数。"""
+
+    if area_target_pct <= 0.0 or not metrics.grid_metrics:
+        return 0.0
+    total_area = sum(float(item.area_m2) for item in metrics.grid_metrics)
+    if total_area <= 0.0:
+        return 0.0
+    target_area = total_area * area_target_pct / 100.0
+    accumulated = 0.0
+    for item in sorted(metrics.grid_metrics, key=lambda value: (value.mrt_s, value.grid_index)):
+        accumulated += float(item.area_m2)
+        if accumulated + max(1e-9, total_area * 1e-12) >= target_area:
+            return float(item.mrt_s)
+    return max(float(item.mrt_s) for item in metrics.grid_metrics)
+
+
+def _pick_budget_mrt_candidate(
+    result: RegionalSelectionResult,
+    *,
+    n_budget: int,
+    method: str,
+) -> SelectionResult | None:
+    """从一次 MRT 可行性求解中挑出不超预算的候选。"""
+
+    candidates: list[SelectionResult] = []
+    if method in {"greedy", "both"} and result.greedy is not None:
+        candidates.append(result.greedy)
+    if method in {"ilp", "both"} and result.ilp is not None:
+        candidates.append(result.ilp)
+    valid_statuses = {"proven_optimal", "feasible_time_limit", "feasible_heuristic"}
+    feasible = [
+        item
+        for item in candidates
+        if item.status in valid_statuses
+        and item.feasible
+        and len(item.selected_sat_indices) <= n_budget
+    ]
+    if not feasible:
+        return None
+    return min(
+        feasible,
+        key=lambda item: (
+            len(item.selected_sat_indices),
+            0 if item.status == "proven_optimal" else 1,
+            item.metrics.city.area_weighted_mrt_s,
+        ),
+    )
+
+
+def _quantile_result(
+    store: OpportunityStore,
+    selection: SelectionResult,
+    *,
+    area_target_pct: float,
+    n_budget: int,
+    method: str,
+    mrt_threshold_s: float,
+    feasible: bool,
+    status: str,
+    note: str,
+    evaluated_thresholds_s: Sequence[float],
+) -> AreaQuantileMrtSelectionResult:
+    metrics = selection.metrics
+    return AreaQuantileMrtSelectionResult(
+        task="min_area_quantile_mrt",
+        area_target_pct=area_target_pct,
+        n_budget=n_budget,
+        method=method,
+        mrt_threshold_s=float(mrt_threshold_s),
+        area_quantile_mrt_s=_area_quantile_mrt(metrics, area_target_pct),
+        selected_sat_indices=selection.selected_sat_indices,
+        selected_sat_ids=selection.selected_sat_ids,
+        selected_sat_names=selection.selected_sat_names,
+        achieved_area_pct=float(metrics.city.qualified_area_pct or 0.0),
+        area_weighted_mrt_s=float(metrics.city.area_weighted_mrt_s),
+        feasible=bool(feasible),
+        status=status,
+        note=note,
+        evaluations=len(evaluated_thresholds_s),
+        evaluated_thresholds_s=tuple(float(item) for item in evaluated_thresholds_s),
+        selection=selection,
+    )
+
+
+def select_min_area_quantile_mrt(
+    store: OpportunityStore,
+    *,
+    area_target_pct: float = 90.0,
+    n_budget: int,
+    method: str = "ilp",
+    min_simultaneous: int = 1,
+    time_limit_s: int = 180,
+    refine_step_seconds: float | None = None,
+    timescale: Any | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> AreaQuantileMrtSelectionResult:
+    """任务④：给定预算，最小化城市面积分位 MRT（当前 K=1）。
+
+    先把 MRT 上限离散成 ``decision_step_s`` 的桶，再对“任务②是否能在 N 颗以内
+    达到 beta 面积”做单调二分。最终结果仍按原始窗口计算面积分位 MRT；该结果不把
+    离散桶误称为秒级全局最优。
+    """
+
+    area_target_pct = float(area_target_pct)
+    if not 0.0 <= area_target_pct <= 100.0:
+        raise ValueError("area_target_pct 必须在 0～100 之间。")
+    if int(n_budget) != n_budget or int(n_budget) < 0:
+        raise ValueError("n_budget 必须是非负整数。")
+    n_budget = int(n_budget)
+    if int(min_simultaneous) != min_simultaneous or min_simultaneous <= 0:
+        raise ValueError("min_simultaneous 必须是正整数。")
+    if int(min_simultaneous) != 1:
+        raise NotImplementedError("当前任务④先实现 K=1；K>1 后续接入。")
+    if int(time_limit_s) <= 0:
+        raise ValueError("time_limit_s 必须大于 0 秒。")
+    method = str(method).lower()
+    if method not in {"greedy", "ilp", "both"}:
+        raise ValueError("method 必须是 greedy、ilp 或 both。")
+
+    effective_store = store
+    if refine_step_seconds is not None:
+        effective_store = refine_regional_opportunity_windows(
+            store,
+            refine_step_seconds=refine_step_seconds,
+            timescale=timescale,
+            cfg=config,
+        )
+    if effective_store.decision_step_s <= 0:
+        raise ValueError("OpportunityStore.decision_step_s 必须大于 0。")
+    horizon_s = (effective_store.end_utc - effective_store.start_utc).total_seconds()
+    if horizon_s <= 0.0:
+        raise ValueError("OpportunityStore 的分析时段必须大于 0。")
+
+    # 面积目标为 0 时，不需要任何卫星；MRT 分位数按空组合定义为分析时长。
+    if area_target_pct <= 0.0:
+        empty = _result(
+            effective_store,
+            [],
+            method=method,
+            area_target_pct=0.0,
+            mrt_target_s=0.0,
+            status="proven_optimal",
+            note="面积目标为 0%，空组合即可满足。",
+            constraint_count=0,
+        )
+        return _quantile_result(
+            effective_store,
+            empty,
+            area_target_pct=area_target_pct,
+            n_budget=n_budget,
+            method=method,
+            mrt_threshold_s=0.0,
+            feasible=True,
+            status="proven_optimal",
+            note="面积目标为 0%，空组合即可满足。",
+            evaluated_thresholds_s=(0.0,),
+        )
+
+    step_s = max(1, int(effective_store.decision_step_s))
+    max_bucket = max(1, int(math.ceil(horizon_s / step_s)))
+    evaluated: dict[int, SelectionResult | None] = {}
+    traces: list[float] = []
+
+    def evaluate(bucket: int) -> SelectionResult | None:
+        bucket = max(0, min(max_bucket, int(bucket)))
+        if bucket in evaluated:
+            return evaluated[bucket]
+        threshold_s = float(bucket * step_s)
+        traces.append(threshold_s)
+        run = run_regional_mrt_selection(
+            effective_store,
+            mrt_target_s=threshold_s,
+            area_target_pct=area_target_pct,
+            min_simultaneous=min_simultaneous,
+            method=method,
+            time_limit_s=time_limit_s,
+        )
+        candidate = _pick_budget_mrt_candidate(run, n_budget=n_budget, method=method)
+        evaluated[bucket] = candidate
+        return candidate
+
+    high_candidate = evaluate(max_bucket)
+    if high_candidate is None:
+        # 无法运行求解器或连分析时长上限都没有可用候选，返回一次明确的失败结果。
+        fallback = _result(
+            effective_store,
+            [],
+            method=method,
+            area_target_pct=area_target_pct,
+            mrt_target_s=float(max_bucket * step_s),
+            status="unsupported",
+            note="任务④未找到可在预算内复核的候选；请检查求解器、预算或输入窗口。",
+            constraint_count=0,
+        )
+        return _quantile_result(
+            effective_store,
+            fallback,
+            area_target_pct=area_target_pct,
+            n_budget=n_budget,
+            method=method,
+            mrt_threshold_s=float(max_bucket * step_s),
+            feasible=False,
+            status="unsupported",
+            note=fallback.note,
+            evaluated_thresholds_s=traces,
+        )
+
+    low = 0
+    high = max_bucket
+    while low < high:
+        middle = (low + high) // 2
+        if evaluate(middle) is not None:
+            high = middle
+        else:
+            low = middle + 1
+    candidate = evaluate(low)
+    if candidate is None:
+        # 理论上不应发生；保留高阈值可行解，避免把搜索异常伪装成空结果。
+        candidate = high_candidate
+        status = "feasible_time_limit"
+        note = "二分过程中最低桶未能复核，返回已确认可行的最高阈值候选。"
+    else:
+        if method == "greedy":
+            status = "feasible_heuristic"
+            note = "按决策时间片二分得到最低可行 MRT 桶；贪心只提供近似选星。"
+        elif candidate.status == "proven_optimal":
+            status = "proven_discrete_optimal"
+            note = "在离散 MRT 桶上完成二分；每次 ILP 可行性求解均通过窗口级复核。"
+        else:
+            status = "feasible_time_limit"
+            note = "找到预算内可行的 MRT 桶，但部分 ILP 未证明最优。"
+    threshold_s = float(low * step_s)
+    return _quantile_result(
+        effective_store,
+        candidate,
+        area_target_pct=area_target_pct,
+        n_budget=n_budget,
+        method=method,
+        mrt_threshold_s=threshold_s,
+        feasible=True,
+        status=status,
+        note=note,
+        evaluated_thresholds_s=traces,
+    )
+
+
 def _recommend(
     greedy: SelectionResult | None,
     ilp: SelectionResult | None,
@@ -1477,6 +1770,7 @@ __all__ = [
     "RegionalTemporalSelectionResult",
     "BudgetSelectionResult",
     "RegionalBudgetSelectionResult",
+    "AreaQuantileMrtSelectionResult",
     "build_bin_candidates",
     "greedy_select_mrt",
     "ilp_select_mrt",
@@ -1487,4 +1781,5 @@ __all__ = [
     "greedy_select_budget",
     "ilp_select_budget",
     "run_regional_budget_selection",
+    "select_min_area_quantile_mrt",
 ]

@@ -317,6 +317,22 @@ def city_mean_observable_duration(values, areas, horizon_s) -> float: ...
 
 `regional_metrics.py` 不得调用求解器；它只负责对给定卫星集合做确定性评估。
 
+第三阶段已落地在 `src/regional_metrics.py`。`compute_regional_metrics(...)` 从
+`OpportunityStore` 读取指定卫星索引（不传则全池），对每个网格做窗口并集或至少 K 星
+重叠扫描，显式补上首尾空窗，然后返回 `GridMetric` 与 `CityMetrics`。其中：
+
+- `temporal_coverage_pct` 是单元时间覆盖率 $q_g$；
+- `mrt_s` 是该单元所有空窗中的最大长度，`art_s` 是所有空窗长度的算术平均；
+- `qualified_area_pct` 是满足所给 q/MRT/ART 阈值的网格面积比例；未传阈值时返回 `None`，
+  不把“没有定义达标条件”误报成 0% 或 100%；
+- `area_weighted_temporal_coverage_pct` 和 `average_observable_duration_s` 是城市平均卡片；
+- `full_area_coverage_time_pct` 是按面积覆盖达到 100% 的时间比例，
+  `area_coverage_time_pct` 可用 90% 等目标表示“至少覆盖这么多城市面积的时间比例”。
+
+指标层仍保留逐网格 `gaps`，供覆盖薄弱区域地图和秒级复核使用；正式 skill 是否展示哪些
+字段由后续报告层决定。`src/validate_regional_metrics.py` 以两个等面积网格手算例子验证
+并集、K=2、首尾空窗和面积加权，并串联真实杭州边界与第二阶段机会窗口。
+
 ## 8. 第五层：选星算法
 
 ### 8.1 共同预处理
@@ -660,9 +676,11 @@ x-only 按需约束
 
 ### 阶段 D：区域指标
 
-- 先实现不选星的全池评估；
-- 输出 $q_g$、MRT、ART、达标面积比例、城市平均时间覆盖率和平均每处累计可观测时长；
-- 与人工小例子核对。
+- [x] 先实现不选星的全池评估，也支持传入选定卫星索引；
+- [x] 输出 $q_g$、MRT、ART、达标面积比例、城市平均时间覆盖率和平均每处累计可观测时长；
+- [x] 补充“面积达到目标比例的时间比例”和严格全市同时覆盖时间比例；
+- [x] 用人工可算小例子和真实杭州机会窗口核对；
+- [ ] 将窗口级秒精化和指标结果接入区域选星复核。
 
 ### 阶段 E：区域选星
 

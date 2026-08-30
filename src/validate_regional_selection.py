@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-r"""区域选星任务①/②/③/④自检。
+r"""区域选星任务①～⑤自检。
 
 运行：
     ..\卫星覆盖性分析\.venv\Scripts\python.exe src\validate_regional_selection.py
@@ -12,6 +12,7 @@ r"""区域选星任务①/②/③/④自检。
 * 任务①时间覆盖率门槛在相同小例子上与穷举一致；
 * 任务③给定预算时，字典序目标与穷举一致；
 * 任务④面积分位 MRT 的离散二分与窗口级面积分位值一致；
+* 任务⑤面积加权 ART 的贪心、交换和反向删除与小规模穷举一致；
 * 贪心+反向删除和 K=1 滑动窗口 ILP 与穷举最优值一致；
 * 真实杭州机会窗口能够直接交给任务②，而不会重新传播轨道。
 """
@@ -268,6 +269,57 @@ def test_quantile_mrt_selection() -> None:
     print("[通过] 任务④面积分位 MRT 二分与全子集穷举一致")
 
 
+def _art_score(metrics, mrt_area_quantile_pct: float = 90.0):
+    """任务⑤的小规模穷举评分，顺序与生产代码一致。"""
+
+    return (
+        metrics.city.area_weighted_art_s,
+        rs._area_quantile_mrt(metrics, mrt_area_quantile_pct),
+        metrics.city.area_weighted_mrt_s,
+        -metrics.city.area_weighted_temporal_coverage_pct,
+    )
+
+
+def _brute_force_min_art(store, *, n_budget: int, exact_budget: bool = False):
+    best_score = None
+    best_subset = ()
+    sizes = [n_budget] if exact_budget else range(n_budget + 1)
+    for size in sizes:
+        for subset in itertools.combinations(range(store.n_satellites), size):
+            score = _art_score(rm.compute_regional_metrics(store, subset))
+            if best_score is None or score < best_score:
+                best_score = score
+                best_subset = subset
+    assert best_score is not None
+    return best_score, best_subset
+
+
+def test_art_selection() -> None:
+    store = synthetic_store()
+    for budget in (1, 2):
+        optimum, _subset = _brute_force_min_art(store, n_budget=budget)
+        result = rs.run_regional_art_selection(
+            store, n_budget=budget, max_local_rounds=3
+        )
+        actual = _art_score(result.metrics)
+        assert all(abs(left - right) < 1e-9 for left, right in zip(actual, optimum))
+        assert result.feasible
+        assert len(result.selected_sat_indices) <= budget
+        assert result.status == "feasible_heuristic"
+    exact = rs.run_regional_art_selection(store, n_budget=2, exact_budget=True)
+    optimum, _subset = _brute_force_min_art(store, n_budget=2, exact_budget=True)
+    actual = _art_score(exact.metrics)
+    assert len(exact.selected_sat_indices) == 2
+    assert all(abs(left - right) < 1e-9 for left, right in zip(actual, optimum))
+    try:
+        rs.run_regional_art_selection(store, n_budget=1, min_simultaneous=2)
+    except NotImplementedError as exc:
+        assert "K=1" in str(exc)
+    else:
+        raise AssertionError("任务⑤未明确拒绝 K>1。")
+    print("[通过] 任务⑤ ART 贪心/局部改进与全子集穷举一致")
+
+
 def test_real_opportunity_store() -> None:
     ts = sl.load.timescale(builtin=True)
     tle_path = ROOT / "data" / "test_data" / "jilin1_all.tle"
@@ -295,11 +347,12 @@ def main() -> int:
         test_temporal_selection,
         test_budget_selection,
         test_quantile_mrt_selection,
+        test_art_selection,
         test_real_opportunity_store,
     ]
     for test in tests:
         test()
-    print(f"区域选星任务①/②/③/④自检通过：{len(tests)}/{len(tests)}")
+    print(f"区域选星任务①～⑤自检通过：{len(tests)}/{len(tests)}")
     return 0
 
 

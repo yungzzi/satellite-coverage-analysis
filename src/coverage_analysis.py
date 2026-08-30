@@ -841,7 +841,7 @@ def analyze_collection_pipeline(recs, region, cfg, start_str, end_str, progress=
             progress((i + 1) / len(sats), f"分析 {sat.name}（{i + 1}/{len(sats)}）")
         sat_cfg, info = resolve_sat_cfg(sat.norad_id, sensor_params, cfg,
                                         swath_enabled=swath_enabled)
-        # 复杂传感器/姿态/指向/约束：自研复杂引擎（P0-P3，docs/自研复杂传感器理论报告.md）
+        # 复杂传感器/姿态/指向/约束：自研复杂引擎（P0-P3，docs/reference/自研复杂传感器理论报告.md）
         complex_cfg = {}
         if engine == "self":
             import sensor_geometry as sg

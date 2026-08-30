@@ -16,7 +16,7 @@ B=我们 vs N2YO 网站（杭州点，10 天，仰角≥0° 同口径）。
 GEO 星特殊处理：它从不"落山"，没有过境起止，改为验证"持续可见"。
 
 用法：
-  1) 先下载 N2YO 页面和最新 TLE（见 docs/验证报告.md 里的命令）
+  1) 先下载 N2YO 页面和最新 TLE（见 docs/reference/验证报告.md 里的命令）
   2) python src/validate_multisat.py
 输出：output/validation/compare_B_<NORAD>.csv、summary_multisat.csv
 """
@@ -232,7 +232,7 @@ def main():
     print(pd.DataFrame(rows).to_string(index=False))
     pd.DataFrame(rows).to_csv(os.path.join(out_dir, "summary_multisat.csv"),
                               index=False, encoding="utf-8-sig")
-    print("\n验证结束：详细结论见 docs/验证报告.md")
+    print("\n验证结束：详细结论见 docs/reference/验证报告.md")
 
 
 if __name__ == "__main__":

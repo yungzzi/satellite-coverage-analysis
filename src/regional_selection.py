@@ -19,10 +19,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from regional_metrics import RegionalMetricsResult, compute_regional_metrics
-from regional_opportunities import OpportunityStore
+from regional_opportunities import OpportunityStore, refine_regional_opportunity_windows
 
 
 @dataclass(frozen=True)
@@ -500,18 +500,34 @@ def run_regional_mrt_selection(
     min_simultaneous: int = 1,
     method: str = "both",
     time_limit_s: int = 180,
+    refine_step_seconds: float | None = None,
+    timescale: Any | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> RegionalSelectionResult:
-    """任务②总入口：运行贪心、ILP 或两者并给出推荐方案。"""
+    """任务②总入口：运行贪心、ILP 或两者并给出推荐方案。
 
+    ``refine_step_seconds`` 不为 ``None`` 时，会在选星前对机会窗口做一次按需边界
+    精化，之后所有候选组合共享这份精化结果；默认为 ``None``，避免用户只想快速
+    预览时为全池窗口付出额外计算成本。
+    """
+
+    effective_store = store
+    if refine_step_seconds is not None:
+        effective_store = refine_regional_opportunity_windows(
+            store,
+            refine_step_seconds=refine_step_seconds,
+            timescale=timescale,
+            cfg=config,
+        )
     area_target_pct, mrt_target_s = _validate_inputs(
-        store, area_target_pct, mrt_target_s, min_simultaneous
+        effective_store, area_target_pct, mrt_target_s, min_simultaneous
     )
     method = str(method).lower()
     if method not in {"greedy", "ilp", "both"}:
         raise ValueError("method 必须是 greedy、ilp 或 both。")
     greedy = (
         greedy_select_mrt(
-            store,
+            effective_store,
             mrt_target_s=mrt_target_s,
             area_target_pct=area_target_pct,
             min_simultaneous=min_simultaneous,
@@ -521,7 +537,7 @@ def run_regional_mrt_selection(
     )
     ilp = (
         ilp_select_mrt(
-            store,
+            effective_store,
             mrt_target_s=mrt_target_s,
             area_target_pct=area_target_pct,
             min_simultaneous=min_simultaneous,

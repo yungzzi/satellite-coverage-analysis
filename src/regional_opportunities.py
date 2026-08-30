@@ -12,8 +12,9 @@
 不改变旧的单点、点+半径和 GUI 路径。
 
 覆盖窗口采用半开区间 ``[start_utc, end_utc)``。检测时间步长默认沿用旧引擎的
-``coarse_step_seconds=10``；因此当前窗口边界精度是检测步长级别，秒级边界精化仍由后续
-区域指标层按需执行。这样第一版不会为每个网格单元重复传播轨道。
+``coarse_step_seconds=10``；窗口边界默认先保持检测步长精度，需要时可通过
+``refine_step_seconds=1`` 对已有窗口两侧做按需二分精化。这样不会为每个网格单元重复
+扫描整段轨道。
 """
 
 from __future__ import annotations
@@ -521,6 +522,167 @@ def _make_window(
     )
 
 
+def _refine_transition(
+    state_at: Callable[[datetime], bool],
+    lower: datetime,
+    upper: datetime,
+    *,
+    entering: bool,
+    tolerance_s: float,
+) -> datetime | None:
+    """用二分法把一次 0↔1 转换定位到 ``tolerance_s`` 秒以内。
+
+    ``entering=True`` 时要求 ``lower`` 为未覆盖、``upper`` 为覆盖，返回已知的
+    覆盖侧；退出转换则相反，返回已知的覆盖侧。这样输出窗口不会因为二分误差
+    被人为扩大。若两端状态不是预期的转换，返回 ``None``，让调用方保留原窗口。
+    """
+
+    if upper <= lower or tolerance_s <= 0.0:
+        return None
+    lower_state = bool(state_at(lower))
+    upper_state = bool(state_at(upper))
+    if entering:
+        if lower_state or not upper_state:
+            return None
+    elif not lower_state or upper_state:
+        return None
+
+    while (upper - lower).total_seconds() > tolerance_s:
+        middle = lower + (upper - lower) / 2
+        middle_state = bool(state_at(middle))
+        if entering:
+            if middle_state:
+                upper = middle
+            else:
+                lower = middle
+        elif middle_state:
+            lower = middle
+        else:
+            upper = middle
+    return upper if entering else lower
+
+
+def refine_regional_opportunity_windows(
+    store: OpportunityStore,
+    *,
+    refine_step_seconds: float = 1.0,
+    timescale: Any | None = None,
+    cfg: Mapping[str, Any] | None = None,
+) -> OpportunityStore:
+    """对已有区域窗口的起止边界做按需二分精化。
+
+    粗检测仍由 ``store.detection_step_s`` 决定；本函数只在粗窗口两侧重新计算
+    单个卫星—网格代表点，不重新扫描整座城市。进入边界取“已覆盖侧”，退出边界
+    取“仍覆盖侧”，因此误差不超过 ``refine_step_seconds`` 且不会凭空扩大覆盖。
+    ``refine_step_seconds=0`` 直接返回原对象；已精化的对象不会重复计算。
+    """
+
+    tolerance_s = float(refine_step_seconds)
+    if tolerance_s < 0.0:
+        raise ValueError("refine_step_seconds 不能为负数。")
+    if tolerance_s == 0.0 or not store.windows:
+        return store
+    if store.metadata.get("windows_refined"):
+        return store
+    if store.detection_step_s <= 0:
+        raise ValueError("OpportunityStore.detection_step_s 必须大于 0。")
+    if timescale is None:
+        timescale = load.timescale(builtin=True)
+    effective_cfg = dict(cfg or store.metadata.get("config") or {})
+    detection_delta = timedelta(seconds=store.detection_step_s)
+    state_cache: dict[tuple[int, int, datetime], bool] = {}
+
+    def state_at(sat_index: int, grid_index: int, when: datetime) -> bool:
+        key = (int(sat_index), int(grid_index), when)
+        if key in state_cache:
+            return state_cache[key]
+        sat = store.satellites[sat_index]
+        dt_list = [when]
+        t = timescale.from_datetimes(dt_list)
+        prepared = (
+            _prepare_simple_geometry(sat, t)
+            if _is_simple_nadir(effective_cfg)
+            else _prepare_ecef_geometry(sat, t, dt_list, effective_cfg)
+        )
+        state = compute_satellite_grid_state(
+            sat,
+            store.grid,
+            t,
+            dt_list,
+            effective_cfg,
+            cell_start=grid_index,
+            cell_stop=grid_index + 1,
+            _prepared=prepared,
+        )
+        value = bool(state[0, 0])
+        state_cache[key] = value
+        return value
+
+    refined_windows: dict[tuple[int, int], tuple[AccessWindow, ...]] = {}
+    for (sat_index, grid_index), windows in sorted(store.windows.items()):
+        refined_for_pair: list[AccessWindow] = []
+        for window in windows:
+            start = window.start_utc
+            end = window.end_utc
+            # 粗窗口若从分析起点开始，边界本来就已知，无需额外计算。
+            if start > store.start_utc:
+                lower = max(store.start_utc, start - detection_delta)
+                refined_start = _refine_transition(
+                    lambda when, si=sat_index, gi=grid_index: state_at(si, gi, when),
+                    lower,
+                    start,
+                    entering=True,
+                    tolerance_s=tolerance_s,
+                )
+                if refined_start is not None:
+                    start = refined_start
+            # 以分析终点结束的窗口同理不需要外推。
+            if end < store.end_utc:
+                upper = min(store.end_utc, end + detection_delta)
+                refined_end = _refine_transition(
+                    lambda when, si=sat_index, gi=grid_index: state_at(si, gi, when),
+                    end - detection_delta,
+                    upper,
+                    entering=False,
+                    tolerance_s=tolerance_s,
+                )
+                if refined_end is not None:
+                    end = refined_end
+            if end > start:
+                refined_for_pair.append(
+                    _make_window(
+                        sat_index,
+                        window.sat_id,
+                        window.sat_name,
+                        grid_index,
+                        store.grid,
+                        start,
+                        end,
+                    )
+                )
+        if refined_for_pair:
+            refined_windows[(sat_index, grid_index)] = tuple(refined_for_pair)
+
+    metadata = dict(store.metadata)
+    metadata.update(
+        {
+            "windows_refined": True,
+            "window_precision_s": tolerance_s,
+            "window_refinement": "binary_transition",
+        }
+    )
+    return OpportunityStore(
+        satellites=store.satellites,
+        grid=store.grid,
+        start_utc=store.start_utc,
+        end_utc=store.end_utc,
+        detection_step_s=store.detection_step_s,
+        decision_step_s=store.decision_step_s,
+        windows=refined_windows,
+        metadata=metadata,
+    )
+
+
 def compute_regional_opportunities(
     satellites: Sequence[Any],
     grid: RegionGrid,
@@ -547,7 +709,8 @@ def compute_regional_opportunities(
     cfg:
         覆盖参数。默认从旧引擎口径取 ``fov_half_angle_deg=10``、
         ``min_elevation_deg=10``、``coarse_step_seconds=10``；复杂 Profile 字段
-        （sensor_type、sensor_params、pointing、attitude、constraints）可直接传入。
+        （sensor_type、sensor_params、pointing、attitude、constraints）可直接传入；
+        可选 ``refine_step_seconds=1`` 启用窗口边界精化。
     decision_step_s:
         记录给后续选星的时间片粒度；本阶段窗口检测使用 cfg 的粗检测步长。
     cell_chunk_size:
@@ -619,7 +782,7 @@ def compute_regional_opportunities(
                 f"区域机会：{sat_name}（{sat_index + 1}/{len(satellites)}）",
             )
 
-    return OpportunityStore(
+    store = OpportunityStore(
         satellites=satellites,
         grid=grid,
         start_utc=start,
@@ -633,6 +796,17 @@ def compute_regional_opportunities(
             "n_nonempty_pairs": len(windows),
         },
     )
+    refine_step_s = float(cfg.get("refine_step_seconds", 0.0) or 0.0)
+    if refine_step_s < 0.0:
+        raise ValueError("refine_step_seconds 不能为负数。")
+    if refine_step_s > 0.0:
+        store = refine_regional_opportunity_windows(
+            store,
+            refine_step_seconds=refine_step_s,
+            timescale=timescale,
+            cfg=cfg,
+        )
+    return store
 
 
 __all__ = [
@@ -640,4 +814,5 @@ __all__ = [
     "OpportunityStore",
     "compute_satellite_grid_state",
     "compute_regional_opportunities",
+    "refine_regional_opportunity_windows",
 ]

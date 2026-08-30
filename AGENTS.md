@@ -41,6 +41,9 @@
 - `src/regional_metrics.py` 已完成第一版指标层：从稀疏窗口计算网格时间覆盖率、MRT、ART、达标面积比例、
   面积加权城市汇总和全市/目标面积同时覆盖时间比例；`src/validate_regional_metrics.py` 已通过人工小例子
   与真实杭州串联自检。
+- `src/regional_selection.py` 已完成任务②第一版（`K=1`）：MRT 约束下的最少卫星，支持严格 100%/降级
+  面积目标、贪心+反向删除、滑动窗口 ILP，以及统一窗口级复核；`src/validate_regional_selection.py`
+  已用小规模穷举和真实杭州机会窗口自检。任务①、③、④、⑤、`K>1` 和秒级边界精化仍未完成。
 - 11 个城市边界必须记录 `adcode`、边界版本/哈希、源坐标系、投影、格长和原点。未知坐标系不可直接与
   WGS84 轨道地面点混用。
 
@@ -68,6 +71,9 @@ src/
 ├── sensor_geometry.py        自研复杂传感器/姿态/指向/约束几何
 ├── satellite_selection.py    旧单点窗口选星：贪心 + ILP
 ├── region_grid.py            新区域 5 km 裁剪格网
+├── regional_opportunities.py 新区域逐星逐网格稀疏覆盖窗口
+├── regional_metrics.py       新区域指标与城市汇总
+├── regional_selection.py     新区域任务②（K=1）MRT 选星
 ├── loader_app.py / cli.py    本地 GUI / CLI
 ├── satellite_loader.py       TLE、目录与缓存
 └── validate_*.py             对应的回归或验收脚本

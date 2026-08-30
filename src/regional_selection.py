@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""区域选星任务①/②（当前均为 K=1）。
+"""区域选星任务①/②/③（当前均为 K=1）。
 
 任务②给定“每个网格最大空窗 MRT 不超过 ``mrt_target_s``”，任务①给定“每个网格
 时间覆盖率不低于 ``temporal_coverage_target_pct``”；两者都要求至少
@@ -10,6 +10,8 @@
 * 贪心 + 反向删除：每轮优先改善达标面积、再缩短面积加权 MRT/ART，得到工程近似解；
 * K=1 滑动窗口 ILP：一个长度为 ``MRT/步长+1`` 的时间窗内必须至少有一颗已选卫星
   覆盖。90% 模式增加网格达标变量 ``z_g``，严格 100% 模式直接约束所有网格。
+* 任务③给定最多（或恰好）``N`` 颗卫星时，先最大化达到时间覆盖率门槛的城市面积，
+  再在面积相同的方案中最大化面积加权时间覆盖率；ILP 用两阶段求解保持字典序目标。
 
 最终可行性不以离散模型为准，而是重新调用 ``regional_metrics`` 的窗口级指标复核。
 因此分钟/检测步长边界误差不会被包装成“已满足”。本模块不修改旧的单点选星入口。
@@ -140,6 +142,68 @@ class RegionalTemporalSelectionResult:
         }
 
 
+@dataclass(frozen=True)
+class BudgetSelectionResult:
+    """任务③一次预算选星结果。"""
+
+    method: str
+    selected_sat_indices: tuple[int, ...]
+    selected_sat_ids: tuple[int, ...]
+    selected_sat_names: tuple[str, ...]
+    n_budget: int
+    exact_budget: bool
+    temporal_coverage_target_pct: float
+    achieved_area_pct: float
+    area_weighted_temporal_coverage_pct: float
+    feasible: bool
+    status: str
+    note: str
+    constraint_count: int
+    metrics: RegionalMetricsResult
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "method": self.method,
+            "selected_sat_indices": list(self.selected_sat_indices),
+            "selected_sat_ids": list(self.selected_sat_ids),
+            "selected_sat_names": list(self.selected_sat_names),
+            "n_budget": self.n_budget,
+            "exact_budget": self.exact_budget,
+            "temporal_coverage_target_pct": self.temporal_coverage_target_pct,
+            "achieved_area_pct": self.achieved_area_pct,
+            "area_weighted_temporal_coverage_pct": self.area_weighted_temporal_coverage_pct,
+            "feasible": self.feasible,
+            "status": self.status,
+            "note": self.note,
+            "constraint_count": self.constraint_count,
+            "metrics": self.metrics.to_city_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class RegionalBudgetSelectionResult:
+    """任务③的贪心/ILP 对照结果和推荐方案。"""
+
+    task: str
+    n_budget: int
+    exact_budget: bool
+    temporal_coverage_target_pct: float
+    greedy: BudgetSelectionResult | None
+    ilp: BudgetSelectionResult | None
+    recommended: BudgetSelectionResult
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task": self.task,
+            "n_budget": self.n_budget,
+            "exact_budget": self.exact_budget,
+            "temporal_coverage_target_pct": self.temporal_coverage_target_pct,
+            "greedy": self.greedy.to_dict() if self.greedy else None,
+            "ilp": self.ilp.to_dict() if self.ilp else None,
+            "recommended": self.recommended.to_dict(),
+        }
+
+
 def _validate_inputs(
     store: OpportunityStore,
     area_target_pct: float,
@@ -186,6 +250,31 @@ def _validate_temporal_inputs(
     if store.decision_step_s <= 0:
         raise ValueError("OpportunityStore.decision_step_s 必须大于 0。")
     return area_target_pct, temporal_coverage_target_pct
+
+
+def _validate_budget_inputs(
+    store: OpportunityStore,
+    n_budget: int,
+    temporal_coverage_target_pct: float,
+    min_simultaneous: int,
+) -> tuple[int, float]:
+    """校验任务③预算、时间覆盖率和 K=1 快速路径。"""
+
+    if int(n_budget) != n_budget or int(n_budget) < 0:
+        raise ValueError("n_budget 必须是非负整数。")
+    n_budget = int(n_budget)
+    temporal_coverage_target_pct = float(temporal_coverage_target_pct)
+    if not 0.0 <= temporal_coverage_target_pct <= 100.0:
+        raise ValueError("temporal_coverage_target_pct 必须在 0～100 之间。")
+    if int(min_simultaneous) != min_simultaneous or min_simultaneous <= 0:
+        raise ValueError("min_simultaneous 必须是正整数。")
+    if int(min_simultaneous) != 1:
+        raise NotImplementedError(
+            "当前区域任务③先实现 K=1 的预算模型；K>1 使用通用 y 模型，后续阶段接入。"
+        )
+    if store.decision_step_s <= 0:
+        raise ValueError("OpportunityStore.decision_step_s 必须大于 0。")
+    return n_budget, temporal_coverage_target_pct
 
 
 def _decision_bins(store: OpportunityStore, step_s: int) -> tuple[list[datetime], list[datetime]]:
@@ -916,6 +1005,381 @@ def run_regional_temporal_selection(
     )
 
 
+def _evaluate_budget(
+    store: OpportunityStore,
+    selected: Sequence[int],
+    temporal_coverage_target_pct: float,
+) -> RegionalMetricsResult:
+    """用统一窗口指标评估预算方案的达标面积和城市平均覆盖率。"""
+
+    return compute_regional_metrics(
+        store,
+        selected_sat_indices=selected,
+        min_simultaneous=1,
+        temporal_coverage_target_pct=temporal_coverage_target_pct,
+    )
+
+
+def _score_budget(metrics: RegionalMetricsResult) -> tuple[float, float, float, float]:
+    """任务③字典序目标：先面积，再面积—时间平均，最后用 MRT/ART 稳定打破平局。"""
+
+    city = metrics.city
+    return (
+        float(city.qualified_area_pct or 0.0),
+        float(city.area_weighted_temporal_coverage_pct),
+        -float(city.area_weighted_mrt_s),
+        -float(city.area_weighted_art_s),
+    )
+
+
+def _budget_result(
+    store: OpportunityStore,
+    selected: Sequence[int],
+    *,
+    method: str,
+    n_budget: int,
+    exact_budget: bool,
+    temporal_coverage_target_pct: float,
+    status: str,
+    note: str,
+    constraint_count: int,
+) -> BudgetSelectionResult:
+    selected_tuple = tuple(sorted({int(index) for index in selected}))
+    metrics = _evaluate_budget(store, selected_tuple, temporal_coverage_target_pct)
+    achieved_area = float(metrics.city.qualified_area_pct or 0.0)
+    return BudgetSelectionResult(
+        method=method,
+        selected_sat_indices=selected_tuple,
+        selected_sat_ids=tuple(_satellite_identity(store, index)[0] for index in selected_tuple),
+        selected_sat_names=tuple(_satellite_identity(store, index)[1] for index in selected_tuple),
+        n_budget=n_budget,
+        exact_budget=exact_budget,
+        temporal_coverage_target_pct=temporal_coverage_target_pct,
+        achieved_area_pct=achieved_area,
+        area_weighted_temporal_coverage_pct=metrics.city.area_weighted_temporal_coverage_pct,
+        feasible=len(selected_tuple) <= n_budget and (not exact_budget or len(selected_tuple) == n_budget),
+        status=status,
+        note=note,
+        constraint_count=int(constraint_count),
+        metrics=metrics,
+    )
+
+
+def greedy_select_budget(
+    store: OpportunityStore,
+    *,
+    n_budget: int,
+    temporal_coverage_target_pct: float,
+    min_simultaneous: int = 1,
+    exact_budget: bool = False,
+) -> BudgetSelectionResult:
+    """任务③预算贪心：最多（或恰好）N 颗，按字典序最大化目标。"""
+
+    n_budget, temporal_coverage_target_pct = _validate_budget_inputs(
+        store, n_budget, temporal_coverage_target_pct, min_simultaneous
+    )
+    if exact_budget and n_budget > store.n_satellites:
+        raise ValueError("exact_budget=True 时，n_budget 不能超过候选卫星数。")
+    limit = min(n_budget, store.n_satellites)
+    usable = sorted({sat_index for sat_index, _ in store.windows})
+    selected: list[int] = []
+    current = _evaluate_budget(store, selected, temporal_coverage_target_pct)
+    while len(selected) < limit:
+        best_index: int | None = None
+        best_metrics: RegionalMetricsResult | None = None
+        best_score = _score_budget(current)
+        for sat_index in usable:
+            if sat_index in selected:
+                continue
+            trial = _evaluate_budget(
+                store, [*selected, sat_index], temporal_coverage_target_pct
+            )
+            score = _score_budget(trial)
+            if best_metrics is None or score > best_score:
+                best_index = sat_index
+                best_metrics = trial
+                best_score = score
+        # ``at most N`` 模式没有目标改善就停止；``exact N`` 仍需填满预算。
+        if best_index is None:
+            break
+        if not exact_budget and best_metrics is not None and best_score <= _score_budget(current):
+            break
+        selected.append(best_index)
+        current = best_metrics if best_metrics is not None else current
+
+    if exact_budget and len(selected) < limit:
+        # 没有覆盖机会的卫星也可以被“恰好 N”选中，但不改变目标值。
+        for sat_index in range(store.n_satellites):
+            if sat_index not in selected:
+                selected.append(sat_index)
+                if len(selected) >= limit:
+                    break
+    return _budget_result(
+        store,
+        selected,
+        method="greedy",
+        n_budget=n_budget,
+        exact_budget=exact_budget,
+        temporal_coverage_target_pct=temporal_coverage_target_pct,
+        status="feasible_heuristic",
+        note="预算贪心按字典序最大化达标面积和城市平均时间覆盖率；结果是近似解。",
+        constraint_count=0,
+    )
+
+
+def ilp_select_budget(
+    store: OpportunityStore,
+    *,
+    n_budget: int,
+    temporal_coverage_target_pct: float,
+    min_simultaneous: int = 1,
+    exact_budget: bool = False,
+    time_limit_s: int = 180,
+) -> BudgetSelectionResult:
+    """任务③ K=1 两阶段 ILP：先最大化达标面积，再最大化面积—时间平均覆盖率。"""
+
+    n_budget, temporal_coverage_target_pct = _validate_budget_inputs(
+        store, n_budget, temporal_coverage_target_pct, min_simultaneous
+    )
+    if exact_budget and n_budget > store.n_satellites:
+        raise ValueError("exact_budget=True 时，n_budget 不能超过候选卫星数。")
+    if int(time_limit_s) <= 0:
+        raise ValueError("time_limit_s 必须大于 0 秒。")
+    if n_budget == 0 or temporal_coverage_target_pct == 0.0:
+        selected = list(range(min(n_budget, store.n_satellites))) if exact_budget else []
+        return _budget_result(
+            store,
+            selected,
+            method="ilp",
+            n_budget=n_budget,
+            exact_budget=exact_budget,
+            temporal_coverage_target_pct=temporal_coverage_target_pct,
+            status="proven_optimal",
+            note="预算为 0 或时间覆盖率目标为 0%，空（或恰好 N）组合即为最优。",
+            constraint_count=0,
+        )
+    try:
+        import pulp
+    except ImportError:
+        return _budget_result(
+            store,
+            [],
+            method="ilp",
+            n_budget=n_budget,
+            exact_budget=exact_budget,
+            temporal_coverage_target_pct=temporal_coverage_target_pct,
+            status="unsupported",
+            note="未安装 pulp，无法运行预算整数规划。",
+            constraint_count=0,
+        )
+    if store.n_satellites > 1500:
+        return _budget_result(
+            store,
+            [],
+            method="ilp",
+            n_budget=n_budget,
+            exact_budget=exact_budget,
+            temporal_coverage_target_pct=temporal_coverage_target_pct,
+            status="skipped",
+            note="卫星数超过 1500，跳过 ILP；请使用贪心或候选预筛选。",
+            constraint_count=0,
+        )
+
+    candidates, starts, ends = build_bin_candidates(store, decision_step_s=store.decision_step_s)
+    horizon_s = max(0.0, (store.end_utc - store.start_utc).total_seconds())
+    if horizon_s <= 0.0:
+        raise ValueError("OpportunityStore 的分析时段必须大于 0。")
+    areas = [float(cell.area_m2) for cell in store.grid.cells]
+    problem = pulp.LpProblem("regional_budget_selection", pulp.LpMaximize)
+    x = [pulp.LpVariable(f"x_{index}", cat=pulp.LpBinary) for index in range(store.n_satellites)]
+    z = [pulp.LpVariable(f"z_{index}", cat=pulp.LpBinary) for index in range(store.n_cells)]
+    area_expr = pulp.lpSum(areas[index] * z[index] for index in range(store.n_cells))
+    if exact_budget:
+        problem += pulp.lpSum(x) == n_budget
+    else:
+        problem += pulp.lpSum(x) <= n_budget
+    constraint_count = 1
+
+    covered_duration_exprs = []
+    for grid_index, grid_candidates in enumerate(candidates):
+        grouped: dict[frozenset[int], float] = {}
+        for time_index, candidate_set in enumerate(grid_candidates):
+            key = frozenset(int(item) for item in candidate_set)
+            if key:
+                duration = (ends[time_index] - starts[time_index]).total_seconds()
+                grouped[key] = grouped.get(key, 0.0) + float(duration)
+        y_terms = []
+        for group_index, (candidate_set, duration) in enumerate(
+            sorted(grouped.items(), key=lambda item: (tuple(sorted(item[0])), item[1]))
+        ):
+            y = pulp.LpVariable(f"y_{grid_index}_{group_index}", cat=pulp.LpBinary)
+            selected_in_group = pulp.lpSum(x[index] for index in candidate_set)
+            # y 是该候选集合的 OR，不能凭空把没有选中的时间片算成覆盖。
+            problem += y <= selected_in_group
+            problem += selected_in_group - len(candidate_set) * y <= 0
+            y_terms.append((float(duration), y))
+            constraint_count += 2
+        covered_duration = pulp.lpSum(duration * y for duration, y in y_terms)
+        covered_duration_exprs.append(covered_duration)
+        problem += covered_duration >= float(temporal_coverage_target_pct / 100.0 * horizon_s) * z[grid_index]
+        constraint_count += 1
+
+    problem += area_expr
+    problem.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=int(time_limit_s)))
+    stage1_status = pulp.LpStatus[problem.status]
+    if stage1_status not in {"Optimal", "Not Solved"}:
+        return _budget_result(
+            store,
+            [],
+            method="ilp",
+            n_budget=n_budget,
+            exact_budget=exact_budget,
+            temporal_coverage_target_pct=temporal_coverage_target_pct,
+            status="infeasible",
+            note=f"ILP 第一阶段状态为 {stage1_status}，未找到可行预算方案。",
+            constraint_count=constraint_count,
+        )
+    stage1_selected = [
+        index for index, variable in enumerate(x) if (pulp.value(variable) or 0.0) > 0.5
+    ]
+    if stage1_status == "Not Solved":
+        return _budget_result(
+            store,
+            stage1_selected,
+            method="ilp",
+            n_budget=n_budget,
+            exact_budget=exact_budget,
+            temporal_coverage_target_pct=temporal_coverage_target_pct,
+            status="feasible_time_limit",
+            note="ILP 第一阶段达到时间上限，返回当前达标面积方案，未证明最优。",
+            constraint_count=constraint_count,
+        )
+
+    best_area = float(pulp.value(area_expr) or 0.0)
+    tolerance = max(1e-6, sum(areas) * 1e-10)
+    problem += area_expr >= best_area - tolerance
+    # 固定第一阶段的达标面积后，最大化面积—时间平均覆盖率的分子。
+    temporal_objective = pulp.lpSum(
+        areas[index] * covered_duration_exprs[index]
+        for index in range(store.n_cells)
+    )
+    problem.setObjective(temporal_objective)
+    problem.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=int(time_limit_s)))
+    stage2_status = pulp.LpStatus[problem.status]
+    selected = [
+        index for index, variable in enumerate(x) if (pulp.value(variable) or 0.0) > 0.5
+    ]
+    if stage2_status == "Optimal":
+        status = "proven_optimal"
+        note = "两阶段预算 ILP 已证明：先最大化达标面积，再在同面积下最大化面积—时间平均覆盖率。"
+    elif stage2_status == "Not Solved":
+        status = "feasible_time_limit"
+        note = "第一阶段已找到最优达标面积，但第二阶段达到时间上限，未证明平均覆盖率最优。"
+    else:
+        selected = stage1_selected
+        status = "feasible_time_limit"
+        note = "第一阶段已找到最优达标面积，第二阶段未完成，返回第一阶段方案。"
+    return _budget_result(
+        store,
+        selected,
+        method="ilp",
+        n_budget=n_budget,
+        exact_budget=exact_budget,
+        temporal_coverage_target_pct=temporal_coverage_target_pct,
+        status=status,
+        note=note,
+        constraint_count=constraint_count + 1,
+    )
+
+
+def _recommend_budget(
+    greedy: BudgetSelectionResult | None,
+    ilp: BudgetSelectionResult | None,
+) -> BudgetSelectionResult:
+    candidates = [item for item in (ilp, greedy) if item is not None]
+    feasible = [item for item in candidates if item.feasible]
+    if feasible:
+        return max(
+            feasible,
+            key=lambda item: (
+                item.achieved_area_pct,
+                item.area_weighted_temporal_coverage_pct,
+                1 if item.status == "proven_optimal" else 0,
+            ),
+        )
+    return max(
+        candidates,
+        key=lambda item: (
+            item.achieved_area_pct,
+            item.area_weighted_temporal_coverage_pct,
+        ),
+    )
+
+
+def run_regional_budget_selection(
+    store: OpportunityStore,
+    *,
+    n_budget: int,
+    temporal_coverage_target_pct: float,
+    min_simultaneous: int = 1,
+    method: str = "both",
+    exact_budget: bool = False,
+    time_limit_s: int = 180,
+    refine_step_seconds: float | None = None,
+    timescale: Any | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> RegionalBudgetSelectionResult:
+    """任务③总入口：最多/恰好 N 颗，返回贪心、ILP 和推荐方案。"""
+
+    effective_store = store
+    if refine_step_seconds is not None:
+        effective_store = refine_regional_opportunity_windows(
+            store,
+            refine_step_seconds=refine_step_seconds,
+            timescale=timescale,
+            cfg=config,
+        )
+    n_budget, temporal_coverage_target_pct = _validate_budget_inputs(
+        effective_store, n_budget, temporal_coverage_target_pct, min_simultaneous
+    )
+    method = str(method).lower()
+    if method not in {"greedy", "ilp", "both"}:
+        raise ValueError("method 必须是 greedy、ilp 或 both。")
+    greedy = (
+        greedy_select_budget(
+            effective_store,
+            n_budget=n_budget,
+            temporal_coverage_target_pct=temporal_coverage_target_pct,
+            min_simultaneous=min_simultaneous,
+            exact_budget=exact_budget,
+        )
+        if method in {"greedy", "both"}
+        else None
+    )
+    ilp = (
+        ilp_select_budget(
+            effective_store,
+            n_budget=n_budget,
+            temporal_coverage_target_pct=temporal_coverage_target_pct,
+            min_simultaneous=min_simultaneous,
+            exact_budget=exact_budget,
+            time_limit_s=time_limit_s,
+        )
+        if method in {"ilp", "both"}
+        else None
+    )
+    recommended = _recommend_budget(greedy, ilp)
+    return RegionalBudgetSelectionResult(
+        task="max_area_temporal_coverage_budget",
+        n_budget=n_budget,
+        exact_budget=exact_budget,
+        temporal_coverage_target_pct=temporal_coverage_target_pct,
+        greedy=greedy,
+        ilp=ilp,
+        recommended=recommended,
+    )
+
+
 def _recommend(
     greedy: SelectionResult | None,
     ilp: SelectionResult | None,
@@ -1011,6 +1475,8 @@ __all__ = [
     "RegionalSelectionResult",
     "TemporalSelectionResult",
     "RegionalTemporalSelectionResult",
+    "BudgetSelectionResult",
+    "RegionalBudgetSelectionResult",
     "build_bin_candidates",
     "greedy_select_mrt",
     "ilp_select_mrt",
@@ -1018,4 +1484,7 @@ __all__ = [
     "greedy_select_temporal",
     "ilp_select_temporal",
     "run_regional_temporal_selection",
+    "greedy_select_budget",
+    "ilp_select_budget",
+    "run_regional_budget_selection",
 ]

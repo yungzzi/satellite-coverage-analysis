@@ -1,6 +1,6 @@
 # SIRIAgent 区域时间覆盖与选星编程实现方案
 
-> 文档状态：实现设计，2026-08-29。
+> 文档状态：实现设计，2026-08-30。
 >
 > 前置数学口径：`docs/SIRIAgent区域时间覆盖与选星数学依据.md`。
 >
@@ -12,10 +12,10 @@
 
 1. 使用浙江 11 个地市的冻结边界生成裁剪后的 5 km 网格单元和面积权重；
 2. 对筛选后的卫星池计算“卫星 × 网格点”的逐点覆盖窗口；
-3. 从窗口构造区域时间覆盖率、观测次数、MRT、ART；
+3. 从窗口构造城市平均时间覆盖率、达标面积比例、MRT 和 ART；
 4. 支持五类区域选星任务；
 5. 严格模式先求全部面积，失败后显式降级到 90% 面积；
-6. 输出全池物理上限、选星结果、逐网格统计和逐星窗口；
+6. 正式 skill 输出指标卡、覆盖薄弱区域地图、卫星清单和城市过境窗口两张表；逐网格统计只作为后台计算与调试产物；
 7. 用独立 FastAPI 服务包装，供 SIRIAgent Flask 后端调用；
 8. 保证现有单点、点加半径、GUI 和可选 ATK 路径不被本功能隐式改写。
 
@@ -28,6 +28,7 @@
 - 不先上数据库；
 - 不先把 ATK 作为 Linux 服务的必选依赖；
 - 不自动从 90% 继续降到更低面积比例；
+- 不把“至少观测若干次”作为首版优化约束；窗口数量只作为自然派生的报告统计；
 - 不擅自执行“只留复杂引擎”的尚未拍板整合。
 
 ## 2. 现有代码不能直接复用到底的地方
@@ -41,10 +42,14 @@
 | 复杂路径的约束在区域末尾只按首点 `P0` 汇总 | 不能代表其他网格点的约束状态 | 所有启用约束必须逐点计算 |
 | Targeted 在循环中把每个 `Pk` 分别当目标 | 会把同一时刻多个互斥指向误当成同时可执行 | 城市 Profile 必须生成与网格无关的统一波束轴；逐点 Targeted 只能标“潜在可达” |
 | `satellite_selection` 输入是“卫星 × 时间” | 只能处理单目标 | 新建区域选星模块，不把三维语义硬塞进旧函数 |
-| `k_min` 表示同时可见数 | 容易被误读成观测次数 | 新接口拆成 `min_simultaneous` 和 `min_observation_count` |
+| `k_min` 表示同时可见数 | 容易被误读成窗口数量 | 新接口明确命名为 `min_simultaneous`；窗口数量仅作报告统计 |
 | 当前 MRT 时间片换算使用 `round` | 非整倍数阈值可能有边界歧义 | 新模块用明确的 `floor(M0/Δt)` 和秒级复核 |
 
 这些是新增区域功能的缺口，不等于现有单点功能已经错误。实现应以新模块旁路扩展，先避免对稳定旧路径造成回归。
+
+覆盖与选星继续保持两个逻辑阶段：覆盖阶段生成并缓存与优化任务无关的机会窗口，选星阶段只在用户提出选星要求时读取这些窗口。FastAPI/skill 可以在一个请求中自动串联两个阶段，但不得让覆盖模块反向依赖求解器。用户只做覆盖分析时，流程应在覆盖与城市汇总完成后直接返回；同一次或后续请求做选星时，应复用相同缓存，不重复传播轨道。
+
+区域路径与旧单点路径不强行合并成一个大函数，但也不能长期复制两套底层算法。首版共享轨道传播、传感器几何、窗口边界精化和基础窗口运算，分别保留旧单点适配入口和新区域适配入口；区域验收稳定后，再把窗口合并、空窗、MRT/ART 等纯函数收敛到公共模块。该后续重构只改变内部组织，不改变旧 GUI、CLI、返回字段和已验证结果。
 
 ## 3. 建议目录与职责
 
@@ -52,8 +57,9 @@
 src/
 ├─ region_grid.py               # 城市边界、等面积投影、5 km 裁剪单元
 ├─ regional_opportunities.py    # 逐星逐网格覆盖状态与窗口
-├─ regional_metrics.py          # q、面积达标率、次数、MRT、ART
+├─ regional_metrics.py          # q、城市平均、面积达标率、MRT、ART
 ├─ regional_selection.py        # 五任务贪心/ILP/复核
+├─ regional_reporting.py        # 指标卡、地图数据、两张用户表与调试产物
 ├─ regional_pipeline.py         # 从输入到结果的唯一编排入口
 └─ service/
    ├─ app.py                    # FastAPI 应用
@@ -70,6 +76,7 @@ tests/
 ├─ test_regional_metrics.py
 ├─ test_regional_selection_small.py
 ├─ test_regional_profile_semantics.py
+├─ test_regional_reporting.py
 └─ test_regional_service.py
 ```
 
@@ -272,15 +279,11 @@ def mrt_by_grid(gaps) -> np.ndarray: ...
 
 def art_by_grid(gaps) -> np.ndarray: ...
 
-def observation_count_by_grid(
-    store,
-    selected,
-    mode="satellite_pass",
-    min_event_s=0,
-    merge_gap_s=0,
-) -> np.ndarray: ...
-
 def area_pass_ratio(values, areas, predicate) -> float: ...
+
+def city_mean_temporal_coverage(values, areas) -> float: ...
+
+def city_mean_observable_duration(values, areas, horizon_s) -> float: ...
 ```
 
 `regional_metrics.py` 不得调用求解器；它只负责对给定卫星集合做确定性评估。
@@ -290,13 +293,13 @@ def area_pass_ratio(values, areas, predicate) -> float: ...
 ### 8.1 共同预处理
 
 1. 删除全时段、全网格都无覆盖的卫星；
-2. 在 `min_simultaneous=1` 且任务不统计逐卫星机会次数时，可合并完全相同覆盖签名的候选星，保留等价星清单供结果展示；
+2. 在 `min_simultaneous=1` 时，可合并完全相同覆盖签名的候选星，保留等价星清单供结果展示；
 3. 在同成本条件下删除被另一颗星完全支配的候选；
 4. 计算全候选池上限；
 5. 若严格目标物理不可行，跳到 90% 模式；
 6. 若全池连 90% 都不可行，停止优化并报告上限。
 
-“相同签名分组/支配”只在任务口径一致、卫星成本相同、`min_simultaneous=1`、不要求逐卫星观测次数且不会影响传感器类别多样性时启用。`min_simultaneous>1` 或 `observation_count_mode=satellite_pass` 时，两颗轨迹相同的卫星仍可能提供两份并发/次数贡献，不能合并。第一版最稳妥的是只默认删除全无覆盖卫星，其余预处理经过测试后再开。
+“相同签名分组/支配”只在任务口径一致、卫星成本相同、`min_simultaneous=1` 且不会影响传感器类别多样性时启用。`min_simultaneous>1` 时，两颗轨迹相同的卫星仍可能提供两份并发贡献，不能合并。第一版最稳妥的是只默认删除全无覆盖卫星，其余预处理经过测试后再开。
 
 ### 8.2 任务①
 
@@ -358,18 +361,32 @@ constraint_strategy = full_deduplicated | iterative
 
 `iterative` 每轮批量加入当前解违反的全部代表性滑窗，并记录：迭代次数、累计约束数、建模时间、求解时间和最终最优性状态。只有在绍兴、中等城市、浙江最大地市三档基准中稳定获益，才改为默认。
 
-### 8.8 可选观测次数约束
+## 9. 第六层：覆盖独立、选星可选的统一编排
 
-当 `observation_count_mode=satellite_pass` 时，先统计每颗卫星对每个网格的有效窗口数 `pass_count[s,g]`，观测次数可以写成线性和，并叠加严格/90%面积变量。如果一个请求要求同一片面积同时满足覆盖率、次数和 MRT，三类约束必须绑定同一个 `z[g]`，不能各自选择不同的 90% 网格。`union_window` 的次数会随不同卫星窗口合并而变化，首版只做结果报告和贪心评估，不宣称有精确 ILP。
-
-## 9. 第六层：统一流水线
+### 9.1 两个业务阶段保持独立
 
 ```python
-def run_regional_selection_pipeline(
-    request: RegionalSelectionRequest,
+def compute_regional_opportunities(
+    request: RegionalCoverageRequest,
     progress: Callable | None = None,
+) -> RegionalOpportunityResult:
+    """只计算并缓存覆盖机会，不调用选星求解器。"""
+
+def run_regional_selection(
+    opportunities: RegionalOpportunityResult,
+    request: RegionalSelectionRequest,
 ) -> RegionalSelectionResult:
-    """区域覆盖机会与选星的唯一业务入口。"""
+    """读取已经生成的覆盖机会，按需求执行选星。"""
+```
+
+FastAPI 再提供一个薄编排函数，把两层组织成适合 skill 的一次调用：
+
+```python
+def run_regional_pipeline(
+    request: RegionalRequest,
+    progress: Callable | None = None,
+) -> RegionalResult:
+    """支持 coverage_only 或 coverage_and_selection。"""
 ```
 
 建议顺序：
@@ -385,18 +402,28 @@ def run_regional_selection_pipeline(
   ↓
 读取机会缓存或计算逐星逐网格窗口
   ↓
-计算全池物理上限
-  ↓
-严格100%面积求解
-  ↓ 不可行
-90%面积求解
-  ↓
-秒级窗口复核
-  ↓
-输出摘要、清单、逐网格指标、窗口和复现元数据
+生成覆盖分析结果和 analysis_id
+  ├─ coverage_only ─────────────→ 城市汇总与人类可读结果
+  └─ coverage_and_selection
+          ↓
+      计算全池物理上限
+          ↓
+      严格100%面积求解
+          ↓ 不可行
+      90%面积求解
+          ↓
+      秒级窗口复核
+          ↓
+      城市汇总与人类可读结果
 ```
 
-旧的 `analyze_collection_pipeline(...)` 和 `run_selection(...)` 不在第一步被修改；新流水线可复用其底层轨道、窗口合并和选星思想，但不得复用已经丢失网格维度的区域汇总结果。
+后续选星请求可以携带 `analysis_id` 或命中相同缓存键，复用覆盖窗口，不能因为改变 MRT 阈值或卫星预算就重复传播轨道。
+
+### 9.2 与现有单点方案的关系
+
+旧的 `analyze_collection_pipeline(...)` 和 `run_selection(...)` 第一阶段不改签名、不改返回字段，也不改变 GUI/CLI 行为。新区域流水线复用底层轨道传播、`sensor_geometry`、窗口边界精化和经过验证的选星思想，但不得复用已经丢失网格维度的区域汇总结果。
+
+长期维护采用“公共内核 + 两个适配入口”：单点可以视为只有一个空间单元的特例，但首版不为了形式统一而立即改写稳定代码。区域功能通过验收后，再把窗口合并、空窗识别、MRT/ART 和通用求解辅助函数抽到公共模块，并用旧回归测试保证单点结果逐项不变。
 
 ## 10. FastAPI 最小接口
 
@@ -404,6 +431,8 @@ def run_regional_selection_pipeline(
 
 ```json
 {
+  "operation": "coverage_and_selection",
+  "analysis_id": null,
   "city_adcode": "330600",
   "start_utc": "2026-08-30T00:00:00Z",
   "analysis_horizon_h": 8,
@@ -412,8 +441,6 @@ def run_regional_selection_pipeline(
   "strict_area_target_pct": 100,
   "fallback_area_target_pct": 90,
   "mrt_target_minutes": 180,
-  "min_observation_count": null,
-  "observation_count_mode": "satellite_pass",
   "n_satellites_budget": null,
   "min_simultaneous": 1,
   "max_resolution_m": 1.0,
@@ -425,6 +452,8 @@ def run_regional_selection_pipeline(
 }
 ```
 
+`operation=coverage_only` 时不要求 `objective`、覆盖阈值、MRT 阈值或卫星预算；它只计算输入卫星集合的城市覆盖情况。`operation=coverage_and_selection` 才校验相应选星参数。若 `analysis_id` 指向兼容的已完成覆盖结果，服务直接进入选星阶段；请求中的城市、TLE、Profile 或时段与缓存不一致时必须拒绝复用。
+
 必须把 `temporal_coverage_target_pct` 和 `area_target_pct` 拆开。平台现有 `coverage_target_pct=100` 是累计空间覆盖语义，不能未经转换直接传给新 skill。
 
 默认分析时长按已确认的 8 小时。单元时间覆盖率阈值尚不能从现有平台默认值推断，首版应要求用户输入或由明确 Profile 提供。
@@ -435,15 +464,28 @@ def run_regional_selection_pipeline(
 {
   "status": "completed",
   "request_id": "...",
+  "analysis_id": "...",
+  "operation": "coverage_and_selection",
   "result_scope": "geometric_observation_opportunities",
+  "metrics_satellite_scope": "selected_satellites",
   "optimality": "proven_optimal",
   "used_area_target_pct": 90,
   "strict_result": {"feasible": false, "reason": "..."},
   "fallback_result": {"feasible": true},
-  "selected_satellites": [],
+  "summary_cards": {
+    "satellite_count": 6,
+    "city_mean_temporal_coverage_pct": 8.2,
+    "city_mean_observable_duration_minutes": 39.4,
+    "qualified_area_pct": 92.4,
+    "area_quantile_mrt_minutes": 176
+  },
   "all_pool_upper_bound": {},
-  "regional_metrics": {},
-  "grid_summary": {},
+  "satellite_table": [],
+  "city_pass_window_table": [],
+  "coverage_map": {
+    "default_metric": "temporal_coverage_pct",
+    "available_metrics": ["temporal_coverage_pct", "mrt_minutes", "qualified"]
+  },
   "assumptions": [],
   "reproducibility": {
     "tle_hash": "...",
@@ -451,18 +493,29 @@ def run_regional_selection_pipeline(
     "profile_hash": "...",
     "engine_version": "..."
   },
-  "artifacts": {
-    "per_grid_metrics": "...",
-    "access_windows": "..."
-  }
+  "report_page": "...",
+  "debug_artifacts": null
 }
 ```
 
-聊天响应不宜直接塞入完整三维矩阵。接口返回摘要和关键清单，大表作为 CSV/Parquet/JSON 文件产物保存并给出受控下载地址；最小本机 demo 可以先返回本地结果标识。
+`coverage_only` 模式下，指标卡和地图评估本次输入卫星集合，`satellite_table` 表示其中有有效城市过境窗口的卫星；`coverage_and_selection` 模式下，指标卡和地图评估推荐组合，表中也只列推荐卫星。响应必须用 `metrics_satellite_scope` 明示统计范围。两种模式使用同一套字段，避免前端维护两种完全不同的表格组件。
 
-### 10.3 同步还是异步
+### 10.3 正式 skill 的人类可读输出
 
-- 本机最小 demo：同步 `POST /v1/regional-selection/run`，先测固定绍兴小样例；
+正式结果固定为“指标卡 + 一张地图 + 两张表 + 假设说明”，不默认展示逐网格表或三维矩阵。
+
+1. **指标卡**：卫星数量、城市平均时间覆盖率、平均每处累计可观测时长、达标面积比例，以及本任务对应的 MRT/覆盖率阈值/预算结果；选星模式还要显示严格 100% 是否可行、是否降级到 90% 和最优性状态。
+2. **覆盖薄弱区域地图**：默认按每个网格的时间覆盖率着色，可切换 MRT 和是否达标。绘图时使用裁剪后的真实网格面、隐藏边框，不做无依据的平滑插值。地图数据来自后台逐网格指标，但前端不提供逐网格明细表。
+3. **卫星表**：字段只放可核实结果，包括卫星名/NORAD、分辨率、传感器、有效城市过境数、累计城市相交时长和首次窗口。删除“主要贡献”字段；贪心内部边际收益属于算法过程，不是稳定、唯一的卫星属性。
+4. **城市过境窗口表**：每行是一颗卫星与城市连续相交的一次过境，字段为卫星、开始、结束、持续时间、窗口内平均覆盖面积比例和最大覆盖面积比例。卫星依次扫过相邻网格时应合并成一次城市过境，不能每经过一个网格就生成一行。
+
+聊天正文只展示结论、指标卡和最近或质量最高的 5～10 个窗口；完整窗口在结果页展开。覆盖地图是正式能力，不只是调试图。具体由 SIRIAgent 前端消费地图数据绘制，还是嵌入计算服务生成的 HTML，需要在取得 skill 注册样例后与平台研发确认。
+
+逐星、逐网格窗口和逐网格指标仍必须在服务内部可追溯，因为选星和科学复核依赖它们；但只在 `debug=true` 的开发/验收请求中导出 CSV、Parquet 或 Excel。Excel 不属于正式 skill 接口承诺，平台已有 PDF/报告能力时优先复用平台展示与导出。
+
+### 10.4 同步还是异步
+
+- 本机最小 demo：同步 `POST /v1/regional/run`，先测固定绍兴小样例；
 - 正式平台：若计算超过 Flask/Vercel 调用时限，改为提交任务返回 `job_id`，再轮询 `GET /v1/jobs/{id}`；
 - 最终采用哪一种，必须由平台研发给出超时、回调和鉴权规范。
 
@@ -510,10 +563,20 @@ FastAPI 只是接口壳，不重写算法。最小 demo 不需要数据库；TLE
 - 全程覆盖：$q=100\%$、MRT=ART=0；
 - 全程不覆盖：$q=0$、MRT=ART=分析时长；
 - 首尾空窗计入；
-- 重叠卫星窗口在 `satellite_pass` 和 `union_window` 两种次数口径下结果不同且可解释；
+- 城市平均时间覆盖率同时等于“各地点时间覆盖率的面积加权平均”和“各时刻已覆盖面积比例的时间平均”；
+- 城市平均每处累计可观测时长等于分析时长乘城市平均时间覆盖率；
 - 面积权重不能退化成简单点数比例。
 
-### 12.4 优化
+### 12.4 展示结果
+
+- 覆盖地图中的每个颜色值可追溯到对应网格指标；
+- 隐藏网格边框前后统计值不变；
+- 不使用平滑插值制造新的覆盖值；
+- 卫星沿相邻网格连续扫过时只生成一个城市过境窗口；
+- 卫星表不包含无法稳定定义的“主要贡献”字段；
+- `debug=false` 时响应不暴露逐网格表，`debug=true` 时调试产物可与内部指标逐项核对。
+
+### 12.5 优化
 
 对少量卫星、少量网格、少量时间片进行全部 $2^n$ 组合枚举，只用于测试：
 
@@ -525,7 +588,7 @@ FastAPI 只是接口壳，不重写算法。最小 demo 不需要数据库；TLE
 - 反向删除结果始终保持 90% 可行，但不标精确最优；
 - 任务⑤只比较质量和稳定性，不断言精确最优。
 
-### 12.5 性能
+### 12.6 性能
 
 至少三档：
 
@@ -550,8 +613,8 @@ x-only 按需约束
 
 - 获取/固化 11 城市边界；
 - 定义 Profile 和缺失参数处理；
-- 确认观测次数默认采用 `satellite_pass`；
-- 固定绍兴 8 小时基准请求和期望字段。
+- 固定绍兴 8 小时基准请求和期望字段；
+- 冻结指标卡、覆盖地图、卫星表和城市过境窗口表的字段。
 
 ### 阶段 B：5 km 网格模块
 
@@ -569,7 +632,7 @@ x-only 按需约束
 ### 阶段 D：区域指标
 
 - 先实现不选星的全池评估；
-- 输出 q、次数、MRT、ART、面积达标率和面积—时间平均；
+- 输出 $q_g$、MRT、ART、达标面积比例、城市平均时间覆盖率和平均每处累计可观测时长；
 - 与人工小例子核对。
 
 ### 阶段 E：区域选星
@@ -586,7 +649,8 @@ x-only 按需约束
 - 固定 Profile；
 - 同步接口；
 - 无数据库、无内网穿透；
-- 验证“JSON 参数 → 逐点窗口 → 严格/90% 选星 → JSON 摘要”。
+- 同时验证 `coverage_only` 和 `coverage_and_selection`；
+- 验证“JSON 参数 → 覆盖机会 → 可选选星 → 指标卡/地图数据/两张表”。
 
 ### 阶段 G：平台联调与部署
 
@@ -594,14 +658,14 @@ x-only 按需约束
 - 根据平台时限决定同步/异步；
 - Docker 化并在 Linux 做冒烟测试；
 - 配置鉴权、HTTPS、日志、持久缓存和结果保留策略；
+- 确认平台原生绘图、嵌入 HTML 结果页和 PDF 导出能力；
 - 最后做聊天到报告的端到端验收。
 
-## 14. 开工前仍需明确的三项数据/接口语义
+## 14. 开工前仍需明确的两项数据/接口语义
 
 数学和算法主线已经闭合，但以下字段不能靠程序猜：
 
 1. **单元时间覆盖率默认阈值**：平台现有 `coverage_target_pct=100` 是空间累计目标，不能直接当新 skill 的 $q_0$。首版可把它设为必填，或由任务 Profile 明确给出。
-2. **观测次数口径**：建议默认逐卫星过境机会 `satellite_pass`；若老师/平台要的是合并后的连续可观测段，应改用 `union_window`。
-3. **平台城市边界坐标系**：必须确认边界是 WGS84、CGCS2000、GCJ-02 还是其他坐标系，并冻结转换方法和边界哈希。
+2. **平台城市边界坐标系**：必须确认边界是 WGS84、CGCS2000、GCJ-02 还是其他坐标系，并冻结转换方法和边界哈希。
 
-这三项不阻碍先搭建模块和人工测试数据，但在正式生成平台城市网格或公开 skill 输入协议前必须确认并写入接口说明。
+这两项不阻碍先搭建模块和人工测试数据，但在正式生成平台城市网格或公开 skill 输入协议前必须确认并写入接口说明。

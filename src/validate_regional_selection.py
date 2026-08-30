@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-r"""区域选星任务①/②/③自检。
+r"""区域选星任务①/②/③/④自检。
 
 运行：
     ..\卫星覆盖性分析\.venv\Scripts\python.exe src\validate_regional_selection.py
@@ -11,6 +11,7 @@ r"""区域选星任务①/②/③自检。
 * 50% 面积目标时最少卫星数为 1，用来覆盖降级模式；
 * 任务①时间覆盖率门槛在相同小例子上与穷举一致；
 * 任务③给定预算时，字典序目标与穷举一致；
+* 任务④面积分位 MRT 的离散二分与窗口级面积分位值一致；
 * 贪心+反向删除和 K=1 滑动窗口 ILP 与穷举最优值一致；
 * 真实杭州机会窗口能够直接交给任务②，而不会重新传播轨道。
 """
@@ -208,6 +209,65 @@ def test_budget_selection() -> None:
     print("[通过] 任务③预算字典序目标与穷举一致")
 
 
+def _brute_force_area_quantile_mrt(store, *, area_target_pct: float, n_budget: int):
+    """小规模基准：枚举不超过预算的组合，最小化面积分位 MRT。"""
+
+    best = None
+    best_subset = ()
+    for size in range(n_budget + 1):
+        for subset in itertools.combinations(range(store.n_satellites), size):
+            metrics = rm.compute_regional_metrics(store, subset)
+            values = sorted(
+                (item.mrt_s, item.area_m2, item.grid_index)
+                for item in metrics.grid_metrics
+            )
+            total_area = sum(item.area_m2 for item in metrics.grid_metrics)
+            target_area = total_area * area_target_pct / 100.0
+            accumulated = 0.0
+            quantile = 0.0
+            for mrt_s, area_m2, _grid_index in values:
+                accumulated += area_m2
+                if accumulated + 1e-9 >= target_area:
+                    quantile = mrt_s
+                    break
+            if best is None or quantile < best:
+                best = quantile
+                best_subset = subset
+    assert best is not None
+    return float(best), best_subset
+
+
+def test_quantile_mrt_selection() -> None:
+    store = synthetic_store()
+    for beta, budget, expected in ((50.0, 1, 1_200.0), (100.0, 1, 2_400.0), (100.0, 2, 1_800.0)):
+        brute, _subset = _brute_force_area_quantile_mrt(
+            store, area_target_pct=beta, n_budget=budget
+        )
+        assert brute == expected
+        result = rs.select_min_area_quantile_mrt(
+            store,
+            area_target_pct=beta,
+            n_budget=budget,
+            method="ilp",
+            time_limit_s=30,
+        )
+        if result.status != "unsupported":
+            assert result.feasible
+            assert abs(result.area_quantile_mrt_s - brute) < 1e-9
+            assert result.area_quantile_mrt_s <= result.mrt_threshold_s + 1e-9
+            assert len(result.selected_sat_indices) <= budget
+            assert result.status == "proven_discrete_optimal"
+    try:
+        rs.select_min_area_quantile_mrt(
+            store, area_target_pct=50.0, n_budget=1, min_simultaneous=2
+        )
+    except NotImplementedError as exc:
+        assert "K=1" in str(exc)
+    else:
+        raise AssertionError("任务④未明确拒绝 K>1。")
+    print("[通过] 任务④面积分位 MRT 二分与全子集穷举一致")
+
+
 def test_real_opportunity_store() -> None:
     ts = sl.load.timescale(builtin=True)
     tle_path = ROOT / "data" / "test_data" / "jilin1_all.tle"
@@ -234,11 +294,12 @@ def main() -> int:
         test_empty_and_invalid_requests,
         test_temporal_selection,
         test_budget_selection,
+        test_quantile_mrt_selection,
         test_real_opportunity_store,
     ]
     for test in tests:
         test()
-    print(f"区域选星任务①/②/③自检通过：{len(tests)}/{len(tests)}")
+    print(f"区域选星任务①/②/③/④自检通过：{len(tests)}/{len(tests)}")
     return 0
 
 

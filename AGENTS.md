@@ -45,8 +45,8 @@
   面积目标、贪心+反向删除、滑动窗口 ILP，以及统一窗口级复核；`src/validate_regional_selection.py`
   已用小规模穷举和真实杭州机会窗口自检。`regional_opportunities.py` 还支持按需 1 秒边界精化，
  任务①（`K=1` 时间覆盖率门槛）也已完成第一版并由同一自检脚本穷举核对；任务③（`K=1` 给定预算
- 先最大化达标面积、再最大化面积加权时间覆盖率）已完成贪心+两阶段 ILP 及穷举核对；任务④、⑤
- 及 `K>1` 仍未完成。
+  先最大化达标面积、再最大化面积加权时间覆盖率）已完成贪心+两阶段 ILP 及穷举核对；任务④（`K=1`
+  给定预算最小化面积分位 MRT）已完成离散二分、任务②复用和穷举核对；任务⑤及 `K>1` 仍未完成。
 - 11 个城市边界必须记录 `adcode`、边界版本/哈希、源坐标系、投影、格长和原点。未知坐标系不可直接与
   WGS84 轨道地面点混用。
 
@@ -76,7 +76,7 @@ src/
 ├── region_grid.py            新区域 5 km 裁剪格网
 ├── regional_opportunities.py 新区域逐星逐网格稀疏覆盖窗口
 ├── regional_metrics.py       新区域指标与城市汇总
-├── regional_selection.py     新区域任务②（K=1）MRT 选星
+├── regional_selection.py     新区域任务①～④（当前 K=1）选星
 ├── loader_app.py / cli.py    本地 GUI / CLI
 ├── satellite_loader.py       TLE、目录与缓存
 └── validate_*.py             对应的回归或验收脚本

@@ -1,0 +1,643 @@
+# -*- coding: utf-8 -*-
+"""区域网格的逐星覆盖机会计算。
+
+本模块是 SIRIAgent 区域流程的第二阶段底座：
+
+* 输入已经生成好的 ``RegionGrid`` 和卫星对象；
+* 对每颗卫星只传播一次时间轴，再按网格块计算逐点判定；
+* 输出 ``卫星 × 网格单元`` 的稀疏覆盖窗口，而不是把空单元也存下来。
+
+这里故意不调用旧的 ``analyze_one_satellite``：旧入口会把多边形压成
+``any(axis=1)``，一旦压缩就无法支持后续区域指标和选星。本模块只新增区域旁路，
+不改变旧的单点、点+半径和 GUI 路径。
+
+覆盖窗口采用半开区间 ``[start_utc, end_utc)``。检测时间步长默认沿用旧引擎的
+``coarse_step_seconds=10``；因此当前窗口边界精度是检测步长级别，秒级边界精化仍由后续
+区域指标层按需执行。这样第一版不会为每个网格单元重复传播轨道。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Iterable, Mapping, Sequence
+
+import numpy as np
+from skyfield.api import load
+
+import coverage_analysis as cov
+import sensor_geometry as sg
+from region_grid import RegionGrid
+
+
+@dataclass(frozen=True)
+class AccessWindow:
+    """一颗卫星对一个网格单元的一段连续覆盖机会。"""
+
+    sat_index: int
+    sat_id: int
+    sat_name: str
+    grid_index: int
+    grid_id: str
+    start_utc: datetime
+    end_utc: datetime
+    duration_s: float
+
+
+@dataclass
+class OpportunityStore:
+    """区域机会结果的稀疏容器。
+
+    ``windows`` 的 key 是 ``(sat_index, grid_index)``，只保存至少有一个窗口的组合。
+    空组合不写入，因此卫星很多、城市网格较细时不会产生大块的全零矩阵。
+    """
+
+    satellites: tuple[Any, ...]
+    grid: RegionGrid
+    start_utc: datetime
+    end_utc: datetime
+    detection_step_s: int
+    decision_step_s: int
+    windows: dict[tuple[int, int], tuple[AccessWindow, ...]] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def n_satellites(self) -> int:
+        return len(self.satellites)
+
+    @property
+    def n_cells(self) -> int:
+        return len(self.grid.cells)
+
+    @property
+    def n_nonempty_pairs(self) -> int:
+        return len(self.windows)
+
+    @property
+    def n_windows(self) -> int:
+        return sum(len(items) for items in self.windows.values())
+
+    def windows_for(self, sat_index: int, grid_index: int) -> tuple[AccessWindow, ...]:
+        """读取一个卫星—网格组合的窗口；没有机会时返回空元组。"""
+
+        return self.windows.get((int(sat_index), int(grid_index)), ())
+
+    def iter_windows(self) -> Iterable[AccessWindow]:
+        """按卫星、网格索引稳定遍历窗口。"""
+
+        for key in sorted(self.windows):
+            yield from self.windows[key]
+
+    def to_rows(self) -> list[dict[str, Any]]:
+        """转换为调试/导出用扁平记录；正常 skill 不必把逐网格表展示给用户。"""
+
+        return [
+            {
+                "sat_index": w.sat_index,
+                "sat_id": w.sat_id,
+                "satellite": w.sat_name,
+                "grid_index": w.grid_index,
+                "grid_id": w.grid_id,
+                "start_utc": w.start_utc.isoformat(),
+                "end_utc": w.end_utc.isoformat(),
+                "duration_s": w.duration_s,
+            }
+            for w in self.iter_windows()
+        ]
+
+
+def _as_utc(value: str | datetime) -> datetime:
+    """解析 ISO/旧项目格式时间，并统一为带 UTC 时区的 datetime。"""
+
+    if isinstance(value, datetime):
+        result = value
+    else:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            result = datetime.fromisoformat(text)
+        except ValueError:
+            result = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    if result.tzinfo is None:
+        result = result.replace(tzinfo=timezone.utc)
+    return result.astimezone(timezone.utc)
+
+
+def _half_open_times(start: datetime, end: datetime, step_s: int) -> list[datetime]:
+    """生成 ``[start, end)`` 时间轴，避免把分析终点误算成一段覆盖。"""
+
+    if step_s <= 0:
+        raise ValueError("检测时间步长必须大于 0 秒。")
+    if end <= start:
+        raise ValueError("分析结束时间必须晚于开始时间。")
+    values: list[datetime] = []
+    current = start
+    delta = timedelta(seconds=step_s)
+    while current < end:
+        values.append(current)
+        current += delta
+    return values
+
+
+def _sat_id(sat: Any) -> int:
+    """兼容 satellite_loader.Satellite 和原生 EarthSatellite。"""
+
+    value = getattr(sat, "norad_id", None)
+    if value is None:
+        model = getattr(sat, "model", None)
+        value = getattr(model, "satnum", None)
+    if value is None:
+        raise ValueError("卫星对象缺少 NORAD 编号（norad_id/model.satnum）。")
+    return int(value)
+
+
+def _sat_name(sat: Any) -> str:
+    name = getattr(sat, "name", None)
+    if name:
+        return str(name)
+    orbit = getattr(sat, "orbit", None)
+    return str(getattr(orbit, "name", "") or "")
+
+
+def _grid_arrays(grid: RegionGrid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """取出几何热路径使用的代表点经纬度、面积和编号数组。"""
+
+    cells = grid.cells
+    if not cells:
+        raise ValueError("RegionGrid 为空，无法计算覆盖机会。")
+    lats = np.asarray([cell.representative_lat for cell in cells], dtype=float)
+    lons = np.asarray([cell.representative_lon for cell in cells], dtype=float)
+    areas = np.asarray([cell.area_m2 for cell in cells], dtype=float)
+    return lats, lons, areas
+
+
+def _is_simple_nadir(cfg: Mapping[str, Any]) -> bool:
+    """判断能否走已验证的覆盖圆路径。"""
+
+    sensor_type = cfg.get("sensor_type") or "SimpleCone"
+    return (
+        sensor_type == "SimpleCone"
+        and not cfg.get("pointing")
+        and not cfg.get("attitude")
+        and not cfg.get("constraints")
+    )
+
+
+def _prepare_ecef_geometry(sat: Any, t: Any, dt_list: Sequence[datetime], cfg: Mapping[str, Any]) -> dict[str, Any]:
+    """为复杂传感器路径准备一次卫星轨道、姿态和统一视轴。"""
+
+    jd = np.asarray(t.ut1, dtype=float)
+    jdi = np.floor(jd)
+    jdf = jd - jdi
+    err, r_teme, v_teme = sat.model.sgp4_array(jdi, jdf)
+    if np.any(err):
+        raise RuntimeError(f"SGP4 传播失败（NORAD {_sat_id(sat)}）：错误码 {err}")
+    gmst = np.radians(np.asarray(t.gmst, dtype=float) * 15.0)
+    r = sg.rot_z_array(gmst, r_teme)
+    v_in = sg.rot_z_array(gmst, v_teme)
+    v = v_in - sg.cross_omega(r)
+    dt_sec = np.asarray(
+        [(item - dt_list[0]).total_seconds() for item in dt_list], dtype=float
+    )
+
+    attitude = cfg.get("attitude") or {}
+    profile = int(attitude.get("profile", 0))
+    sun = None
+    if profile == 4:
+        sun = sg.rot_z_array(gmst, sg.sun_vector_eci(jd))
+    C = sg.body_dcm(
+        r,
+        v,
+        v_in,
+        sun=sun,
+        profile=profile,
+        offset=attitude.get("offset"),
+    )
+
+    pointing = cfg.get("pointing") or {}
+    if str(pointing.get("type") or "").lower() == "targeted":
+        raise ValueError(
+            "区域网格首版不接受 Targeted 指向：它逐目标点转轴，不能证明整座城市同时可执行。"
+            "请改用统一的 Fixed/GrazingAlt/Spinning 或天底 Profile。"
+        )
+    b = sg.pointing_boresight_ecef(
+        cfg.get("pointing"), r, v, C, target=None, dt_sec=dt_sec, jd=jd
+    )
+    axes = sg.sensor_frame_axes(b, v)
+    return {
+        "r": r,
+        "v": v,
+        "b": b,
+        "axes": axes,
+        "dt_sec": dt_sec,
+        "jd": jd,
+        "gmst": gmst,
+        "sun": sun,
+    }
+
+
+def _complex_pattern_grid(
+    u_s: np.ndarray,
+    eps_ground: np.ndarray,
+    u: np.ndarray,
+    v: np.ndarray,
+    cfg: Mapping[str, Any],
+) -> np.ndarray:
+    """把 sensor_geometry.pattern_covered 的不等式扩展到 ``(T, N)``。"""
+
+    sensor_type = cfg.get("sensor_type") or "SimpleCone"
+    params = cfg.get("sensor_params") or []
+    z = u_s[:, :, 2]
+    x = u_s[:, :, 0]
+    y = u_s[:, :, 1]
+    if sensor_type == "SimpleCone":
+        eta = float(params[0]) if params else 45.0
+        ok = z >= np.cos(np.radians(eta))
+    elif sensor_type == "Rectangular":
+        vertical = float(params[0]) if params else 40.0
+        horizontal = float(params[1]) if len(params) > 1 else 60.0
+        ok = (
+            (z > 0.0)
+            & (np.abs(np.degrees(np.arctan2(y, z))) <= vertical)
+            & (np.abs(np.degrees(np.arctan2(x, z))) <= horizontal)
+        )
+    elif sensor_type == "Conical":
+        inner = float(params[0]) if params else 0.0
+        outer = float(params[1]) if len(params) > 1 else 45.0
+        cmin = float(params[2]) if len(params) > 2 else 0.0
+        cmax = float(params[3]) if len(params) > 3 else 360.0
+        theta = np.degrees(np.arccos(np.clip(z, -1.0, 1.0)))
+        clock = np.degrees(np.arctan2(x, y)) % 360.0
+        ok = (theta >= inner) & (theta <= outer) & (clock >= cmin) & (clock <= cmax)
+    elif sensor_type == "HalfPower":
+        freq_ghz = float(params[0]) if params else 14.5
+        diameter_m = float(params[1]) if len(params) > 1 else 1.0
+        wavelength_m = sg.C_LIGHT / (freq_ghz * 1e9) if freq_ghz > 0 else 0.0
+        eta = 70.0 * wavelength_m / diameter_m / 2.0 if diameter_m > 0 else 45.0
+        ok = z >= np.cos(np.radians(eta))
+    elif sensor_type == "SAR":
+        emin = float(params[0]) if params else 12.0
+        emax = float(params[1]) if len(params) > 1 else 70.0
+        fwd = float(params[2]) if len(params) > 2 else 30.0
+        aft = float(params[3]) if len(params) > 3 else 30.0
+        ok = (eps_ground >= emin) & (eps_ground <= emax)
+        vhat = sg.normalize(v)
+        ang_f = np.degrees(
+            np.arccos(np.clip(np.sum(u * vhat[:, None, :], axis=2), -1.0, 1.0))
+        )
+        ang_a = np.degrees(
+            np.arccos(np.clip(np.sum(u * (-vhat[:, None, :]), axis=2), -1.0, 1.0))
+        )
+        ok &= (ang_f >= fwd) & (ang_a >= aft)
+    else:
+        raise ValueError(f"未知传感器类型：{sensor_type}")
+
+    # 复杂引擎的共同物理基线：目标不能在地平线以下。
+    ok &= eps_ground >= 0.0
+    min_elev = float(cfg.get("min_elevation_deg", 0.0) or 0.0)
+    if sensor_type != "SAR" and min_elev > 0.0:
+        ok &= eps_ground >= min_elev
+    return ok
+
+
+def _complex_state_for_points(
+    prepared: Mapping[str, Any],
+    lats: np.ndarray,
+    lons: np.ndarray,
+    cfg: Mapping[str, Any],
+) -> np.ndarray:
+    """对一个网格块返回 ``(时间, 网格点)`` 布尔覆盖状态。"""
+
+    r = prepared["r"]
+    v = prepared["v"]
+    axes = prepared["axes"]
+    T = len(r)
+    lat_r = np.radians(lats)
+    lon_r = np.radians(lons)
+    points = sg.R_EARTH_KM * np.stack(
+        [np.cos(lat_r) * np.cos(lon_r), np.cos(lat_r) * np.sin(lon_r), np.sin(lat_r)],
+        axis=1,
+    )
+    point_up = sg.normalize(points)
+    # u 是卫星指向地面点；一次广播处理 T×N×3，内存只受当前块大小控制。
+    u = sg.normalize(points[None, :, :] - r[:, None, :])
+    u_s = np.einsum("tij,tnj->tni", np.swapaxes(axes, 1, 2), u)
+    # u 是“卫星→目标”，而仰角定义使用“地面点→卫星”；方向相反，必须取 -u。
+    # 这与 sensor_geometry.elevation_of_ground(P, r) 的方向约定保持一致。
+    eps_ground = np.degrees(
+        np.arcsin(np.clip(np.sum((-u) * point_up[None, :, :], axis=2), -1.0, 1.0))
+    )
+    covered = _complex_pattern_grid(u_s, eps_ground, u, v, cfg)
+
+    # 约束暂按网格点循环，避免改变已经验证的 check_constraints 语义；
+    # 视场本身仍是整块向量化，后续可针对约束类型再做专项向量化。
+    constraints = cfg.get("constraints") or []
+    if constraints:
+        sun = prepared["sun"]
+        if sun is None:
+            sun = sg.rot_z_array(prepared["gmst"], sg.sun_vector_eci(prepared["jd"]))
+        moon = sg.rot_z_array(prepared["gmst"], sg.moon_vector_eci(prepared["jd"]))
+        for index, point in enumerate(points):
+            covered[:, index] &= sg.check_constraints(
+                constraints,
+                point,
+                r,
+                v,
+                prepared["b"],
+                u[:, index, :],
+                sun,
+                moon,
+                prepared["dt_sec"],
+            )
+    return covered
+
+
+def _simple_state_for_points(
+    sat: Any,
+    t: Any,
+    lats: np.ndarray,
+    lons: np.ndarray,
+    cfg: Mapping[str, Any],
+    *,
+    prepared: Mapping[str, Any] | None = None,
+) -> np.ndarray:
+    """沿用旧 SimpleCone 地心角+仰角判定，但保留每个网格列。"""
+
+    if prepared is None:
+        geocentric = sat.at(t)
+        sub = geocentric.subpoint()
+        sat_lat = np.asarray(sub.latitude.degrees, dtype=float)
+        sat_lon = np.asarray(sub.longitude.degrees, dtype=float)
+        altitude = np.asarray(sub.elevation.km, dtype=float)
+        prepared = {"sat_lat": sat_lat, "sat_lon": sat_lon, "altitude": altitude}
+    sat_lat = prepared["sat_lat"]
+    sat_lon = prepared["sat_lon"]
+    altitude = prepared["altitude"]
+    lam = cov.central_angle_deg(
+        sat_lat[:, None], sat_lon[:, None], lats[None, :], lons[None, :]
+    )
+    # SimpleCone + 天底仍沿用旧引擎口径；若调用方用 sensor_params[0] 指定半角，
+    # 语义要和 sensor_geometry 的退化路径一致，不能悄悄退回全局半角。
+    sensor_params = cfg.get("sensor_params") or []
+    fov_half_angle = float(
+        sensor_params[0]
+        if sensor_params and sensor_params[0] is not None
+        else cfg.get("fov_half_angle_deg", 10.0)
+    )
+    swath_km = float(cfg.get("swath_km") or 0.0)
+    if swath_km > 0:
+        eta = cov.swath_to_half_angle_deg(altitude, swath_km)
+        lam_max = cov.footprint_max_angle_deg(altitude, eta)
+    else:
+        lam_max = cov.footprint_max_angle_deg(
+            altitude, fov_half_angle
+        )
+    elev = cov.elevation_at_deg(lam, altitude[:, None])
+    return (lam <= lam_max[:, None]) & (
+        elev >= float(cfg.get("min_elevation_deg", 0.0))
+    )
+
+
+def _prepare_simple_geometry(sat: Any, t: Any) -> dict[str, np.ndarray]:
+    """一次取得旧覆盖圆路径所需的星下点和高度。"""
+
+    sub = sat.at(t).subpoint()
+    return {
+        "sat_lat": np.asarray(sub.latitude.degrees, dtype=float),
+        "sat_lon": np.asarray(sub.longitude.degrees, dtype=float),
+        "altitude": np.asarray(sub.elevation.km, dtype=float),
+    }
+
+
+def compute_satellite_grid_state(
+    sat: Any,
+    grid: RegionGrid,
+    t: Any,
+    dt_list: Sequence[datetime],
+    cfg: Mapping[str, Any] | None = None,
+    *,
+    cell_start: int = 0,
+    cell_stop: int | None = None,
+    _prepared: Mapping[str, Any] | None = None,
+) -> np.ndarray:
+    """计算一颗卫星对网格块的逐时刻状态。
+
+    返回布尔数组 ``(T, N_block)``；每一列只对应一个网格单元代表点。
+    ``cell_start/cell_stop`` 用于内存分块，默认处理整个区域。
+    """
+
+    cfg = dict(cfg or {})
+    lats, lons, _ = _grid_arrays(grid)
+    start = int(cell_start)
+    stop = len(lats) if cell_stop is None else int(cell_stop)
+    if not (0 <= start < stop <= len(lats)):
+        raise ValueError("网格块范围不合法。")
+    if not dt_list:
+        raise ValueError("时间轴不能为空。")
+    if _is_simple_nadir(cfg):
+        prepared = _prepared or _prepare_simple_geometry(sat, t)
+        return _simple_state_for_points(
+            sat, t, lats[start:stop], lons[start:stop], cfg, prepared=prepared
+        )
+    prepared = _prepared or _prepare_ecef_geometry(sat, t, dt_list, cfg)
+    return _complex_state_for_points(
+        prepared, lats[start:stop], lons[start:stop], cfg
+    )
+
+
+def _windows_from_state(
+    states: np.ndarray,
+    dt_list: Sequence[datetime],
+    end_utc: datetime,
+    *,
+    sat_index: int,
+    sat_id: int,
+    sat_name: str,
+    grid: RegionGrid,
+    cell_start: int,
+) -> dict[tuple[int, int], tuple[AccessWindow, ...]]:
+    """把一个时间×网格块布尔矩阵压缩成稀疏窗口。"""
+
+    result: dict[tuple[int, int], tuple[AccessWindow, ...]] = {}
+    for local_index in range(states.shape[1]):
+        active = np.flatnonzero(states[:, local_index])
+        if len(active) == 0:
+            continue
+        windows: list[AccessWindow] = []
+        seg_start = int(active[0])
+        previous = int(active[0])
+        for current_raw in active[1:]:
+            current = int(current_raw)
+            if current != previous + 1:
+                windows.append(
+                    _make_window(
+                        sat_index,
+                        sat_id,
+                        sat_name,
+                        cell_start + local_index,
+                        grid,
+                        dt_list[seg_start],
+                        dt_list[previous + 1] if previous + 1 < len(dt_list) else end_utc,
+                    )
+                )
+                seg_start = current
+            previous = current
+        windows.append(
+            _make_window(
+                sat_index,
+                sat_id,
+                sat_name,
+                cell_start + local_index,
+                grid,
+                dt_list[seg_start],
+                dt_list[previous + 1] if previous + 1 < len(dt_list) else end_utc,
+            )
+        )
+        if windows:
+            result[(sat_index, cell_start + local_index)] = tuple(windows)
+    return result
+
+
+def _make_window(
+    sat_index: int,
+    sat_id: int,
+    sat_name: str,
+    grid_index: int,
+    grid: RegionGrid,
+    start: datetime,
+    end: datetime,
+) -> AccessWindow:
+    duration = max(0.0, (end - start).total_seconds())
+    return AccessWindow(
+        sat_index=sat_index,
+        sat_id=sat_id,
+        sat_name=sat_name,
+        grid_index=grid_index,
+        grid_id=grid.cells[grid_index].grid_id,
+        start_utc=start,
+        end_utc=end,
+        duration_s=duration,
+    )
+
+
+def compute_regional_opportunities(
+    satellites: Sequence[Any],
+    grid: RegionGrid,
+    start_utc: str | datetime,
+    end_utc: str | datetime,
+    cfg: Mapping[str, Any] | None = None,
+    *,
+    decision_step_s: int = 60,
+    cell_chunk_size: int = 256,
+    progress: Callable[[float, str], None] | None = None,
+    timescale: Any | None = None,
+) -> OpportunityStore:
+    """计算整个城市的稀疏区域覆盖机会。
+
+    参数
+    ----
+    satellites:
+        ``satellite_loader.records_to_satellites`` 返回的对象，或原生 Skyfield
+        ``EarthSatellite`` 列表。
+    grid:
+        ``region_grid.build_clipped_grid`` 的结果。
+    start_utc/end_utc:
+        支持 ``2026-08-30 00:00:00`` 和 ISO ``...Z``。
+    cfg:
+        覆盖参数。默认从旧引擎口径取 ``fov_half_angle_deg=10``、
+        ``min_elevation_deg=10``、``coarse_step_seconds=10``；复杂 Profile 字段
+        （sensor_type、sensor_params、pointing、attitude、constraints）可直接传入。
+    decision_step_s:
+        记录给后续选星的时间片粒度；本阶段窗口检测使用 cfg 的粗检测步长。
+    cell_chunk_size:
+        每次进入几何热路径的网格数，防止大城市一次分配过大的 T×N×3 数组。
+    """
+
+    cfg = dict(cfg or {})
+    start = _as_utc(start_utc)
+    end = _as_utc(end_utc)
+    detection_step_s = int(cfg.get("regional_detection_step_seconds", cfg.get("coarse_step_seconds", 10)))
+    if detection_step_s <= 0 or decision_step_s <= 0:
+        raise ValueError("检测步长和决策步长必须大于 0 秒。")
+    if cell_chunk_size <= 0:
+        raise ValueError("cell_chunk_size 必须大于 0。")
+    dt_list = _half_open_times(start, end, detection_step_s)
+    if timescale is None:
+        timescale = load.timescale(builtin=True)
+    t = timescale.from_datetimes(dt_list)
+    satellites = tuple(satellites)
+    n_cells = len(grid.cells)
+    if not satellites:
+        return OpportunityStore(
+            satellites=(),
+            grid=grid,
+            start_utc=start,
+            end_utc=end,
+            detection_step_s=detection_step_s,
+            decision_step_s=int(decision_step_s),
+            metadata={"config": cfg},
+        )
+
+    windows: dict[tuple[int, int], tuple[AccessWindow, ...]] = {}
+    for sat_index, sat in enumerate(satellites):
+        sat_id = _sat_id(sat)
+        sat_name = _sat_name(sat)
+        # 同一颗星的轨道和姿态只准备一次；块循环只改变网格列，避免每块重复 SGP4。
+        prepared = (
+            _prepare_simple_geometry(sat, t)
+            if _is_simple_nadir(cfg)
+            else _prepare_ecef_geometry(sat, t, dt_list, cfg)
+        )
+        for cell_start in range(0, n_cells, int(cell_chunk_size)):
+            cell_stop = min(cell_start + int(cell_chunk_size), n_cells)
+            states = compute_satellite_grid_state(
+                sat,
+                grid,
+                t,
+                dt_list,
+                cfg,
+                cell_start=cell_start,
+                cell_stop=cell_stop,
+                _prepared=prepared,
+            )
+            windows.update(
+                _windows_from_state(
+                    states,
+                    dt_list,
+                    end,
+                    sat_index=sat_index,
+                    sat_id=sat_id,
+                    sat_name=sat_name,
+                    grid=grid,
+                    cell_start=cell_start,
+                )
+            )
+        if progress:
+            progress(
+                (sat_index + 1) / len(satellites),
+                f"区域机会：{sat_name}（{sat_index + 1}/{len(satellites)}）",
+            )
+
+    return OpportunityStore(
+        satellites=satellites,
+        grid=grid,
+        start_utc=start,
+        end_utc=end,
+        detection_step_s=detection_step_s,
+        decision_step_s=int(decision_step_s),
+        windows=windows,
+        metadata={
+            "config": cfg,
+            "n_grid_cells": n_cells,
+            "n_nonempty_pairs": len(windows),
+        },
+    )
+
+
+__all__ = [
+    "AccessWindow",
+    "OpportunityStore",
+    "compute_satellite_grid_state",
+    "compute_regional_opportunities",
+]

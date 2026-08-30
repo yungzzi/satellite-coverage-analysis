@@ -34,8 +34,10 @@
 
 - `src/region_grid.py` 已完成：固定米制格网、裁剪单元、面积权重、内部代表点和调试 GeoJSON 导出。
 - `src/validate_region_grid.py` 已覆盖规则格、带洞/凹形单元、离散面、稳定性和杭州 5 km/2.5 km 面积守恒。
-- 下一段是新建“卫星 × 网格 → 稀疏覆盖窗口”模块；先复用自研几何做杭州小规模验证，**不修改**旧的
-  `coverage_analysis.make_grid_points` 与原单点+半径行为。
+- `src/regional_opportunities.py` 已完成第一版“卫星 × 网格 → 稀疏覆盖窗口”底座：每星一次轨道准备、
+  网格分块向量化、SimpleCone/Rectangular/SAR 判定和 Targeted 区域一致性保护。
+- `src/validate_regional_opportunities.py` 已完成杭州真实边界小规模回归；后续接区域指标/窗口精化时仍**不修改**
+  旧的 `coverage_analysis.make_grid_points` 与原单点+半径行为。
 - 11 个城市边界必须记录 `adcode`、边界版本/哈希、源坐标系、投影、格长和原点。未知坐标系不可直接与
   WGS84 轨道地面点混用。
 

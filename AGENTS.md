@@ -79,6 +79,7 @@ src/
 ├── regional_opportunities.py 新区域逐星逐网格稀疏覆盖窗口
 ├── regional_metrics.py       新区域指标与城市汇总
 ├── regional_selection.py     新区域任务①～⑤（支持 K=1/K>1）选星
+├── benchmark_regional_k.py   真实城市网格 K=1/K=2 性能基准
 ├── loader_app.py / cli.py    本地 GUI / CLI
 ├── satellite_loader.py       TLE、目录与缓存
 └── validate_*.py             对应的回归或验收脚本

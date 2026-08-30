@@ -373,6 +373,25 @@ def city_mean_observable_duration(values, areas, horizon_s) -> float: ...
 `src/validate_regional_selection.py` 已用两颗测试卫星穷举核对任务①的可行与不可行情形，
 并保持旧单点选星入口不变。`K>1` 的通用同时覆盖模型仍待后续阶段。
 
+### 8.0.2 当前已落地：任务③（K=1，给定预算最大化达标面积）
+
+同一模块还提供 `run_regional_budget_selection(...)`。它给定卫星预算 `n_budget=N` 和单元
+时间覆盖率门槛 `temporal_coverage_target_pct=q0`，在不重新传播轨道的前提下，从已有稀疏窗口
+中选择卫星。默认 `exact_budget=False` 表示“最多 N 颗”；设置 `exact_budget=True` 才表示
+“恰好 N 颗”。当前仍只支持 `min_simultaneous=1`。
+
+任务③不是把多个指标随意加权，而是明确的字典序目标：
+
+1. 先最大化满足 `q_g >= q0` 的城市面积比例；
+2. 在第一目标相同的方案中，再最大化面积加权城市平均时间覆盖率
+   \(\sum_g a_g q_g / \sum_g a_g\)。
+
+贪心版本逐轮尝试加入一颗卫星，按这两个目标的先后顺序比较，属于近似解；ILP 版本分两次求解：
+第一次求最大达标面积，第二次加入“面积不低于第一次最优值”的约束，再最大化面积加权覆盖时长。
+两种方法的结果最后都回到窗口级指标复核；只有 ILP 求解器证明两阶段模型最优且复核通过，才标记
+`proven_optimal`。`src/validate_regional_selection.py` 新增小规模全子集穷举对照，验证任务③的
+面积优先、平均覆盖率次优先语义以及“最多/恰好 N 颗”两种预算口径。
+
 ### 8.1 共同预处理
 
 1. 删除全时段、全网格都无覆盖的卫星；
@@ -407,9 +426,9 @@ def city_mean_observable_duration(values, areas, horizon_s) -> float: ...
 
 `min_simultaneous>1` 使用通用 `y[g,k]` 模型，不套用 `x`-only 快速路径。
 
-### 8.4 任务③
+### 8.4 任务③（K=1 版本已落地）
 
-使用两次 ILP：
+当前 K=1 版本使用两次 ILP：
 
 1. 最大化达到 `temporal_coverage_target_pct` 的面积；
 2. 固定第一阶段最优面积，再最大化面积—时间平均覆盖率。
@@ -729,7 +748,8 @@ x-only 按需约束
 - [x] 用小规模穷举验证任务②的最少卫星数；
 - [x] 将按需秒级边界精化接入任务②复核；
 - [x] 接入任务①（`K=1` 时间覆盖率门槛）；
-- [ ] 接入任务③、④、⑤；
+- [x] 接入任务③（K=1 预算下的两阶段字典序优化）；
+- [ ] 接入任务④、⑤；
 - [ ] 接入 `K>1` 的通用 `y[g,k]` 模型。
 
 ### 阶段 F：FastAPI 最小 demo

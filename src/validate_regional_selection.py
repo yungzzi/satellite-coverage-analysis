@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-r"""区域选星任务②自检。
+r"""区域选星任务①/②/③自检。
 
 运行：
     ..\卫星覆盖性分析\.venv\Scripts\python.exe src\validate_regional_selection.py
@@ -10,6 +10,7 @@ r"""区域选星任务②自检。
 * 90% 面积目标时最少卫星数仍为 2（两个等面积网格，单星只有 50%）；
 * 50% 面积目标时最少卫星数为 1，用来覆盖降级模式；
 * 任务①时间覆盖率门槛在相同小例子上与穷举一致；
+* 任务③给定预算时，字典序目标与穷举一致；
 * 贪心+反向删除和 K=1 滑动窗口 ILP 与穷举最优值一致；
 * 真实杭州机会窗口能够直接交给任务②，而不会重新传播轨道。
 """
@@ -59,6 +60,36 @@ def brute_force_temporal_minimum(
             if (metrics.city.qualified_area_pct or 0.0) + 1e-9 >= area_target_pct:
                 return size
     return None
+
+
+def brute_force_budget_best(
+    store,
+    *,
+    n_budget: int,
+    temporal_coverage_target_pct: float,
+    exact_budget: bool = False,
+) -> tuple[tuple[float, float], tuple[int, ...]]:
+    """任务③小规模基准：穷举预算内组合，按面积→平均覆盖率排序。"""
+
+    best_score: tuple[float, float] | None = None
+    best_subset: tuple[int, ...] = ()
+    sizes = [n_budget] if exact_budget else range(n_budget + 1)
+    for size in sizes:
+        for subset in itertools.combinations(range(store.n_satellites), size):
+            metrics = rm.compute_regional_metrics(
+                store,
+                subset,
+                temporal_coverage_target_pct=temporal_coverage_target_pct,
+            )
+            score = (
+                float(metrics.city.qualified_area_pct or 0.0),
+                float(metrics.city.area_weighted_temporal_coverage_pct),
+            )
+            if best_score is None or score > best_score:
+                best_score = score
+                best_subset = subset
+    assert best_score is not None
+    return best_score, best_subset
 
 
 def test_small_exact_agreement() -> None:
@@ -136,6 +167,47 @@ def test_temporal_selection() -> None:
     print("[通过] 任务①时间覆盖率的穷举、贪心和 ILP 一致")
 
 
+def test_budget_selection() -> None:
+    store = synthetic_store()
+    for q_target, budget, expected_score in (
+        (30.0, 1, (100.0, 100.0 / 3.0)),
+        (50.0, 1, (50.0, 25.0)),
+        (50.0, 2, (50.0, 50.0)),
+    ):
+        optimum, _ = brute_force_budget_best(
+            store,
+            n_budget=budget,
+            temporal_coverage_target_pct=q_target,
+        )
+        assert all(abs(left - right) < 1e-9 for left, right in zip(optimum, expected_score))
+        result = rs.run_regional_budget_selection(
+            store,
+            n_budget=budget,
+            temporal_coverage_target_pct=q_target,
+            method="both",
+            time_limit_s=30,
+        )
+        assert result.recommended.feasible
+        actual = (
+            result.recommended.achieved_area_pct,
+            result.recommended.area_weighted_temporal_coverage_pct,
+        )
+        assert all(abs(left - right) < 1e-9 for left, right in zip(actual, expected_score))
+        assert len(result.recommended.selected_sat_indices) <= budget
+        if result.ilp and result.ilp.status not in {"unsupported", "skipped"}:
+            assert result.ilp.status == "proven_optimal"
+    exact = rs.run_regional_budget_selection(
+        store,
+        n_budget=2,
+        temporal_coverage_target_pct=30.0,
+        exact_budget=True,
+        method="both",
+        time_limit_s=30,
+    )
+    assert len(exact.recommended.selected_sat_indices) == 2
+    print("[通过] 任务③预算字典序目标与穷举一致")
+
+
 def test_real_opportunity_store() -> None:
     ts = sl.load.timescale(builtin=True)
     tle_path = ROOT / "data" / "test_data" / "jilin1_all.tle"
@@ -161,11 +233,12 @@ def main() -> int:
         test_small_exact_agreement,
         test_empty_and_invalid_requests,
         test_temporal_selection,
+        test_budget_selection,
         test_real_opportunity_store,
     ]
     for test in tests:
         test()
-    print(f"区域选星任务②自检通过：{len(tests)}/{len(tests)}")
+    print(f"区域选星任务①/②/③自检通过：{len(tests)}/{len(tests)}")
     return 0
 
 

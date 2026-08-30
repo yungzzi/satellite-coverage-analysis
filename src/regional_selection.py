@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""区域选星任务①～⑤（当前均为 K=1）。
+"""区域选星任务①～⑤（支持 K=1 与 K>1）。
 
 任务②给定“每个网格最大空窗 MRT 不超过 ``mrt_target_s``”，任务①给定“每个网格
 时间覆盖率不低于 ``temporal_coverage_target_pct``”；两者都要求至少
@@ -8,8 +8,9 @@
 实现分两层：
 
 * 贪心 + 反向删除：每轮优先改善达标面积、再缩短面积加权 MRT/ART，得到工程近似解；
-* K=1 滑动窗口 ILP：一个长度为 ``MRT/步长+1`` 的时间窗内必须至少有一颗已选卫星
-  覆盖。90% 模式增加网格达标变量 ``z_g``，严格 100% 模式直接约束所有网格。
+* K=1 保留滑动窗口 ILP 快速路径；K>1 为每个网格—时间片建立同时覆盖变量
+  ``y[g,t]``，保证同一时刻至少有 K 颗已选卫星覆盖。90% 模式增加网格达标变量
+  ``z_g``，严格 100% 模式直接约束所有网格。
 * 任务③给定最多（或恰好）``N`` 颗卫星时，先最大化达到时间覆盖率门槛的城市面积，
   再在面积相同的方案中最大化面积加权时间覆盖率；ILP 用两阶段求解保持字典序目标。
 * 任务④给定最多 ``N`` 颗卫星时，对面积分位 MRT 上限做离散二分，每次复用任务②的
@@ -48,6 +49,7 @@ class SelectionResult:
     note: str
     constraint_count: int
     metrics: RegionalMetricsResult
+    min_simultaneous: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         """转换为服务层/报告层可消费的普通字典。"""
@@ -64,6 +66,7 @@ class SelectionResult:
             "status": self.status,
             "note": self.note,
             "constraint_count": self.constraint_count,
+            "min_simultaneous": self.min_simultaneous,
             "metrics": self.metrics.to_city_dict(),
         }
 
@@ -78,6 +81,7 @@ class RegionalSelectionResult:
     greedy: SelectionResult | None
     ilp: SelectionResult | None
     recommended: SelectionResult
+    min_simultaneous: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +91,7 @@ class RegionalSelectionResult:
             "greedy": self.greedy.to_dict() if self.greedy else None,
             "ilp": self.ilp.to_dict() if self.ilp else None,
             "recommended": self.recommended.to_dict(),
+            "min_simultaneous": self.min_simultaneous,
         }
 
 
@@ -106,6 +111,7 @@ class TemporalSelectionResult:
     note: str
     constraint_count: int
     metrics: RegionalMetricsResult
+    min_simultaneous: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +126,7 @@ class TemporalSelectionResult:
             "status": self.status,
             "note": self.note,
             "constraint_count": self.constraint_count,
+            "min_simultaneous": self.min_simultaneous,
             "metrics": self.metrics.to_city_dict(),
         }
 
@@ -134,6 +141,7 @@ class RegionalTemporalSelectionResult:
     greedy: TemporalSelectionResult | None
     ilp: TemporalSelectionResult | None
     recommended: TemporalSelectionResult
+    min_simultaneous: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -143,6 +151,7 @@ class RegionalTemporalSelectionResult:
             "greedy": self.greedy.to_dict() if self.greedy else None,
             "ilp": self.ilp.to_dict() if self.ilp else None,
             "recommended": self.recommended.to_dict(),
+            "min_simultaneous": self.min_simultaneous,
         }
 
 
@@ -164,6 +173,7 @@ class BudgetSelectionResult:
     note: str
     constraint_count: int
     metrics: RegionalMetricsResult
+    min_simultaneous: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -180,6 +190,7 @@ class BudgetSelectionResult:
             "status": self.status,
             "note": self.note,
             "constraint_count": self.constraint_count,
+            "min_simultaneous": self.min_simultaneous,
             "metrics": self.metrics.to_city_dict(),
         }
 
@@ -195,6 +206,7 @@ class RegionalBudgetSelectionResult:
     greedy: BudgetSelectionResult | None
     ilp: BudgetSelectionResult | None
     recommended: BudgetSelectionResult
+    min_simultaneous: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -205,6 +217,7 @@ class RegionalBudgetSelectionResult:
             "greedy": self.greedy.to_dict() if self.greedy else None,
             "ilp": self.ilp.to_dict() if self.ilp else None,
             "recommended": self.recommended.to_dict(),
+            "min_simultaneous": self.min_simultaneous,
         }
 
 
@@ -229,6 +242,7 @@ class AreaQuantileMrtSelectionResult:
     evaluations: int
     evaluated_thresholds_s: tuple[float, ...]
     selection: SelectionResult
+    min_simultaneous: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -249,6 +263,7 @@ class AreaQuantileMrtSelectionResult:
             "evaluations": self.evaluations,
             "evaluated_thresholds_s": list(self.evaluated_thresholds_s),
             "selection": self.selection.to_dict(),
+            "min_simultaneous": self.min_simultaneous,
         }
 
 
@@ -274,6 +289,7 @@ class ArtSelectionResult:
     exchange_count: int
     deletion_count: int
     metrics: RegionalMetricsResult
+    min_simultaneous: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -294,6 +310,7 @@ class ArtSelectionResult:
             "iterations": self.iterations,
             "exchange_count": self.exchange_count,
             "deletion_count": self.deletion_count,
+            "min_simultaneous": self.min_simultaneous,
             "metrics": self.metrics.to_city_dict(),
         }
 
@@ -312,10 +329,6 @@ def _validate_inputs(
         raise ValueError("mrt_target_s 不能为负数。")
     if int(min_simultaneous) != min_simultaneous or min_simultaneous <= 0:
         raise ValueError("min_simultaneous 必须是正整数。")
-    if int(min_simultaneous) != 1:
-        raise NotImplementedError(
-            "当前区域任务②先实现 K=1 滑动窗口模型；K>1 使用通用 y 模型，后续阶段接入。"
-        )
     if store.decision_step_s <= 0:
         raise ValueError("OpportunityStore.decision_step_s 必须大于 0。")
     return area_target_pct, mrt_target_s
@@ -327,7 +340,7 @@ def _validate_temporal_inputs(
     temporal_coverage_target_pct: float,
     min_simultaneous: int,
 ) -> tuple[float, float]:
-    """校验任务①参数；首版与任务②一样先走 K=1 快速路径。"""
+    """校验任务①参数；K=1 走快速路径，K>1 使用同时覆盖模型。"""
 
     area_target_pct = float(area_target_pct)
     temporal_coverage_target_pct = float(temporal_coverage_target_pct)
@@ -337,10 +350,6 @@ def _validate_temporal_inputs(
         raise ValueError("temporal_coverage_target_pct 必须在 0～100 之间。")
     if int(min_simultaneous) != min_simultaneous or min_simultaneous <= 0:
         raise ValueError("min_simultaneous 必须是正整数。")
-    if int(min_simultaneous) != 1:
-        raise NotImplementedError(
-            "当前区域任务①先实现 K=1 的时间覆盖率模型；K>1 使用通用 y 模型，后续阶段接入。"
-        )
     if store.decision_step_s <= 0:
         raise ValueError("OpportunityStore.decision_step_s 必须大于 0。")
     return area_target_pct, temporal_coverage_target_pct
@@ -352,7 +361,7 @@ def _validate_budget_inputs(
     temporal_coverage_target_pct: float,
     min_simultaneous: int,
 ) -> tuple[int, float]:
-    """校验任务③预算、时间覆盖率和 K=1 快速路径。"""
+    """校验任务③预算、时间覆盖率和同时覆盖参数。"""
 
     if int(n_budget) != n_budget or int(n_budget) < 0:
         raise ValueError("n_budget 必须是非负整数。")
@@ -362,10 +371,6 @@ def _validate_budget_inputs(
         raise ValueError("temporal_coverage_target_pct 必须在 0～100 之间。")
     if int(min_simultaneous) != min_simultaneous or min_simultaneous <= 0:
         raise ValueError("min_simultaneous 必须是正整数。")
-    if int(min_simultaneous) != 1:
-        raise NotImplementedError(
-            "当前区域任务③先实现 K=1 的预算模型；K>1 使用通用 y 模型，后续阶段接入。"
-        )
     if store.decision_step_s <= 0:
         raise ValueError("OpportunityStore.decision_step_s 必须大于 0。")
     return n_budget, temporal_coverage_target_pct
@@ -446,6 +451,36 @@ def build_bin_candidates(
     return candidates, starts, ends
 
 
+def _add_k_event_variables(
+    problem: Any,
+    pulp: Any,
+    x: Sequence[Any],
+    grid_candidates: Sequence[set[int]],
+    *,
+    min_simultaneous: int,
+    prefix: str,
+) -> tuple[dict[int, Any], int]:
+    """为 K>1 的每个时间片建立“至少 K 星同时覆盖”变量。
+
+    ``y[t]=1`` 当且仅当该时间片的候选卫星中至少有 K 颗被选。两条不等式分别
+    防止 y 凭空取 1，以及在已有 K 颗时把 y 错取为 0。
+    """
+
+    variables: dict[int, Any] = {}
+    constraint_count = 0
+    k = int(min_simultaneous)
+    for time_index, candidate_set in enumerate(grid_candidates):
+        if not candidate_set:
+            continue
+        y = pulp.LpVariable(f"{prefix}_{time_index}", cat=pulp.LpBinary)
+        selected = pulp.lpSum(x[index] for index in sorted(candidate_set))
+        problem += selected >= k * y
+        problem += selected <= (k - 1) + len(candidate_set) * y
+        variables[time_index] = y
+        constraint_count += 2
+    return variables, constraint_count
+
+
 def _constraint_sets(
     candidates: Sequence[Sequence[set[int]]],
     window_bins: int,
@@ -490,13 +525,14 @@ def _evaluate(
     store: OpportunityStore,
     selected: Sequence[int],
     mrt_target_s: float,
+    min_simultaneous: int = 1,
 ) -> RegionalMetricsResult:
     """统一用窗口级指标评估一个组合。"""
 
     return compute_regional_metrics(
         store,
         selected_sat_indices=selected,
-        min_simultaneous=1,
+        min_simultaneous=min_simultaneous,
         mrt_target_s=mrt_target_s,
     )
 
@@ -542,9 +578,10 @@ def _result(
     status: str,
     note: str,
     constraint_count: int,
+    min_simultaneous: int = 1,
 ) -> SelectionResult:
     selected = tuple(sorted({int(index) for index in selected}))
-    metrics = _evaluate(store, selected, mrt_target_s)
+    metrics = _evaluate(store, selected, mrt_target_s, min_simultaneous)
     achieved = float(metrics.city.qualified_area_pct or 0.0)
     feasible = achieved + 1e-9 >= area_target_pct
     sat_ids = tuple(_satellite_identity(store, index)[0] for index in selected)
@@ -564,6 +601,7 @@ def _result(
         note=note,
         constraint_count=int(constraint_count),
         metrics=metrics,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -581,7 +619,7 @@ def greedy_select_mrt(
     )
     usable = sorted({sat_index for sat_index, _ in store.windows})
     selected: list[int] = []
-    current = _evaluate(store, selected, mrt_target_s)
+    current = _evaluate(store, selected, mrt_target_s, min_simultaneous)
     while (current.city.qualified_area_pct or 0.0) + 1e-9 < area_target_pct:
         best_index: int | None = None
         best_metrics: RegionalMetricsResult | None = None
@@ -589,7 +627,9 @@ def greedy_select_mrt(
         for sat_index in usable:
             if sat_index in selected:
                 continue
-            trial = _evaluate(store, [*selected, sat_index], mrt_target_s)
+            trial = _evaluate(
+                store, [*selected, sat_index], mrt_target_s, min_simultaneous
+            )
             score = _score(trial)
             if best_metrics is None or score > best_score:
                 best_index = sat_index
@@ -607,7 +647,7 @@ def greedy_select_mrt(
             changed = False
             for sat_index in list(selected):
                 trial_selected = [item for item in selected if item != sat_index]
-                trial = _evaluate(store, trial_selected, mrt_target_s)
+                trial = _evaluate(store, trial_selected, mrt_target_s, min_simultaneous)
                 if (trial.city.qualified_area_pct or 0.0) + 1e-9 >= area_target_pct:
                     selected = trial_selected
                     current = trial
@@ -628,6 +668,7 @@ def greedy_select_mrt(
         status="feasible_heuristic" if feasible else "infeasible_heuristic",
         note=note,
         constraint_count=0,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -639,7 +680,7 @@ def ilp_select_mrt(
     min_simultaneous: int = 1,
     time_limit_s: int = 180,
 ) -> SelectionResult:
-    """K=1 滑动窗口 ILP，最小化选星数量并做窗口级复核。"""
+    """滑动窗口 ILP，最小化选星数量并做窗口级复核。K>1 使用 y[g,t]。"""
 
     area_target_pct, mrt_target_s = _validate_inputs(
         store, area_target_pct, mrt_target_s, min_simultaneous
@@ -656,6 +697,7 @@ def ilp_select_mrt(
             status="unsupported",
             note="未安装 pulp，无法运行区域 MRT 整数规划。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
 
     n_sat = store.n_satellites
@@ -669,6 +711,7 @@ def ilp_select_mrt(
             status="skipped",
             note="卫星数超过 1500，跳过 ILP；请使用贪心或候选预筛选。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
     if area_target_pct <= 0.0:
         return _result(
@@ -680,6 +723,7 @@ def ilp_select_mrt(
             status="proven_optimal",
             note="面积目标为 0%，空组合即满足。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
 
     step_s = int(store.decision_step_s)
@@ -687,7 +731,11 @@ def ilp_select_mrt(
     n_bins = len(_starts)
     window_bins = max(1, int(math.floor(mrt_target_s / step_s)) + 1)
     strict = area_target_pct >= 100.0 - 1e-9
-    grouped_constraints = _constraint_sets(candidates, window_bins, strict=strict)
+    grouped_constraints = (
+        _constraint_sets(candidates, window_bins, strict=strict)
+        if min_simultaneous == 1
+        else []
+    )
 
     problem = pulp.LpProblem("regional_mrt_selection", pulp.LpMinimize)
     x = [pulp.LpVariable(f"x_{index}", cat=pulp.LpBinary) for index in range(n_sat)]
@@ -700,17 +748,67 @@ def ilp_select_mrt(
     problem += pulp.lpSum(x)
 
     constraint_count = 0
-    if strict:
-        sets_to_add = grouped_constraints[0] if grouped_constraints else []
-        for candidate in sets_to_add:
-            problem += pulp.lpSum(x[index] for index in candidate) >= 1
-            constraint_count += 1
-        # 没有完整滑窗约束时，MRT 大于等于分析时长，空组合可行；否则 ILP 自然会判无解。
-    else:
-        for grid_index, grid_constraints in enumerate(grouped_constraints):
-            for candidate in grid_constraints:
-                problem += pulp.lpSum(x[index] for index in candidate) >= z[grid_index]
+    impossible_strict = False
+    if min_simultaneous == 1:
+        if strict:
+            sets_to_add = grouped_constraints[0] if grouped_constraints else []
+            for candidate in sets_to_add:
+                problem += pulp.lpSum(x[index] for index in candidate) >= 1
                 constraint_count += 1
+            # 没有完整滑窗约束时，MRT 大于等于分析时长，空组合可行；否则 ILP 自然会判无解。
+        else:
+            for grid_index, grid_constraints in enumerate(grouped_constraints):
+                for candidate in grid_constraints:
+                    problem += pulp.lpSum(x[index] for index in candidate) >= z[grid_index]
+                    constraint_count += 1
+    else:
+        # K>1 不能只对滑窗内的卫星集合做求和：不同卫星可能出现在窗口的不同时间。
+        # 先用 y[g,t] 精确表示“该时间片同时有至少 K 颗所选卫星”，再要求每个 MRT 滑窗
+        # 至少出现一次 y=1。
+        for grid_index, grid_candidates in enumerate(candidates):
+            y_by_time, added = _add_k_event_variables(
+                problem,
+                pulp,
+                x,
+                grid_candidates,
+                min_simultaneous=min_simultaneous,
+                prefix=f"y_mrt_{grid_index}",
+            )
+            constraint_count += added
+            if window_bins > n_bins:
+                continue
+            for window_start in range(n_bins - window_bins + 1):
+                event_variables = [
+                    y_by_time[time_index]
+                    for time_index in range(window_start, window_start + window_bins)
+                    if time_index in y_by_time
+                ]
+                if not event_variables:
+                    if strict:
+                        impossible_strict = True
+                    else:
+                        problem += z[grid_index] <= 0
+                        constraint_count += 1
+                    continue
+                event_expr = pulp.lpSum(event_variables)
+                if strict:
+                    problem += event_expr >= 1
+                else:
+                    problem += event_expr >= z[grid_index]
+                constraint_count += 1
+
+    if impossible_strict:
+        return _result(
+            store,
+            [],
+            method="ilp",
+            area_target_pct=area_target_pct,
+            mrt_target_s=mrt_target_s,
+            status="infeasible",
+            note="K>1 的离散 MRT 滑窗中存在没有任何同时覆盖机会的窗口。",
+            constraint_count=constraint_count,
+            min_simultaneous=min_simultaneous,
+        )
 
     problem.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=int(time_limit_s)))
     solver_status = pulp.LpStatus[problem.status]
@@ -724,14 +822,19 @@ def ilp_select_mrt(
             status="infeasible",
             note=f"ILP 状态为 {solver_status}，当前离散模型未找到可行方案。",
             constraint_count=constraint_count,
+            min_simultaneous=min_simultaneous,
         )
     selected = [index for index, variable in enumerate(x) if (pulp.value(variable) or 0.0) > 0.5]
-    metrics = _evaluate(store, selected, mrt_target_s)
+    metrics = _evaluate(store, selected, mrt_target_s, min_simultaneous)
     achieved = float(metrics.city.qualified_area_pct or 0.0)
     feasible = achieved + 1e-9 >= area_target_pct
     if solver_status == "Optimal" and feasible:
         status = "proven_optimal"
-        note = "K=1 滑动窗口 ILP 已证明离散模型最少；窗口级复核通过。"
+        note = (
+            "K=1 滑动窗口 ILP 已证明离散模型最少；窗口级复核通过。"
+            if min_simultaneous == 1
+            else "K>1 通用 y[g,t] 滑动窗口 ILP 已证明离散模型最少；窗口级复核通过。"
+        )
     elif feasible:
         status = "feasible_time_limit"
         note = "ILP 达到时间上限，当前可行解通过窗口级复核，未证明全局最优。"
@@ -748,6 +851,7 @@ def ilp_select_mrt(
         status=status,
         note=note,
         constraint_count=constraint_count,
+        min_simultaneous=min_simultaneous,
     )
     return result
 
@@ -756,13 +860,14 @@ def _evaluate_temporal(
     store: OpportunityStore,
     selected: Sequence[int],
     temporal_coverage_target_pct: float,
+    min_simultaneous: int = 1,
 ) -> RegionalMetricsResult:
     """用窗口级指标评估任务①的单元时间覆盖率达标面积。"""
 
     return compute_regional_metrics(
         store,
         selected_sat_indices=selected,
-        min_simultaneous=1,
+        min_simultaneous=min_simultaneous,
         temporal_coverage_target_pct=temporal_coverage_target_pct,
     )
 
@@ -789,9 +894,12 @@ def _temporal_result(
     status: str,
     note: str,
     constraint_count: int,
+    min_simultaneous: int = 1,
 ) -> TemporalSelectionResult:
     selected_tuple = tuple(sorted({int(index) for index in selected}))
-    metrics = _evaluate_temporal(store, selected_tuple, temporal_coverage_target_pct)
+    metrics = _evaluate_temporal(
+        store, selected_tuple, temporal_coverage_target_pct, min_simultaneous
+    )
     achieved = float(metrics.city.qualified_area_pct or 0.0)
     feasible = achieved + 1e-9 >= area_target_pct
     sat_ids = tuple(_satellite_identity(store, index)[0] for index in selected_tuple)
@@ -811,6 +919,7 @@ def _temporal_result(
         note=note,
         constraint_count=int(constraint_count),
         metrics=metrics,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -828,7 +937,9 @@ def greedy_select_temporal(
     )
     usable = sorted({sat_index for sat_index, _ in store.windows})
     selected: list[int] = []
-    current = _evaluate_temporal(store, selected, temporal_coverage_target_pct)
+    current = _evaluate_temporal(
+        store, selected, temporal_coverage_target_pct, min_simultaneous
+    )
     while (current.city.qualified_area_pct or 0.0) + 1e-9 < area_target_pct:
         best_index: int | None = None
         best_metrics: RegionalMetricsResult | None = None
@@ -837,7 +948,10 @@ def greedy_select_temporal(
             if sat_index in selected:
                 continue
             trial = _evaluate_temporal(
-                store, [*selected, sat_index], temporal_coverage_target_pct
+                store,
+                [*selected, sat_index],
+                temporal_coverage_target_pct,
+                min_simultaneous,
             )
             score = _score_temporal(trial)
             if best_metrics is None or score > best_score:
@@ -857,7 +971,10 @@ def greedy_select_temporal(
             for sat_index in list(selected):
                 trial_selected = [item for item in selected if item != sat_index]
                 trial = _evaluate_temporal(
-                    store, trial_selected, temporal_coverage_target_pct
+                    store,
+                    trial_selected,
+                    temporal_coverage_target_pct,
+                    min_simultaneous,
                 )
                 if (trial.city.qualified_area_pct or 0.0) + 1e-9 >= area_target_pct:
                     selected = trial_selected
@@ -879,6 +996,7 @@ def greedy_select_temporal(
         status="feasible_heuristic" if feasible else "infeasible_heuristic",
         note=note,
         constraint_count=0,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -890,7 +1008,7 @@ def ilp_select_temporal(
     min_simultaneous: int = 1,
     time_limit_s: int = 180,
 ) -> TemporalSelectionResult:
-    """任务① K=1 时间覆盖率 ILP，最小化选星数量并做窗口级复核。"""
+    """任务①时间覆盖率 ILP；K>1 使用 y[g,t] 表示同一时刻的 K 星同时覆盖。"""
 
     area_target_pct, temporal_coverage_target_pct = _validate_temporal_inputs(
         store, area_target_pct, temporal_coverage_target_pct, min_simultaneous
@@ -907,6 +1025,7 @@ def ilp_select_temporal(
             status="proven_optimal",
             note="面积目标或时间覆盖率目标为 0%，空组合即满足。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
     try:
         import pulp
@@ -920,6 +1039,7 @@ def ilp_select_temporal(
             status="unsupported",
             note="未安装 pulp，无法运行区域时间覆盖率整数规划。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
     if store.n_satellites > 1500:
         return _temporal_result(
@@ -931,6 +1051,7 @@ def ilp_select_temporal(
             status="skipped",
             note="卫星数超过 1500，跳过 ILP；请使用贪心或候选预筛选。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
 
     step_s = int(store.decision_step_s)
@@ -947,25 +1068,41 @@ def ilp_select_temporal(
     problem += pulp.lpSum(x)
 
     for grid_index, grid_candidates in enumerate(candidates):
-        # 相同候选集合的时间片共享一个 y 变量，只累加持续时间，减少模型规模。
-        grouped: dict[frozenset[int], float] = {}
-        for time_index, candidate_set in enumerate(grid_candidates):
-            key = frozenset(int(item) for item in candidate_set)
-            if key:
-                duration = (ends[time_index] - starts[time_index]).total_seconds()
-                grouped[key] = grouped.get(key, 0.0) + float(duration)
-        y_terms = []
-        for group_index, (candidate_set, duration) in enumerate(
-            sorted(grouped.items(), key=lambda item: (tuple(sorted(item[0])), item[1]))
-        ):
-            y = pulp.LpVariable(f"y_{grid_index}_{group_index}", cat=pulp.LpBinary)
-            selected_in_group = pulp.lpSum(x[index] for index in candidate_set)
-            # 两条不等式共同表达 y = OR(x_s)：有星才能 y=1，有任意一颗被选则 y 必须为 1。
-            problem += y <= selected_in_group
-            problem += selected_in_group - len(candidate_set) * y <= 0
-            y_terms.append((float(duration), y))
-            constraint_count += 2
-        problem += pulp.lpSum(duration * y for duration, y in y_terms) \
+        if min_simultaneous == 1:
+            # 相同候选集合的时间片共享一个 y 变量，只累加持续时间，减少模型规模。
+            grouped: dict[frozenset[int], float] = {}
+            for time_index, candidate_set in enumerate(grid_candidates):
+                key = frozenset(int(item) for item in candidate_set)
+                if key:
+                    duration = (ends[time_index] - starts[time_index]).total_seconds()
+                    grouped[key] = grouped.get(key, 0.0) + float(duration)
+            y_terms = []
+            for group_index, (candidate_set, duration) in enumerate(
+                sorted(grouped.items(), key=lambda item: (tuple(sorted(item[0])), item[1]))
+            ):
+                y = pulp.LpVariable(f"y_{grid_index}_{group_index}", cat=pulp.LpBinary)
+                selected_in_group = pulp.lpSum(x[index] for index in candidate_set)
+                # 两条不等式共同表达 y = OR(x_s)。
+                problem += y <= selected_in_group
+                problem += selected_in_group - len(candidate_set) * y <= 0
+                y_terms.append((float(duration), y))
+                constraint_count += 2
+            covered_duration = pulp.lpSum(duration * y for duration, y in y_terms)
+        else:
+            y_by_time, added = _add_k_event_variables(
+                problem,
+                pulp,
+                x,
+                grid_candidates,
+                min_simultaneous=min_simultaneous,
+                prefix=f"y_temporal_{grid_index}",
+            )
+            constraint_count += added
+            covered_duration = pulp.lpSum(
+                (ends[time_index] - starts[time_index]).total_seconds() * y
+                for time_index, y in y_by_time.items()
+            )
+        problem += covered_duration \
             >= float(temporal_coverage_target_pct / 100.0 * horizon_s) * z[grid_index]
         constraint_count += 1
 
@@ -981,13 +1118,16 @@ def ilp_select_temporal(
             status="infeasible",
             note=f"ILP 状态为 {solver_status}，当前离散模型未找到可行方案。",
             constraint_count=constraint_count,
+            min_simultaneous=min_simultaneous,
         )
     selected = [
         index
         for index, variable in enumerate(x)
         if (pulp.value(variable) or 0.0) > 0.5
     ]
-    metrics = _evaluate_temporal(store, selected, temporal_coverage_target_pct)
+    metrics = _evaluate_temporal(
+        store, selected, temporal_coverage_target_pct, min_simultaneous
+    )
     achieved = float(metrics.city.qualified_area_pct or 0.0)
     feasible = achieved + 1e-9 >= area_target_pct
     if solver_status == "Optimal" and feasible:
@@ -1008,6 +1148,7 @@ def ilp_select_temporal(
         status=status,
         note=note,
         constraint_count=constraint_count,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -1096,6 +1237,7 @@ def run_regional_temporal_selection(
         greedy=greedy,
         ilp=ilp,
         recommended=recommended,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -1103,13 +1245,14 @@ def _evaluate_budget(
     store: OpportunityStore,
     selected: Sequence[int],
     temporal_coverage_target_pct: float,
+    min_simultaneous: int = 1,
 ) -> RegionalMetricsResult:
     """用统一窗口指标评估预算方案的达标面积和城市平均覆盖率。"""
 
     return compute_regional_metrics(
         store,
         selected_sat_indices=selected,
-        min_simultaneous=1,
+        min_simultaneous=min_simultaneous,
         temporal_coverage_target_pct=temporal_coverage_target_pct,
     )
 
@@ -1137,9 +1280,12 @@ def _budget_result(
     status: str,
     note: str,
     constraint_count: int,
+    min_simultaneous: int = 1,
 ) -> BudgetSelectionResult:
     selected_tuple = tuple(sorted({int(index) for index in selected}))
-    metrics = _evaluate_budget(store, selected_tuple, temporal_coverage_target_pct)
+    metrics = _evaluate_budget(
+        store, selected_tuple, temporal_coverage_target_pct, min_simultaneous
+    )
     achieved_area = float(metrics.city.qualified_area_pct or 0.0)
     return BudgetSelectionResult(
         method=method,
@@ -1156,6 +1302,7 @@ def _budget_result(
         note=note,
         constraint_count=int(constraint_count),
         metrics=metrics,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -1177,7 +1324,9 @@ def greedy_select_budget(
     limit = min(n_budget, store.n_satellites)
     usable = sorted({sat_index for sat_index, _ in store.windows})
     selected: list[int] = []
-    current = _evaluate_budget(store, selected, temporal_coverage_target_pct)
+    current = _evaluate_budget(
+        store, selected, temporal_coverage_target_pct, min_simultaneous
+    )
     while len(selected) < limit:
         best_index: int | None = None
         best_metrics: RegionalMetricsResult | None = None
@@ -1186,7 +1335,10 @@ def greedy_select_budget(
             if sat_index in selected:
                 continue
             trial = _evaluate_budget(
-                store, [*selected, sat_index], temporal_coverage_target_pct
+                store,
+                [*selected, sat_index],
+                temporal_coverage_target_pct,
+                min_simultaneous,
             )
             score = _score_budget(trial)
             if best_metrics is None or score > best_score:
@@ -1196,7 +1348,12 @@ def greedy_select_budget(
         # ``at most N`` 模式没有目标改善就停止；``exact N`` 仍需填满预算。
         if best_index is None:
             break
-        if not exact_budget and best_metrics is not None and best_score <= _score_budget(current):
+        if (
+            not exact_budget
+            and min_simultaneous <= len(selected)
+            and best_metrics is not None
+            and best_score <= _score_budget(current)
+        ):
             break
         selected.append(best_index)
         current = best_metrics if best_metrics is not None else current
@@ -1218,6 +1375,7 @@ def greedy_select_budget(
         status="feasible_heuristic",
         note="预算贪心按字典序最大化达标面积和城市平均时间覆盖率；结果是近似解。",
         constraint_count=0,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -1230,7 +1388,7 @@ def ilp_select_budget(
     exact_budget: bool = False,
     time_limit_s: int = 180,
 ) -> BudgetSelectionResult:
-    """任务③ K=1 两阶段 ILP：先最大化达标面积，再最大化面积—时间平均覆盖率。"""
+    """任务③两阶段 ILP；K>1 用 y[g,t] 统计同时覆盖后的时间覆盖率。"""
 
     n_budget, temporal_coverage_target_pct = _validate_budget_inputs(
         store, n_budget, temporal_coverage_target_pct, min_simultaneous
@@ -1251,6 +1409,7 @@ def ilp_select_budget(
             status="proven_optimal",
             note="预算为 0 或时间覆盖率目标为 0%，空（或恰好 N）组合即为最优。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
     try:
         import pulp
@@ -1265,6 +1424,7 @@ def ilp_select_budget(
             status="unsupported",
             note="未安装 pulp，无法运行预算整数规划。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
     if store.n_satellites > 1500:
         return _budget_result(
@@ -1277,6 +1437,7 @@ def ilp_select_budget(
             status="skipped",
             note="卫星数超过 1500，跳过 ILP；请使用贪心或候选预筛选。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
 
     candidates, starts, ends = build_bin_candidates(store, decision_step_s=store.decision_step_s)
@@ -1296,24 +1457,39 @@ def ilp_select_budget(
 
     covered_duration_exprs = []
     for grid_index, grid_candidates in enumerate(candidates):
-        grouped: dict[frozenset[int], float] = {}
-        for time_index, candidate_set in enumerate(grid_candidates):
-            key = frozenset(int(item) for item in candidate_set)
-            if key:
-                duration = (ends[time_index] - starts[time_index]).total_seconds()
-                grouped[key] = grouped.get(key, 0.0) + float(duration)
-        y_terms = []
-        for group_index, (candidate_set, duration) in enumerate(
-            sorted(grouped.items(), key=lambda item: (tuple(sorted(item[0])), item[1]))
-        ):
-            y = pulp.LpVariable(f"y_{grid_index}_{group_index}", cat=pulp.LpBinary)
-            selected_in_group = pulp.lpSum(x[index] for index in candidate_set)
-            # y 是该候选集合的 OR，不能凭空把没有选中的时间片算成覆盖。
-            problem += y <= selected_in_group
-            problem += selected_in_group - len(candidate_set) * y <= 0
-            y_terms.append((float(duration), y))
-            constraint_count += 2
-        covered_duration = pulp.lpSum(duration * y for duration, y in y_terms)
+        if min_simultaneous == 1:
+            grouped: dict[frozenset[int], float] = {}
+            for time_index, candidate_set in enumerate(grid_candidates):
+                key = frozenset(int(item) for item in candidate_set)
+                if key:
+                    duration = (ends[time_index] - starts[time_index]).total_seconds()
+                    grouped[key] = grouped.get(key, 0.0) + float(duration)
+            y_terms = []
+            for group_index, (candidate_set, duration) in enumerate(
+                sorted(grouped.items(), key=lambda item: (tuple(sorted(item[0])), item[1]))
+            ):
+                y = pulp.LpVariable(f"y_{grid_index}_{group_index}", cat=pulp.LpBinary)
+                selected_in_group = pulp.lpSum(x[index] for index in candidate_set)
+                # y 是该候选集合的 OR，不能凭空把没有选中的时间片算成覆盖。
+                problem += y <= selected_in_group
+                problem += selected_in_group - len(candidate_set) * y <= 0
+                y_terms.append((float(duration), y))
+                constraint_count += 2
+            covered_duration = pulp.lpSum(duration * y for duration, y in y_terms)
+        else:
+            y_by_time, added = _add_k_event_variables(
+                problem,
+                pulp,
+                x,
+                grid_candidates,
+                min_simultaneous=min_simultaneous,
+                prefix=f"y_budget_{grid_index}",
+            )
+            constraint_count += added
+            covered_duration = pulp.lpSum(
+                (ends[time_index] - starts[time_index]).total_seconds() * y
+                for time_index, y in y_by_time.items()
+            )
         covered_duration_exprs.append(covered_duration)
         problem += covered_duration >= float(temporal_coverage_target_pct / 100.0 * horizon_s) * z[grid_index]
         constraint_count += 1
@@ -1332,6 +1508,7 @@ def ilp_select_budget(
             status="infeasible",
             note=f"ILP 第一阶段状态为 {stage1_status}，未找到可行预算方案。",
             constraint_count=constraint_count,
+            min_simultaneous=min_simultaneous,
         )
     stage1_selected = [
         index for index, variable in enumerate(x) if (pulp.value(variable) or 0.0) > 0.5
@@ -1347,6 +1524,7 @@ def ilp_select_budget(
             status="feasible_time_limit",
             note="ILP 第一阶段达到时间上限，返回当前达标面积方案，未证明最优。",
             constraint_count=constraint_count,
+            min_simultaneous=min_simultaneous,
         )
 
     best_area = float(pulp.value(area_expr) or 0.0)
@@ -1383,6 +1561,7 @@ def ilp_select_budget(
         status=status,
         note=note,
         constraint_count=constraint_count + 1,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -1471,6 +1650,7 @@ def run_regional_budget_selection(
         greedy=greedy,
         ilp=ilp,
         recommended=recommended,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -1556,6 +1736,7 @@ def _quantile_result(
         evaluations=len(evaluated_thresholds_s),
         evaluated_thresholds_s=tuple(float(item) for item in evaluated_thresholds_s),
         selection=selection,
+        min_simultaneous=selection.min_simultaneous,
     )
 
 
@@ -1571,7 +1752,7 @@ def select_min_area_quantile_mrt(
     timescale: Any | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> AreaQuantileMrtSelectionResult:
-    """任务④：给定预算，最小化城市面积分位 MRT（当前 K=1）。
+    """任务④：给定预算，最小化城市面积分位 MRT（支持 K=1 与 K>1）。
 
     先把 MRT 上限离散成 ``decision_step_s`` 的桶，再对“任务②是否能在 N 颗以内
     达到 beta 面积”做单调二分。最终结果仍按原始窗口计算面积分位 MRT；该结果不把
@@ -1586,8 +1767,6 @@ def select_min_area_quantile_mrt(
     n_budget = int(n_budget)
     if int(min_simultaneous) != min_simultaneous or min_simultaneous <= 0:
         raise ValueError("min_simultaneous 必须是正整数。")
-    if int(min_simultaneous) != 1:
-        raise NotImplementedError("当前任务④先实现 K=1；K>1 后续接入。")
     if int(time_limit_s) <= 0:
         raise ValueError("time_limit_s 必须大于 0 秒。")
     method = str(method).lower()
@@ -1619,6 +1798,7 @@ def select_min_area_quantile_mrt(
             status="proven_optimal",
             note="面积目标为 0%，空组合即可满足。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
         return _quantile_result(
             effective_store,
@@ -1668,6 +1848,7 @@ def select_min_area_quantile_mrt(
             status="unsupported",
             note="任务④未找到可在预算内复核的候选；请检查求解器、预算或输入窗口。",
             constraint_count=0,
+            min_simultaneous=min_simultaneous,
         )
         return _quantile_result(
             effective_store,
@@ -1722,14 +1903,16 @@ def select_min_area_quantile_mrt(
 
 
 def _evaluate_art(
-    store: OpportunityStore, selected: Sequence[int]
+    store: OpportunityStore,
+    selected: Sequence[int],
+    min_simultaneous: int = 1,
 ) -> RegionalMetricsResult:
     """用统一窗口指标评估任务⑤的 ART 目标。"""
 
     return compute_regional_metrics(
         store,
         selected_sat_indices=selected,
-        min_simultaneous=1,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -1782,9 +1965,10 @@ def _art_result(
     iterations: int,
     exchange_count: int,
     deletion_count: int,
+    min_simultaneous: int = 1,
 ) -> ArtSelectionResult:
     selected_tuple = tuple(sorted({int(index) for index in selected}))
-    metrics = _evaluate_art(store, selected_tuple)
+    metrics = _evaluate_art(store, selected_tuple, min_simultaneous)
     identities = [_satellite_identity(store, index) for index in selected_tuple]
     return ArtSelectionResult(
         method="greedy_local_search",
@@ -1808,6 +1992,7 @@ def _art_result(
         exchange_count=exchange_count,
         deletion_count=deletion_count,
         metrics=metrics,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -1830,8 +2015,6 @@ def greedy_select_art(
     mrt_area_quantile_pct = float(mrt_area_quantile_pct)
     if int(min_simultaneous) != min_simultaneous or min_simultaneous <= 0:
         raise ValueError("min_simultaneous 必须是正整数。")
-    if int(min_simultaneous) != 1:
-        raise NotImplementedError("当前任务⑤先实现 K=1；K>1 后续接入。")
     if int(max_local_rounds) != max_local_rounds or int(max_local_rounds) < 0:
         raise ValueError("max_local_rounds 必须是非负整数。")
     max_local_rounds = int(max_local_rounds)
@@ -1841,7 +2024,7 @@ def greedy_select_art(
     limit = min(n_budget, store.n_satellites)
     usable = sorted({sat_index for sat_index, _ in store.windows})
     selected: list[int] = []
-    current = _evaluate_art(store, selected)
+    current = _evaluate_art(store, selected, min_simultaneous)
     iterations = 0
 
     # 正向贪心：每轮选择让 ART 字典序下降最多的卫星。
@@ -1853,7 +2036,7 @@ def greedy_select_art(
         for sat_index in usable:
             if sat_index in selected:
                 continue
-            trial = _evaluate_art(store, [*selected, sat_index])
+            trial = _evaluate_art(store, [*selected, sat_index], min_simultaneous)
             score = _score_art(trial, mrt_area_quantile_pct)
             if best_metrics is None or _score_art_better(score, best_score):
                 best_index = sat_index
@@ -1861,7 +2044,11 @@ def greedy_select_art(
                 best_score = score
         if best_index is None or best_metrics is None:
             break
-        if not exact_budget and not _score_art_better(best_score, current_score):
+        if (
+            not exact_budget
+            and min_simultaneous <= len(selected)
+            and not _score_art_better(best_score, current_score)
+        ):
             break
         selected.append(best_index)
         current = best_metrics
@@ -1874,7 +2061,7 @@ def greedy_select_art(
                 selected.append(sat_index)
                 if len(selected) >= limit:
                     break
-        current = _evaluate_art(store, selected)
+        current = _evaluate_art(store, selected, min_simultaneous)
 
     # 单星交换：避免“第一颗选错后，后续永远补不回来”的贪心局部陷阱。
     exchange_count = 0
@@ -1890,7 +2077,7 @@ def greedy_select_art(
                 if new_index in selected:
                     continue
                 trial_selected = [new_index if item == old_index else item for item in selected]
-                trial = _evaluate_art(store, trial_selected)
+                trial = _evaluate_art(store, trial_selected, min_simultaneous)
                 score = _score_art(trial, mrt_area_quantile_pct)
                 if best_metrics is None or _score_art_better(score, best_score):
                     best_swap = (old_index, new_index)
@@ -1913,7 +2100,7 @@ def greedy_select_art(
             current_score = _score_art(current, mrt_area_quantile_pct)
             for sat_index in list(selected):
                 trial_selected = [item for item in selected if item != sat_index]
-                trial = _evaluate_art(store, trial_selected)
+                trial = _evaluate_art(store, trial_selected, min_simultaneous)
                 if _score_art_not_worse(
                     _score_art(trial, mrt_area_quantile_pct), current_score
                 ):
@@ -1934,6 +2121,7 @@ def greedy_select_art(
         iterations=iterations,
         exchange_count=exchange_count,
         deletion_count=deletion_count,
+        min_simultaneous=min_simultaneous,
     )
 
 
@@ -2056,6 +2244,7 @@ def run_regional_mrt_selection(
         greedy=greedy,
         ilp=ilp,
         recommended=recommended,
+        min_simultaneous=min_simultaneous,
     )
 
 

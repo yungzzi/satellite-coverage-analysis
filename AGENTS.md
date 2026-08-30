@@ -38,6 +38,9 @@
   网格分块向量化、SimpleCone/Rectangular/SAR 判定和 Targeted 区域一致性保护。
 - `src/validate_regional_opportunities.py` 已完成杭州真实边界小规模回归；后续接区域指标/窗口精化时仍**不修改**
   旧的 `coverage_analysis.make_grid_points` 与原单点+半径行为。
+- `src/regional_metrics.py` 已完成第一版指标层：从稀疏窗口计算网格时间覆盖率、MRT、ART、达标面积比例、
+  面积加权城市汇总和全市/目标面积同时覆盖时间比例；`src/validate_regional_metrics.py` 已通过人工小例子
+  与真实杭州串联自检。
 - 11 个城市边界必须记录 `adcode`、边界版本/哈希、源坐标系、投影、格长和原点。未知坐标系不可直接与
   WGS84 轨道地面点混用。
 

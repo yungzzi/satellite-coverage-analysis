@@ -402,7 +402,7 @@ def main():
           f"（LEO 遥感星过顶通常 5~12 分钟，合理）")
     print("YAOGAN-7 轨道周期约 97.4 分钟（由 TLE 平均运动量反推），"
           "过境间隔应为周期整数倍附近，可对照上表验证。")
-    print("\n验证结束：详细结论见 docs/验证报告.md")
+    print("\n验证结束：详细结论见 docs/reference/验证报告.md")
 
 
 if __name__ == "__main__":

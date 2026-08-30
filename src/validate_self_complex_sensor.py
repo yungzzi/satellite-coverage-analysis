@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """自研复杂传感器/姿态引擎（P0-P3）回归自检。
 
-覆盖点（对应 docs/自研复杂传感器理论报告.md 第 8 章）：
+覆盖点（对应 docs/reference/自研复杂传感器理论报告.md 第 8 章）：
   1) 零回归：复杂引擎 SimpleCone+天底+ε_min 与现有引擎逐窗口一致；
   2) 退化一致：Conical(0,45,0,360) ≡ SimpleCone45；SimpleCone(θ) ⊆ Rect(θ,θ)；
      HalfPower(14.5,1) ≈ SimpleCone(0.72°)；

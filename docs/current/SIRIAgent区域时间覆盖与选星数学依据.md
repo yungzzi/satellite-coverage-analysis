@@ -625,4 +625,4 @@ $$
 5. Williamson D P, Shmoys D B. *The Design of Approximation Algorithms*. 2011。项目内保存有作者公开教材，可用于集合覆盖与最大覆盖定理核对。
 6. Cordeau J F, Furini F, Ljubić I. Benders Decomposition for Very Large Scale Partial Set Covering and Maximal Covering Location Problems. *European Journal of Operational Research*, 2019。对应大规模部分覆盖问题的精确分解思路。
 
-具体本地文献文件与获取状态见 `docs/文献/README.md`。
+具体本地文献文件与获取状态见 `docs/reference/文献/README.md`。

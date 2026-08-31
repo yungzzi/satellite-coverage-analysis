@@ -19,6 +19,10 @@
 7. 首版用同机 Python Skill 包装，供 SIRIAgent/Codex 执行器直接调用；只有调用端与引擎不同机时才加 FastAPI；
 8. 保证现有单点、点加半径、GUI 和可选 ATK 路径不被本功能隐式改写。
 
+普通 Skill 请求只走固定 `profile_slug` 预设；高级请求可通过 `sensor_profile` 提供全局传感器、
+指向、姿态和约束，并用 `satellite_profile_overrides` 按 NORAD 覆盖。区域入口在逐星循环前合并
+这些配置，仍复用同一条轨道传播和稀疏窗口路径；因此这一步是输入层扩展，不是另起一套区域算法。
+
 ### 1.2 首版明确不做
 
 - 不优化卫星姿态切换或扫描动作；

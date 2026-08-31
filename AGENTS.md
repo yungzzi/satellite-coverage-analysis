@@ -56,6 +56,9 @@
   五项选星分派、指标卡、卫星表、城市过境窗口和薄弱区输出。Codex Skill 位于
   `.agents/skills/satellite-coverage-selection/`；`src/validate_siriagent_skill.py` 已通过 3/3 自检。当前只有
   杭州/`330100` 和浙江/`330000` 边界，且内置 Profile 是接入验收参数，不是真实载荷。
+  现已支持普通请求按预设运行；用户明确提出高级需求时，可通过 `sensor_profile` 和
+  `satellite_profile_overrides` 将已有复杂传感器、统一指向、姿态和约束参数接入区域路径，结果会回显
+  `profile.effective_config`。区域请求拒绝 `Targeted`，因为它不是整市统一波束。
 - 11 个城市边界必须记录 `adcode`、边界版本/哈希、源坐标系、投影、格长和原点。未知坐标系不可直接与
   WGS84 轨道地面点混用。
 

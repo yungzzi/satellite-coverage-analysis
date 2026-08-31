@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import json
+import math
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -169,7 +171,19 @@ PARAMETER_SPECS: dict[str, dict[str, Any]] = {
         "required": False,
         "default": "optical_rectangular_validation_v1",
         "allowed": list(PROFILE_SPECS),
-        "description": "固定传感器/姿态场景 Profile。",
+        "description": "普通模式选择预设 Profile；若明确提供 sensor_profile，则高级配置覆盖该预设。",
+    },
+    "sensor_profile": {
+        "type": "object",
+        "required": False,
+        "default": "未提供时使用 profile_slug 预设",
+        "description": "高级模式全局传感器/指向/姿态/约束配置；只有用户明确要求高级设置时才传入。",
+    },
+    "satellite_profile_overrides": {
+        "type": "object[]",
+        "required": False,
+        "default": [],
+        "description": "高级模式逐星覆盖；每项用 norad_id 指定卫星，并覆盖全局 sensor_profile 的字段。",
     },
     "grid_size_km": {
         "type": "number",
@@ -325,6 +339,8 @@ class SkillRequest:
     tle_path: str | None
     satellite_ids: tuple[int, ...] | None
     profile_slug: str
+    sensor_profile: dict[str, Any] | None
+    satellite_profile_overrides: tuple[dict[str, Any], ...]
     grid_size_km: float
     detection_step_s: int
     decision_step_s: int
@@ -397,7 +413,8 @@ def describe_capabilities(
         task_items.append({"operation": key, **spec})
     common_names = [
         "city_adcode", "start_utc", "analysis_horizon_h", "tle_source", "tle_path",
-        "satellite_ids", "profile_slug", "grid_size_km", "detection_step_s",
+        "satellite_ids", "profile_slug", "sensor_profile", "satellite_profile_overrides",
+        "grid_size_km", "detection_step_s",
         "decision_step_s", "min_simultaneous", "method", "selection_time_limit_s",
         "debug", "max_windows", "max_weak_areas",
     ]
@@ -432,6 +449,8 @@ def describe_capabilities(
         "notes": [
             "默认 8 小时，K 默认 1；K 首版支持 1～3。",
             "任务①③的时间覆盖率目标与城市空间覆盖率不是同一个参数。",
+            "普通请求使用 profile_slug 预设；只有用户明确提出高级传感器/姿态需求时才传 sensor_profile。",
+            "高级区域请求支持 SimpleCone、Rectangular、Conical、HalfPower、SAR，以及 Fixed/GrazingAlt/Spinning 指向；Targeted 不用于整市区域覆盖。",
             "正式载荷接入前必须用平台逐星参数替换验收 Profile。",
         ],
     }
@@ -504,6 +523,146 @@ def _satellite_ids(value: Any) -> tuple[int, ...] | None:
     except (TypeError, ValueError) as exc:
         raise SkillInputError("satellite_ids 中只能包含整数 NORAD 编号。") from exc
     return result or None
+
+
+_PROFILE_FIELDS = {
+    "sensor_type",
+    "sensor_params",
+    "min_elevation_deg",
+    "pointing",
+    "attitude",
+    "constraints",
+}
+_SENSOR_TYPES = {"SimpleCone", "Rectangular", "Conical", "HalfPower", "SAR"}
+
+
+def _copy_json_object(value: Any, name: str) -> dict[str, Any]:
+    """校验并复制 JSON 对象，避免下游修改调用方传入的字典。"""
+
+    if not isinstance(value, Mapping):
+        raise SkillInputError(f"{name} 必须是 JSON 对象。")
+    return deepcopy(dict(value))
+
+
+def _normalize_profile_object(value: Any, name: str = "sensor_profile") -> dict[str, Any] | None:
+    """校验高级 Profile 的外形；物理参数仍由底层引擎解释。"""
+
+    if value in (None, ""):
+        return None
+    profile = _copy_json_object(value, name)
+    unknown = sorted(set(profile) - _PROFILE_FIELDS)
+    if unknown:
+        raise SkillInputError(
+            f"{name} 包含不支持的字段：{', '.join(unknown)}。",
+            details={"allowed_fields": sorted(_PROFILE_FIELDS)},
+        )
+    if "sensor_type" in profile:
+        sensor_type = str(profile["sensor_type"])
+        if sensor_type not in _SENSOR_TYPES:
+            raise SkillInputError(
+                f"{name}.sensor_type 不支持：{sensor_type}。",
+                details={"allowed_sensor_types": sorted(_SENSOR_TYPES)},
+            )
+        profile["sensor_type"] = sensor_type
+    if "sensor_params" in profile:
+        params = profile["sensor_params"]
+        if not isinstance(params, (list, tuple)):
+            raise SkillInputError(f"{name}.sensor_params 必须是数字数组。")
+        normalized_params: list[float] = []
+        for index, item in enumerate(params):
+            try:
+                number = float(item)
+            except (TypeError, ValueError) as exc:
+                raise SkillInputError(
+                    f"{name}.sensor_params[{index}] 必须是数字。"
+                ) from exc
+            if not math.isfinite(number):
+                raise SkillInputError(f"{name}.sensor_params[{index}] 必须是有限数字。")
+            normalized_params.append(number)
+        profile["sensor_params"] = normalized_params
+    if "min_elevation_deg" in profile:
+        try:
+            elevation = float(profile["min_elevation_deg"])
+        except (TypeError, ValueError) as exc:
+            raise SkillInputError(f"{name}.min_elevation_deg 必须是数字。") from exc
+        if not math.isfinite(elevation) or not -90.0 <= elevation <= 90.0:
+            raise SkillInputError(f"{name}.min_elevation_deg 必须在 -90～90° 之间。")
+        profile["min_elevation_deg"] = elevation
+    if "pointing" in profile and profile["pointing"] not in (None, ""):
+        pointing = _copy_json_object(profile["pointing"], f"{name}.pointing")
+        pointing_type = pointing.get("type")
+        if pointing_type is not None:
+            pointing_type = str(pointing_type)
+            if pointing_type not in {"Fixed", "GrazingAlt", "Spinning", "Targeted"}:
+                raise SkillInputError(
+                    f"{name}.pointing.type 不支持：{pointing_type}。",
+                    details={"allowed_pointing_types": ["Fixed", "GrazingAlt", "Spinning", "Targeted"]},
+                )
+            if pointing_type == "Targeted":
+                raise SkillInputError(
+                    "区域 Skill 不接受 Targeted 指向；请改用 Fixed、GrazingAlt 或 Spinning。"
+                )
+            pointing["type"] = pointing_type
+        profile["pointing"] = pointing
+    if "attitude" in profile and profile["attitude"] not in (None, ""):
+        attitude = _copy_json_object(profile["attitude"], f"{name}.attitude")
+        if "profile" in attitude:
+            try:
+                attitude_profile = int(attitude["profile"])
+            except (TypeError, ValueError) as exc:
+                raise SkillInputError(f"{name}.attitude.profile 必须是 0～4 的整数。") from exc
+            if attitude_profile not in {0, 1, 2, 3, 4}:
+                raise SkillInputError(f"{name}.attitude.profile 必须是 0～4。")
+            attitude["profile"] = attitude_profile
+        profile["attitude"] = attitude
+    if "constraints" in profile:
+        constraints = profile["constraints"]
+        if not isinstance(constraints, (list, tuple)):
+            raise SkillInputError(f"{name}.constraints 必须是 JSON 对象数组。")
+        normalized_constraints: list[dict[str, Any]] = []
+        for index, item in enumerate(constraints):
+            normalized_constraints.append(
+                _copy_json_object(item, f"{name}.constraints[{index}]")
+            )
+        profile["constraints"] = normalized_constraints
+    return profile
+
+
+def _normalize_profile_overrides(value: Any) -> tuple[dict[str, Any], ...]:
+    """校验逐星高级配置，并统一对外的 norad_id 字段。"""
+
+    if value in (None, "", []):
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise SkillInputError("satellite_profile_overrides 必须是 JSON 对象数组。")
+    result: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for index, item in enumerate(value):
+        override = _copy_json_object(item, f"satellite_profile_overrides[{index}]")
+        raw_id = override.get("norad_id", override.get("norad"))
+        if raw_id in (None, ""):
+            raise SkillInputError(
+                f"satellite_profile_overrides[{index}] 缺少 norad_id。"
+            )
+        try:
+            norad_id = int(raw_id)
+        except (TypeError, ValueError) as exc:
+            raise SkillInputError(
+                f"satellite_profile_overrides[{index}].norad_id 必须是整数。"
+            ) from exc
+        if norad_id in seen:
+            raise SkillInputError(f"satellite_profile_overrides 中重复指定 NORAD {norad_id}。")
+        seen.add(norad_id)
+        override.pop("norad_id", None)
+        override.pop("norad", None)
+        profile = _normalize_profile_object(override, f"satellite_profile_overrides[{index}]")
+        if not profile:
+            raise SkillInputError(
+                f"satellite_profile_overrides[{index}] 除 norad_id 外至少要有一个配置字段。"
+            )
+        profile["norad_id"] = norad_id
+        result.append(profile)
+    return tuple(result)
 
 
 def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
@@ -618,6 +777,10 @@ def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
             f"未知 profile_slug：{profile_slug}",
             details={"allowed_profiles": list(PROFILE_SPECS)},
         )
+    sensor_profile = _normalize_profile_object(payload.get("sensor_profile"))
+    satellite_profile_overrides = _normalize_profile_overrides(
+        payload.get("satellite_profile_overrides")
+    )
 
     return SkillRequest(
         operation=operation,
@@ -628,6 +791,8 @@ def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
         tle_path=None if tle_path in (None, "") else str(tle_path),
         satellite_ids=_satellite_ids(payload.get("satellite_ids")),
         profile_slug=profile_slug,
+        sensor_profile=sensor_profile,
+        satellite_profile_overrides=satellite_profile_overrides,
         grid_size_km=grid_size_km,
         detection_step_s=detection_step_s,
         decision_step_s=decision_step_s,

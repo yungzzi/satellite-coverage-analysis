@@ -57,6 +57,15 @@ def test_describe_and_missing_parameters() -> None:
         root=ROOT,
     )
     assert invalid_task5_method["status"] == "invalid_input"
+    invalid_targeted = run_skill(
+        {
+            "operation": "coverage_only",
+            "city_adcode": "330100",
+            "sensor_profile": {"pointing": {"type": "Targeted"}},
+        },
+        root=ROOT,
+    )
+    assert invalid_targeted["status"] == "invalid_input"
     print("[通过] describe、任务参数提示、缺参和 K 范围校验")
 
 
@@ -126,6 +135,31 @@ def test_real_city_direct_skill() -> None:
     first_window = result["city_pass_window_table"][0]
     assert first_window["start_utc"] < first_window["end_utc"]
     assert first_window["duration_minutes"] > 0.0
+    advanced = run_skill(
+        {
+            "operation": "coverage_only",
+            "city_adcode": "330100",
+            "satellite_ids": [40961],
+            "start_utc": "2026-08-08T00:00:00Z",
+            "analysis_horizon_h": 1,
+            "grid_size_km": 30,
+            "detection_step_s": 30,
+            "sensor_profile": {
+                "sensor_type": "Rectangular",
+                "sensor_params": [45, 45],
+                "min_elevation_deg": 0,
+                "attitude": {"profile": 0},
+            },
+            "satellite_profile_overrides": [
+                {"norad_id": 40961, "sensor_type": "SimpleCone", "sensor_params": [5]}
+            ],
+        },
+        root=ROOT,
+    )
+    assert advanced["status"] == "completed", advanced
+    assert advanced["input_summary"]["advanced_mode"] is True
+    assert advanced["profile"]["mode"] == "advanced"
+    assert advanced["profile"]["effective_config"]["sat_sensor_overrides"][0]["norad"] == 40961
     selected = run_skill(
         {"operation": "task5", "n_budget": 1, "method": "greedy", **common},
         root=ROOT,

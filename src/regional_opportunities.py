@@ -161,6 +161,40 @@ def _sat_name(sat: Any) -> str:
     return str(getattr(orbit, "name", "") or "")
 
 
+def _effective_satellite_cfg(cfg: Mapping[str, Any], sat_id: int) -> dict[str, Any]:
+    """把全局 Profile 与指定 NORAD 的覆盖覆盖合并。
+
+    区域机会计算原来整批卫星共用一份 ``cfg``。高级 Skill 允许某颗卫星
+    使用自己的传感器/姿态，因此在进入几何热路径前做一次浅合并；轨道、网格
+    和时间轴仍然完全复用，不会把计算退化成另一套流程。
+    """
+
+    effective = dict(cfg)
+    overrides = effective.pop("sat_sensor_overrides", None) or []
+    for item in overrides:
+        if not isinstance(item, Mapping):
+            continue
+        raw_id = item.get("norad", item.get("norad_id"))
+        try:
+            item_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if item_id != int(sat_id):
+            continue
+        for key in (
+            "sensor_type",
+            "sensor_params",
+            "min_elevation_deg",
+            "pointing",
+            "attitude",
+            "constraints",
+        ):
+            if key in item:
+                effective[key] = item[key]
+        break
+    return effective
+
+
 def _grid_arrays(grid: RegionGrid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """取出几何热路径使用的代表点经纬度、面积和编号数组。"""
 
@@ -588,7 +622,7 @@ def refine_regional_opportunity_windows(
         raise ValueError("OpportunityStore.detection_step_s 必须大于 0。")
     if timescale is None:
         timescale = load.timescale(builtin=True)
-    effective_cfg = dict(cfg or store.metadata.get("config") or {})
+    base_cfg = dict(cfg or store.metadata.get("config") or {})
     detection_delta = timedelta(seconds=store.detection_step_s)
     state_cache: dict[tuple[int, int, datetime], bool] = {}
 
@@ -597,6 +631,7 @@ def refine_regional_opportunity_windows(
         if key in state_cache:
             return state_cache[key]
         sat = store.satellites[sat_index]
+        effective_cfg = _effective_satellite_cfg(base_cfg, _sat_id(sat))
         dt_list = [when]
         t = timescale.from_datetimes(dt_list)
         prepared = (
@@ -710,6 +745,7 @@ def compute_regional_opportunities(
         覆盖参数。默认从旧引擎口径取 ``fov_half_angle_deg=10``、
         ``min_elevation_deg=10``、``coarse_step_seconds=10``；复杂 Profile 字段
         （sensor_type、sensor_params、pointing、attitude、constraints）可直接传入；
+        也可用 ``sat_sensor_overrides`` 按 ``norad`` 给单颗卫星覆盖这些字段；
         可选 ``refine_step_seconds=1`` 启用窗口边界精化。
     decision_step_s:
         记录给后续选星的时间片粒度；本阶段窗口检测使用 cfg 的粗检测步长。
@@ -746,11 +782,12 @@ def compute_regional_opportunities(
     for sat_index, sat in enumerate(satellites):
         sat_id = _sat_id(sat)
         sat_name = _sat_name(sat)
+        effective_cfg = _effective_satellite_cfg(cfg, sat_id)
         # 同一颗星的轨道和姿态只准备一次；块循环只改变网格列，避免每块重复 SGP4。
         prepared = (
             _prepare_simple_geometry(sat, t)
-            if _is_simple_nadir(cfg)
-            else _prepare_ecef_geometry(sat, t, dt_list, cfg)
+            if _is_simple_nadir(effective_cfg)
+            else _prepare_ecef_geometry(sat, t, dt_list, effective_cfg)
         )
         for cell_start in range(0, n_cells, int(cell_chunk_size)):
             cell_stop = min(cell_start + int(cell_chunk_size), n_cells)
@@ -759,7 +796,7 @@ def compute_regional_opportunities(
                 grid,
                 t,
                 dt_list,
-                cfg,
+                effective_cfg,
                 cell_start=cell_start,
                 cell_stop=cell_stop,
                 _prepared=prepared,

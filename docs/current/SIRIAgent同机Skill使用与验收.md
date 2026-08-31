@@ -28,7 +28,7 @@ $python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖
 
 这里只是让开发工作树共用主工作树的虚拟环境。最终合并回主工作树后，在项目根目录直接用 `.\.venv\Scripts\python.exe` 即可。
 
-## 3. 五步验收
+## 3. 六步验收
 
 ### 第一步：看 Skill 自己说明参数
 
@@ -84,14 +84,40 @@ $python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖
 - 不可行时也是合法科学结果，但必须正确显示 `feasible`、是否尝试 90% 和使用的面积目标；
 - 若返回推荐组合，指标卡和窗口只评估该组合，`metrics_satellite_scope=selected_satellites`。
 
-### 第五步：跑自动回归
+### 第五步：验收高级 Profile（仅在需要时）
+
+普通用户不需要这一步；默认预设已经覆盖日常请求。研发或高级用户可以在 JSON 中加入
+`sensor_profile`，例如：
+
+```json
+{
+  "operation": "coverage_only",
+  "city_adcode": "330100",
+  "analysis_horizon_h": 1,
+  "grid_size_km": 30,
+  "sensor_profile": {
+    "sensor_type": "Rectangular",
+    "sensor_params": [45, 45],
+    "min_elevation_deg": 0,
+    "attitude": {"profile": 0}
+  }
+}
+```
+
+通过标准：返回 `completed`，`input_summary.advanced_mode=true`，且 `profile.mode=advanced`、
+`profile.effective_config` 与请求的传感器/姿态配置一致。逐星配置使用
+`satellite_profile_overrides=[{"norad_id": ..., ...}]`；未知 NORAD 会被拒绝。区域 Skill
+不接受 `Targeted`，因为它需要对单个目标逐时刻转轴，不能证明整市统一覆盖。
+
+### 第六步：跑自动回归
 
 ```powershell
 & $python src\validate_siriagent_skill.py
 & $python src\validate_regional_selection.py
 ```
 
-通过标准：前者 `3/3`，后者 `7/7`。前者会验证六种调用语义、K=3 入参、五项选星分派，以及真实杭州边界+真实 TLE 的同链路执行。
+通过标准：前者应包含高级 Profile 校验并全部通过，后者 `7/7`。前者会验证六种调用语义、K=3 入参、
+五项选星分派，以及真实杭州边界+真实 TLE 的同链路执行。
 
 ## 4. 怎样让 Agent 用
 
@@ -131,6 +157,8 @@ Skill 会按任务只追问必需参数。项目内 Skill 位于 `.agents/skills
 - 项目中目前只冻结了浙江省 `330000` 和杭州市 `330100` 边界，不是 11 地市已全部就绪；
 - `jilin1_test` 和 `china_remote_sensing_test` 是固定验收 TLE，还没有映射平台 110 星目录；
 - `optical_rectangular_validation_v1` 与 `simple_cone_benchmark_v1` 是验收/回归 Profile，不是真实逐星光学幅宽或 SAR 入射角；
+- 高级 `sensor_profile`/`satellite_profile_overrides` 已能把已有复杂传感器、姿态和约束引擎接到区域 Skill，
+  但参数仍必须由研发提供真实载荷 Profile，不能把验收数值当作平台 110 颗星的生产配置；
 - 当前输出是 JSON 数据，覆盖薄弱区前端地图还需 SIRIAgent 平台展示层对接；
 - 当前是同步、单次调用，尚未做跨请求缓存和任务队列。
 

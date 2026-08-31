@@ -24,7 +24,7 @@ description: 计算浙江城市的卫星区域覆盖窗口，并执行五项虚�
 - 严格目标不可行时只能显式报告并按请求尝试面积降级，不得静默降低门槛。
 - `proven_optimal` 才能称为离散模型已证明最优；任务⑤固定为贪心近似。
 - 固定验收 Profile 只验证调用链，不得描述成平台卫星的真实载荷性能。
-- 高级区域 Profile 支持 `SimpleCone`、`Rectangular`、`Conical`、`HalfPower`、`SAR`，以及 `Fixed`、`GrazingAlt`、`Spinning` 指向；`Targeted` 需要逐目标指向，不能作为整市统一波束，因此区域 Skill 拒绝它。
+- 高级区域 Profile 支持 `SimpleCone`、`Rectangular`、`Conical`、`HalfPower`、`SAR`，以及 `Fixed`、`GrazingAlt`、`Spinning` 指向；`Targeted` 在区域模式自动跟踪全体保留网格代表点的面积加权形心，不是每个网格点各自独立转轴。
 - 逐星配置放在 `satellite_profile_overrides`，按 `norad_id` 覆盖全局 `sensor_profile`；普通请求不要传这两个字段。
 
 ## 执行失败

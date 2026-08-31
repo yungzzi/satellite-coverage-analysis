@@ -106,8 +106,9 @@ $python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖
 
 通过标准：返回 `completed`，`input_summary.advanced_mode=true`，且 `profile.mode=advanced`、
 `profile.effective_config` 与请求的传感器/姿态配置一致。逐星配置使用
-`satellite_profile_overrides=[{"norad_id": ..., ...}]`；未知 NORAD 会被拒绝。区域 Skill
-不接受 `Targeted`，因为它需要对单个目标逐时刻转轴，不能证明整市统一覆盖。
+`satellite_profile_overrides=[{"norad_id": ..., ...}]`；未知 NORAD 会被拒绝。区域 `Targeted`
+会自动跟踪所有保留网格代表点的面积加权形心，不能理解成每个网格点同时各自转轴；结果中的
+`profile.targeting` 会回显形心经纬度和投影坐标。
 
 ### 第六步：跑自动回归
 

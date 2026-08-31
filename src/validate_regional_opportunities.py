@@ -9,7 +9,7 @@ r"""区域逐星逐网格机会底座自检。
 1. 新 SimpleCone 网格矩阵的 any/mean 与旧多边形聚合结果逐时刻一致；
 2. 分块大小改变不改变状态结果，稀疏窗口只保存非空卫星—网格组合；
 3. Rectangular 与 SAR 的向量化区域判定分别和已验证复杂路径一致；
-4. Targeted 指向被明确拒绝，避免把互斥逐点指向误报成城市同时覆盖。
+4. Targeted 指向自动跟踪所有网格代表点的面积加权形心，不把逐点独立转轴误报成城市同时覆盖。
 5. 已有粗窗口可按需做 1 秒级边界二分精化，且不会改变窗口数量或网格维度。
 """
 
@@ -114,18 +114,24 @@ def test_complex_profiles_match_existing_path() -> None:
     print("[通过] Rectangular、SAR 与既有复杂路径逐时刻一致")
 
 
-def test_targeted_is_rejected() -> None:
+def test_targeted_uses_area_weighted_grid_centroid() -> None:
     ts, sat, grid = fixture()
     dt_list = ro._half_open_times(ro._as_utc(START), ro._as_utc(END), 60)
     times = ts.from_datetimes(dt_list)
     cfg = {"sensor_type": "SimpleCone", "pointing": {"type": "Targeted"}}
-    try:
-        ro.compute_satellite_grid_state(sat, grid, times, dt_list, cfg, cell_start=0, cell_stop=1)
-    except ValueError as exc:
-        assert "Targeted" in str(exc)
-    else:
-        raise AssertionError("Targeted 指向没有被拒绝。")
-    print("[通过] Targeted 指向明确拒绝，避免误报整市同时覆盖")
+    states = ro.compute_satellite_grid_state(
+        sat, grid, times, dt_list, cfg, cell_start=0, cell_stop=1
+    )
+    assert states.shape == (len(dt_list), 1)
+    target = ro._targeted_grid_centroid(grid)
+    assert target["definition"] == "area_weighted_representative_point_centroid"
+    assert -90.0 <= target["latitude_deg"] <= 90.0
+    assert -180.0 <= target["longitude_deg"] <= 180.0
+    assert np.isclose(target["weight_area_m2"], grid.total_area_m2)
+    print(
+        "[通过] Targeted 统一跟踪网格面积加权形心："
+        f"({target['latitude_deg']:.5f}, {target['longitude_deg']:.5f})"
+    )
 
 
 def test_window_boundary_refinement() -> None:
@@ -180,7 +186,7 @@ def main() -> int:
         test_simple_matches_old_polygon_aggregate,
         test_chunking_and_sparse_windows,
         test_complex_profiles_match_existing_path,
-        test_targeted_is_rejected,
+        test_targeted_uses_area_weighted_grid_centroid,
         test_window_boundary_refinement,
     ]
     for test in tests:

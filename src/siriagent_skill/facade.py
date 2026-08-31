@@ -377,6 +377,25 @@ def execute_request(
         max_windows=request.max_windows,
         include_empty_satellites=request.operation != "coverage_only",
     )
+    assumptions = [
+        (
+            "用户提供了高级 sensor_profile/逐星覆盖配置；本次计算以回显的 effective_config 为准，"
+            "未提供的字段继续继承 profile_slug 预设。"
+            if advanced_mode
+            else profile["assumption"]
+        ),
+    ]
+    if store.metadata.get("targeting"):
+        assumptions.append(
+            "Targeted 区域指向自动锁定所有保留网格代表点的面积加权形心；"
+            "它表示整座区域共用一个跟踪目标，不表示每个网格点都能同时独立转轴。"
+        )
+    assumptions.extend(
+        [
+            "结果表示固定 Profile 下的几何观测机会，不包含云量、任务排程和姿态行为优化。",
+            "代表点不带圆；面积由裁剪网格单元的真实面积权重统计。",
+        ]
+    )
     response: dict[str, Any] = {
         "status": "completed",
         "request_id": str(uuid.uuid4()),
@@ -398,6 +417,7 @@ def execute_request(
             "satellite_profile_overrides": [
                 deepcopy(item) for item in request.satellite_profile_overrides
             ],
+            "targeting": deepcopy(store.metadata.get("targeting")),
         },
         "city": {
             "adcode": grid.adcode,
@@ -420,16 +440,7 @@ def execute_request(
             "geojson_included": bool(request.debug),
             "geojson": build_debug_map(store, metrics) if request.debug else None,
         },
-        "assumptions": [
-            (
-                "用户提供了高级 sensor_profile/逐星覆盖配置；本次计算以回显的 effective_config 为准，"
-                "未提供的字段继续继承 profile_slug 预设。"
-                if advanced_mode
-                else profile["assumption"]
-            ),
-            "结果表示固定 Profile 下的几何观测机会，不包含云量、任务排程和姿态行为优化。",
-            "代表点不带圆；面积由裁剪网格单元的真实面积权重统计。",
-        ],
+        "assumptions": assumptions,
         "warnings": [
             "当前内置 TLE 和 Profile 用于 Skill 接入验收；正式平台目录映射尚待研发注册样例和逐星参数。"
         ],

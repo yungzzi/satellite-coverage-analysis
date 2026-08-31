@@ -61,7 +61,9 @@ def test_describe_and_missing_parameters() -> None:
         {
             "operation": "coverage_only",
             "city_adcode": "330100",
-            "sensor_profile": {"pointing": {"type": "Targeted"}},
+            "sensor_profile": {
+                "pointing": {"type": "Targeted", "target_lat": 30.2, "target_lon": 120.1}
+            },
         },
         root=ROOT,
     )
@@ -160,6 +162,28 @@ def test_real_city_direct_skill() -> None:
     assert advanced["input_summary"]["advanced_mode"] is True
     assert advanced["profile"]["mode"] == "advanced"
     assert advanced["profile"]["effective_config"]["sat_sensor_overrides"][0]["norad"] == 40961
+    targeted = run_skill(
+        {
+            "operation": "coverage_only",
+            "city_adcode": "330100",
+            "satellite_ids": [40961],
+            "start_utc": "2026-08-08T00:00:00Z",
+            "analysis_horizon_h": 1,
+            "grid_size_km": 30,
+            "detection_step_s": 30,
+            "sensor_profile": {
+                "sensor_type": "Rectangular",
+                "sensor_params": [45, 45],
+                "pointing": {"type": "Targeted"},
+                "attitude": {"profile": 0},
+            },
+        },
+        root=ROOT,
+    )
+    assert targeted["status"] == "completed", targeted
+    assert targeted["profile"]["targeting"]["definition"] == (
+        "area_weighted_representative_point_centroid"
+    )
     selected = run_skill(
         {"operation": "task5", "n_budget": 1, "method": "greedy", **common},
         root=ROOT,

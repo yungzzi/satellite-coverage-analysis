@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
+from pyproj import CRS, Transformer
 from skyfield.api import load
 
 import coverage_analysis as cov
@@ -195,6 +196,58 @@ def _effective_satellite_cfg(cfg: Mapping[str, Any], sat_id: int) -> dict[str, A
     return effective
 
 
+def _is_targeted(cfg: Mapping[str, Any]) -> bool:
+    """判断某份逐星配置是否采用区域 Targeted 指向。"""
+
+    pointing = cfg.get("pointing") or {}
+    return str(pointing.get("type") or "").lower() == "targeted"
+
+
+def _targeted_grid_centroid(grid: RegionGrid) -> dict[str, Any]:
+    """计算 Targeted 区域口径使用的面积加权网格代表点形心。
+
+    形心在与网格相同的等面积米制投影中计算，再反投影到 WGS84，并按自研几何
+    使用的球面地球半径转成 ECEF。这样不会直接平均经纬度，也不会把 5 km
+    网格单元误当成等面积；每个代表点的权重就是其裁剪单元面积。
+    """
+
+    if not grid.cells:
+        raise ValueError("RegionGrid 为空，无法确定 Targeted 目标。")
+    areas = np.asarray([cell.area_m2 for cell in grid.cells], dtype=float)
+    total_area = float(np.sum(areas))
+    if not np.isfinite(total_area) or total_area <= 0.0:
+        raise ValueError("RegionGrid 面积权重无效，无法确定 Targeted 目标。")
+    xs = np.asarray([cell.representative_x_m for cell in grid.cells], dtype=float)
+    ys = np.asarray([cell.representative_y_m for cell in grid.cells], dtype=float)
+    x_centroid = float(np.sum(areas * xs) / total_area)
+    y_centroid = float(np.sum(areas * ys) / total_area)
+    to_wgs84 = Transformer.from_crs(
+        CRS.from_user_input(grid.projected_crs),
+        CRS.from_user_input("EPSG:4326"),
+        always_xy=True,
+    )
+    lon, lat = to_wgs84.transform(x_centroid, y_centroid)
+    lat_rad = np.radians(float(lat))
+    lon_rad = np.radians(float(lon))
+    target_ecef = sg.R_EARTH_KM * np.asarray(
+        [
+            np.cos(lat_rad) * np.cos(lon_rad),
+            np.cos(lat_rad) * np.sin(lon_rad),
+            np.sin(lat_rad),
+        ],
+        dtype=float,
+    )
+    return {
+        "definition": "area_weighted_representative_point_centroid",
+        "latitude_deg": float(lat),
+        "longitude_deg": float(lon),
+        "projected_x_m": x_centroid,
+        "projected_y_m": y_centroid,
+        "ecef_km": [float(value) for value in target_ecef],
+        "weight_area_m2": total_area,
+    }
+
+
 def _grid_arrays(grid: RegionGrid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """取出几何热路径使用的代表点经纬度、面积和编号数组。"""
 
@@ -219,7 +272,14 @@ def _is_simple_nadir(cfg: Mapping[str, Any]) -> bool:
     )
 
 
-def _prepare_ecef_geometry(sat: Any, t: Any, dt_list: Sequence[datetime], cfg: Mapping[str, Any]) -> dict[str, Any]:
+def _prepare_ecef_geometry(
+    sat: Any,
+    t: Any,
+    dt_list: Sequence[datetime],
+    cfg: Mapping[str, Any],
+    *,
+    targeted: np.ndarray | None = None,
+) -> dict[str, Any]:
     """为复杂传感器路径准备一次卫星轨道、姿态和统一视轴。"""
 
     jd = np.asarray(t.ut1, dtype=float)
@@ -251,13 +311,16 @@ def _prepare_ecef_geometry(sat: Any, t: Any, dt_list: Sequence[datetime], cfg: M
     )
 
     pointing = cfg.get("pointing") or {}
-    if str(pointing.get("type") or "").lower() == "targeted":
-        raise ValueError(
-            "区域网格首版不接受 Targeted 指向：它逐目标点转轴，不能证明整座城市同时可执行。"
-            "请改用统一的 Fixed/GrazingAlt/Spinning 或天底 Profile。"
-        )
+    if _is_targeted(cfg) and targeted is None:
+        raise ValueError("区域 Targeted 指向缺少自动生成的网格形心目标。")
     b = sg.pointing_boresight_ecef(
-        cfg.get("pointing"), r, v, C, target=None, dt_sec=dt_sec, jd=jd
+        cfg.get("pointing"),
+        r,
+        v,
+        C,
+        target=targeted,
+        dt_sec=dt_sec,
+        jd=jd,
     )
     axes = sg.sensor_frame_axes(b, v)
     return {
@@ -475,7 +538,21 @@ def compute_satellite_grid_state(
         return _simple_state_for_points(
             sat, t, lats[start:stop], lons[start:stop], cfg, prepared=prepared
         )
-    prepared = _prepared or _prepare_ecef_geometry(sat, t, dt_list, cfg)
+    if _prepared is not None:
+        prepared = _prepared
+    else:
+        target_ecef = (
+            np.asarray(_targeted_grid_centroid(grid)["ecef_km"], dtype=float)
+            if _is_targeted(cfg)
+            else None
+        )
+        prepared = _prepare_ecef_geometry(
+            sat,
+            t,
+            dt_list,
+            cfg,
+            targeted=target_ecef,
+        )
     return _complex_state_for_points(
         prepared, lats[start:stop], lons[start:stop], cfg
     )
@@ -623,6 +700,12 @@ def refine_regional_opportunity_windows(
     if timescale is None:
         timescale = load.timescale(builtin=True)
     base_cfg = dict(cfg or store.metadata.get("config") or {})
+    target_info = _targeted_grid_centroid(store.grid) if _is_targeted(base_cfg) or any(
+        _is_targeted(item) for item in (base_cfg.get("sat_sensor_overrides") or [])
+    ) else None
+    target_ecef = (
+        np.asarray(target_info["ecef_km"], dtype=float) if target_info is not None else None
+    )
     detection_delta = timedelta(seconds=store.detection_step_s)
     state_cache: dict[tuple[int, int, datetime], bool] = {}
 
@@ -637,7 +720,13 @@ def refine_regional_opportunity_windows(
         prepared = (
             _prepare_simple_geometry(sat, t)
             if _is_simple_nadir(effective_cfg)
-            else _prepare_ecef_geometry(sat, t, dt_list, effective_cfg)
+            else _prepare_ecef_geometry(
+                sat,
+                t,
+                dt_list,
+                effective_cfg,
+                targeted=target_ecef if _is_targeted(effective_cfg) else None,
+            )
         )
         state = compute_satellite_grid_state(
             sat,
@@ -766,6 +855,12 @@ def compute_regional_opportunities(
         timescale = load.timescale(builtin=True)
     t = timescale.from_datetimes(dt_list)
     satellites = tuple(satellites)
+    target_info = _targeted_grid_centroid(grid) if _is_targeted(cfg) or any(
+        _is_targeted(item) for item in (cfg.get("sat_sensor_overrides") or [])
+    ) else None
+    target_ecef = (
+        np.asarray(target_info["ecef_km"], dtype=float) if target_info is not None else None
+    )
     n_cells = len(grid.cells)
     if not satellites:
         return OpportunityStore(
@@ -775,7 +870,7 @@ def compute_regional_opportunities(
             end_utc=end,
             detection_step_s=detection_step_s,
             decision_step_s=int(decision_step_s),
-            metadata={"config": cfg},
+            metadata={"config": cfg, "targeting": target_info},
         )
 
     windows: dict[tuple[int, int], tuple[AccessWindow, ...]] = {}
@@ -787,7 +882,13 @@ def compute_regional_opportunities(
         prepared = (
             _prepare_simple_geometry(sat, t)
             if _is_simple_nadir(effective_cfg)
-            else _prepare_ecef_geometry(sat, t, dt_list, effective_cfg)
+            else _prepare_ecef_geometry(
+                sat,
+                t,
+                dt_list,
+                effective_cfg,
+                targeted=target_ecef if _is_targeted(effective_cfg) else None,
+            )
         )
         for cell_start in range(0, n_cells, int(cell_chunk_size)):
             cell_stop = min(cell_start + int(cell_chunk_size), n_cells)
@@ -831,6 +932,7 @@ def compute_regional_opportunities(
             "config": cfg,
             "n_grid_cells": n_cells,
             "n_nonempty_pairs": len(windows),
+            "targeting": target_info,
         },
     )
     refine_step_s = float(cfg.get("refine_step_seconds", 0.0) or 0.0)

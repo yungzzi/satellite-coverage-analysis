@@ -77,11 +77,14 @@ src/
 
 data/
 ├─ geo/
-│  └─ zhejiang_cities.geojson  # 冻结的 11 地市边界与 adcode
+│  ├─ 330000.json              # 浙江省 WGS84 计算边界
+│  ├─ 330100.json ... 331100.json # 11 地市 WGS84 计算边界
+│  ├─ raw_datav_gcj02/         # DataV 原始 GCJ-02 字节快照
+│  └─ metadata/zhejiang_boundaries.json # 版本、转换方法和哈希清单
 └─ sensor_profiles.toml         # 光学推扫、SAR 等有限场景 Profile
 
 data/
-├─ geo/                         # 当前已冻结 330000/330100，待补其余地市
+├─ geo/                         # 浙江省及 11 地市边界已冻结
 └─ test_data/                   # 可重复验收的 TLE
 ```
 
@@ -91,18 +94,25 @@ data/
 
 ### 4.1 数据入口
 
-首选从平台研发取得 `bootstrap` 中 11 个城市的完整边界，并冻结为本项目 GeoJSON。每个 Feature 至少包含：
+当前工程基线采用 DataV.GeoAtlas `areas_v3` 的浙江省及 11 地市边界。该数据源页面标明来自
+高德、版本为 2021.5；DataV 官方地图坐标说明为 GCJ-02。因此程序同时保留原始 GCJ-02 字节快照，
+并用版本化的迭代逆变换生成 WGS84 计算文件。每个计算 Feature 至少包含：
 
 ```json
 {
   "adcode": "330600",
   "name": "绍兴市",
-  "boundary_version": "...",
+  "boundary_version": "datav-areas_v3-amap-2021-05-wgs84-v1",
+  "source_dataset_crs": "GCJ-02",
+  "geometry_crs": "EPSG:4326",
   "geometry": {"type": "MultiPolygon", "coordinates": []}
 }
 ```
 
-保存时记录文件 SHA-256。运行请求按 `adcode` 匹配，不只按中文名匹配。接收边界时必须向平台研发确认源坐标系；如果是 GCJ-02 等偏移坐标，应先按经确认的转换流程归一到 WGS84/项目标准，不能仅根据数值范围猜测。
+`src/prepare_zhejiang_boundaries.py` 生成数据和清单，`src/validate_zhejiang_boundaries.py` 验证
+原始/转换文件哈希、GCJ-02 回代误差、全市 5 km 网格和省市边界一致性。运行请求内部按 `adcode`
+匹配，同时支持 11 市自然中文名归一化。若平台以后要求替换为其自带边界，必须先取得源文件和坐标系，
+建立新版本并重新验收，不能覆盖现有版本或仅根据数值范围猜测。
 
 ### 4.2 新依赖
 
@@ -165,7 +175,8 @@ def build_clipped_grid(
 
 首个代码交付实现于 `src/region_grid.py`：已经具备边界读取、裁剪格网、面积权重、代表点、
 边界哈希和调试 GeoJSON 导出（`save_grid_geojson`）；自动缓存暂缓到平台边界版本和服务端
-存储位置确定后再接入，避免先把错误边界版本持久化。`src/validate_region_grid.py` 覆盖规则整格、
+存储位置确定后再接入。边界文件已声明 `geometry_crs`；调用方传入不同 `source_crs` 时会立即报错，
+防止坐标偏移静默进入计算。`src/validate_region_grid.py` 覆盖规则整格、
 凹形/带洞单元的内部代表点、同格离散面、可复现性，以及杭州真实边界在 5 km / 2.5 km 下的面积守恒。
 
 ## 5. 第二层：逐星逐网格观测机会
@@ -803,7 +814,7 @@ x-only 按需约束
 
 ### 阶段 A：冻结语义和测试数据
 
-- 获取/固化 11 城市边界；
+- [x] 获取并固化浙江省及 11 地市边界，显式完成 GCJ-02→WGS84 转换和哈希验收；
 - 定义 Profile 和缺失参数处理；
 - 固定绍兴 8 小时基准请求和期望字段；
 - 冻结指标卡、覆盖地图、卫星表和城市过境窗口表的字段。
@@ -854,7 +865,7 @@ x-only 按需约束
 
 - 取得 skill 注册样例、`script_id` 位置和调用协议；
 - 确认 runner 与引擎是否真的同机、Python 环境、工作目录、超时和结果体积上限；
-- 补齐平台 11 地市冻结边界、110 颗星 TLE/目录映射和逐星真实 Profile；
+- 比较平台自带城市边界与当前冻结基线（仅平台要求替换时）；补齐 110 颗星 TLE/目录映射和逐星真实 Profile；
 - 确认平台原生绘图、嵌入 HTML 结果页和 PDF 导出能力；
 - 只有 runner 与引擎不同机时，才补 FastAPI、同步/异步任务、鉴权和 Docker/Linux 部署；
 - 最后做聊天到报告的端到端验收。
@@ -864,6 +875,6 @@ x-only 按需约束
 数学和算法主线已经闭合，但以下字段不能靠程序猜：
 
 1. **单元时间覆盖率默认阈值**：平台现有 `coverage_target_pct=100` 是空间累计目标，不能直接当新 skill 的 $q_0$。首版可把它设为必填，或由任务 Profile 明确给出。
-2. **平台城市边界坐标系**：必须确认边界是 WGS84、CGCS2000、GCJ-02 还是其他坐标系，并冻结转换方法和边界哈希。
+2. **平台边界是否必须替换项目基线**：项目已具备版本化 WGS84 边界；若平台要求使用另一套边界，必须提供原文件、版本和坐标系，重新冻结转换方法与哈希。
 
-这两项不阻碍先搭建模块和人工测试数据，但在正式生成平台城市网格或公开 skill 输入协议前必须确认并写入接口说明。
+这两项不阻碍继续映射卫星与 Profile，但在公开 skill 输入协议或切换平台边界前必须确认并写入接口说明。

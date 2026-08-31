@@ -54,14 +54,18 @@
   通用同时覆盖变量与贪心种子逻辑也已接入，并由人工窗口和全量回归核对。
 - `src/siriagent_skill/` 已完成同机调用层：六种 operation、机器可读参数说明、缺参追问、
   五项选星分派、指标卡、卫星表、城市过境窗口和薄弱区输出。Codex Skill 位于
-  `.agents/skills/satellite-coverage-selection/`；`src/validate_siriagent_skill.py` 已通过 3/3 自检。当前只有
-  杭州/`330100` 和浙江/`330000` 边界，且内置 Profile 是接入验收参数，不是真实载荷。
+  `.agents/skills/satellite-coverage-selection/`；`src/validate_siriagent_skill.py` 已通过综合自检。浙江省及
+  11 地市边界已全部冻结：原始 DataV/高德 2021-05 GCJ-02 快照保留在
+  `data/geo/raw_datav_gcj02/`，计算文件由固定迭代逆变换归一为 WGS84，并在
+  `data/geo/metadata/zhejiang_boundaries.json` 记录源文件、转换文件和几何哈希。内置 Profile 仍是
+  接入验收参数，不是真实载荷。
   现已支持普通请求按预设运行；用户明确提出高级需求时，可通过 `sensor_profile` 和
   `satellite_profile_overrides` 将已有复杂传感器、统一指向、姿态和约束参数接入区域路径，结果会回显
   `profile.effective_config`。区域 `Targeted` 统一跟踪所有保留网格代表点的面积加权形心，
   不再逐网格点独立转轴。
-- 11 个城市边界必须记录 `adcode`、边界版本/哈希、源坐标系、投影、格长和原点。未知坐标系不可直接与
-  WGS84 轨道地面点混用。
+- 11 个城市边界已记录 `adcode`、边界版本/哈希、源坐标系和转换方法；每次网格结果继续记录投影、
+  格长和原点。以后若换平台边界，必须先比较版本、坐标系和哈希，未知坐标系不可直接与 WGS84
+  轨道地面点混用。
 
 ## 4. 用户沟通
 
@@ -111,6 +115,8 @@ src/
 ## 8. 验证底线
 
 - 新区域格网：运行 `python src/validate_region_grid.py`。
+- 浙江边界基线：运行 `python src/validate_zhejiang_boundaries.py`，检查 12 份哈希、坐标回代、
+  11 市 5 km 网格和省市边界一致性。
 - 修改旧覆盖/选星路径前，先找到对应 `validate_*.py` 并保持既有回归通过。
 - 每次涉及区域面积时检查裁剪单元面积和与边界投影面积一致；代表点必须位于自己单元内。
 - 服务化阶段不改变上述物理/窗口语义，只增加输入校验、缓存、接口和展示适配。

@@ -248,6 +248,18 @@ def load_city_boundary(
     chosen_adcode = str(properties.get("adcode", adcode or ""))
     if not chosen_adcode:
         raise ValueError("边界缺少 adcode，请在 GeoJSON 属性或函数参数中提供。")
+
+    # 新生成的行政区文件会把几何坐标系写进属性。调用方若传错 source_crs，
+    # 必须立即报错，不能让几百米的 GCJ-02/WGS84 偏移悄悄进入覆盖计算。
+    declared_geometry_crs = properties.get("geometry_crs")
+    if declared_geometry_crs:
+        declared_crs = CRS.from_user_input(str(declared_geometry_crs))
+        requested_crs = CRS.from_user_input(source_crs)
+        if declared_crs != requested_crs:
+            raise ValueError(
+                f"边界声明 geometry_crs={declared_geometry_crs}，"
+                f"但调用方传入 source_crs={source_crs}；请先统一坐标口径。"
+            )
     city_name = _repair_display_text(
         properties.get("name") or properties.get("city_name") or chosen_adcode
     )

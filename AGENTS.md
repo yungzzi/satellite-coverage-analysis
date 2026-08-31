@@ -7,7 +7,8 @@
 ## 1. 项目目标
 
 “卫星覆盖性分析”以 TLE + SGP4 + 几何判定计算卫星对目标的覆盖窗口，并在窗口结果上进行
-虚拟星座/选星。当前扩展目标是将“区域时间覆盖 + 选星”作为独立服务接入研究院 SIRIAgent。
+虚拟星座/选星。当前扩展目标是将“区域时间覆盖 + 选星”作为 Skill 接入
+研究院 SIRIAgent；首版按 Agent 与引擎同机直接调用 Python 实现。
 
 ### 不可退化的输出
 
@@ -17,11 +18,13 @@
 ## 2. 当前技术与产品决策
 
 1. **主覆盖引擎**：纯 Python 物理计算（TLE/SGP4 + 自研几何），不依赖商业软件。
-2. **ATK**：不进入未来 FastAPI、Docker 或 Linux 服务，也不再新增产品功能；目前仅允许在本机作为
+2. **ATK**：不进入未来 Skill、FastAPI、Docker 或 Linux 服务，也不再新增产品功能；目前仅允许在本机作为
    自研复杂传感器的临时对拍参考。自研区域路径验收后，再单独裁剪 ATK 运行代码与依赖。
-3. **SIRIAgent 接入**：走 B——本工程提供独立 FastAPI 服务；Vercel/Flask 平台只负责编排、调用和展示，
-   不承载重计算。平台 skill 注册方式仍需向研发同学确认；访问 `https://siri-iota.vercel.app` 必须使用
-   本机 mihomo 代理 `http://127.0.0.1:7890`，直连 443 不通。
+3. **SIRIAgent 接入（2026-08-31 更新）**：已按“Agent 与计算引擎在同一台服务器”实现
+   同机 Python Skill；当前不需要 FastAPI、MCP、Docker 或数据库。如平台真实 skill runner 在
+   Vercel/另一台机器，再在同一 facade 外加 FastAPI 网络壳，不重写算法。平台 skill 注册样例、
+   `script_id` 映射、Python 环境与超时仍需向研发同学确认；访问 `https://siri-iota.vercel.app`
+   必须使用本机 mihomo 代理 `http://127.0.0.1:7890`，直连 443 不通。
 4. **区域建模**：城市边界在冻结的浙江等面积米制投影中裁剪为 5 km 方格单元；
    面积权重为裁剪面积，代表点只做覆盖判定且不带圆。优先全部面积达标，确实不可行时才显式降为
    至少 90% 面积达标；不得静默改变阈值。
@@ -49,6 +52,10 @@
   给定预算最小化面积分位 MRT）已完成离散二分、任务②复用和穷举核对；任务⑤（`K=1` 给定预算
   最小化面积加权 ART，含贪心、单星交换、反向删除和面积分位 MRT 输出）已完成；五项任务的 `K>1`
   通用同时覆盖变量与贪心种子逻辑也已接入，并由人工窗口和全量回归核对。
+- `src/siriagent_skill/` 已完成同机调用层：六种 operation、机器可读参数说明、缺参追问、
+  五项选星分派、指标卡、卫星表、城市过境窗口和薄弱区输出。Codex Skill 位于
+  `.agents/skills/satellite-coverage-selection/`；`src/validate_siriagent_skill.py` 已通过 3/3 自检。当前只有
+  杭州/`330100` 和浙江/`330000` 边界，且内置 Profile 是接入验收参数，不是真实载荷。
 - 11 个城市边界必须记录 `adcode`、边界版本/哈希、源坐标系、投影、格长和原点。未知坐标系不可直接与
   WGS84 轨道地面点混用。
 
@@ -79,6 +86,7 @@ src/
 ├── regional_opportunities.py 新区域逐星逐网格稀疏覆盖窗口
 ├── regional_metrics.py       新区域指标与城市汇总
 ├── regional_selection.py     新区域任务①～⑤（支持 K=1/K>1）选星
+├── siriagent_skill/           同机 Skill Schema、编排、人类可读输出与 JSON 入口
 ├── benchmark_regional_k.py   真实城市网格 K=1/K=2 性能基准
 ├── loader_app.py / cli.py    本地 GUI / CLI
 ├── satellite_loader.py       TLE、目录与缓存
@@ -102,3 +110,5 @@ src/
 - 修改旧覆盖/选星路径前，先找到对应 `validate_*.py` 并保持既有回归通过。
 - 每次涉及区域面积时检查裁剪单元面积和与边界投影面积一致；代表点必须位于自己单元内。
 - 服务化阶段不改变上述物理/窗口语义，只增加输入校验、缓存、接口和展示适配。
+- 同机 Skill：运行 `python src/validate_siriagent_skill.py`；正式使用和验收按
+  `docs/current/SIRIAgent同机Skill使用与验收.md`。

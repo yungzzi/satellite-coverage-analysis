@@ -1,6 +1,6 @@
 # SIRIAgent 同机 Skill 使用与验收
 
-> 版本：2026-08-31 平台目录可调用版。
+> 版本：2026-08-31 可移交 Agent 版。
 >
 > 当前一句话结论：**Agent 与引擎同机时，可直接运行 Python Skill，不需要 FastAPI、MCP、Docker 或数据库。**
 
@@ -31,7 +31,23 @@ $python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖
 平台 110 星目录已与固定 TLE 110/110 映射。普通请求默认使用平台目录 Profile，按平台默认条件
 “可见光且分辨率不差于 1 m”得到 88 颗候选；分辨率只筛选，非 SAR 的幅宽进入矩形几何。
 
-## 3. 七步验收
+## 3. 八步验收
+
+### 第零步：检查另一套 Agent 的运行环境
+
+```powershell
+& $python .agents\skills\satellite-coverage-selection\scripts\run_skill.py --self-check --pretty
+```
+
+通过标准：`status=ok`、`ready_for_direct_agent_use=true`，核心项目文件、Python 依赖和 CBC 求解器
+全部为 `true`。如果 Skill 安装在全局目录而不在项目中，可设置环境变量：
+
+```powershell
+$env:SATELLITE_COVERAGE_PROJECT_ROOT = 'D:\path\to\卫星覆盖性分析'
+```
+
+也可在调用时传 `--project-root <项目根目录>`。Skill 是 Agent 适配层，完整项目中的 `src/`、边界、
+平台目录和 TLE 才是计算引擎与数据，不能只复制 Skill 文件夹就假装算法也被复制了。
 
 ### 第一步：看 Skill 自己说明参数
 
@@ -133,10 +149,12 @@ $python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖
 & $python src\validate_region_grid.py
 & $python src\validate_siriagent_catalog.py
 & $python src\validate_siriagent_skill.py
+& $python src\validate_agent_skill_package.py
 & $python src\validate_regional_selection.py
 ```
 
-通过标准：浙江边界 `4/4`、区域格网 `4/4`、平台目录 `5/5`、Skill `3/3`、区域选星 `7/7`。
+通过标准：浙江边界 `4/4`、区域格网 `4/4`、平台目录 `5/5`、Skill 业务 `3/3`、Agent Skill
+包装 `3/3`、区域选星 `7/7`。
 平台目录自检会核对 110/110 TLE、默认 88 颗候选、矩形幅宽、SAR 缺参保护和宁波快速端到端；
 Skill 自检会验证六种调用语义、K=3 入参、五项选星分派，以及真实杭州边界+真实 TLE 的同链路执行。
 
@@ -168,6 +186,10 @@ Skill 自检会验证六种调用语义、K=3 入参、五项选星分派，以�
 ```
 
 Skill 会按任务只追问必需参数。项目内 Skill 位于 `.agents/skills/`；它不等于 MCP 服务。
+
+如果另一名 Codex 不在本项目里工作，可以把同一个 Skill 目录安装到它的全局 Skills 目录，并用
+`SATELLITE_COVERAGE_PROJECT_ROOT` 指向本项目；首次运行 `--self-check` 后即可用相同自然语言调用。
+Skill 的标准 UI 元数据位于 `agents/openai.yaml`，允许显式调用和正常的隐式发现。
 
 ### SIRIAgent
 

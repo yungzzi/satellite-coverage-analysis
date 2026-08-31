@@ -54,7 +54,10 @@
   通用同时覆盖变量与贪心种子逻辑也已接入，并由人工窗口和全量回归核对。
 - `src/siriagent_skill/` 已完成同机调用层：六种 operation、机器可读参数说明、缺参追问、
   五项选星分派、指标卡、卫星表、城市过境窗口和薄弱区输出。Codex Skill 位于
-  `.agents/skills/satellite-coverage-selection/`；`src/validate_siriagent_skill.py` 已通过综合自检。浙江省及
+  `.agents/skills/satellite-coverage-selection/`；现已增加 `agents/openai.yaml`、跨工作目录项目发现、
+  `SATELLITE_COVERAGE_PROJECT_ROOT`/`--project-root` 移交方式和 `--self-check` 环境检查，
+  `src/validate_agent_skill_package.py` 验证项目内与全局安装两种启动。`src/validate_siriagent_skill.py`
+  已通过综合自检。浙江省及
   11 地市边界已全部冻结：原始 DataV/高德 2021-05 GCJ-02 快照保留在
   `data/geo/raw_datav_gcj02/`，计算文件由固定迭代逆变换归一为 WGS84，并在
   `data/geo/metadata/zhejiang_boundaries.json` 记录源文件、转换文件和几何哈希。
@@ -135,3 +138,5 @@ src/
 - 服务化阶段不改变上述物理/窗口语义，只增加输入校验、缓存、接口和展示适配。
 - 同机 Skill：运行 `python src/validate_siriagent_skill.py`；正式使用和验收按
   `docs/current/SIRIAgent同机Skill使用与验收.md`。
+- Agent Skill 包装或启动器变化：运行 `python src/validate_agent_skill_package.py`，核对项目外工作目录、
+  全局 Skill 缺引擎报错，以及显式参数/环境变量连接。

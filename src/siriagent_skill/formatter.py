@@ -102,10 +102,14 @@ def build_human_tables(
         if not city_passes and not include_empty_satellites:
             continue
         cumulative_s = sum((end - start).total_seconds() for start, end in city_passes)
+        sensor = getattr(sat, "sensor", None) or {}
         satellite_rows.append(
             {
                 "satellite": _sat_name(sat),
                 "norad_id": _sat_id(sat),
+                "sensor_class": sensor.get("sensor_class"),
+                "resolution_m": sensor.get("resolution_m"),
+                "swath_km": sensor.get("swath_km"),
                 "city_pass_count": len(city_passes),
                 "cumulative_city_intersection_minutes": round(cumulative_s / 60.0, 3),
                 "first_window_utc": _iso(city_passes[0][0]) if city_passes else None,

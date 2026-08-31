@@ -36,6 +36,12 @@ def test_describe_and_missing_parameters() -> None:
     assert len(described["tasks"]) == 6
     assert described["mcp_required"] is False
     assert described["fastapi_required"] is False
+    assert described["parameters"]["profile_slug"]["default"] == (
+        "siriagent_catalog_swath_v1"
+    )
+    assert described["parameters"]["tle_source"]["default"] == (
+        "siriagent_110_snapshot"
+    )
     assert {item["adcode"] for item in described["available_cities"]} >= {
         "330000", "330100", "330200", "330300", "330400", "330500",
         "330600", "330700", "330800", "330900", "331000", "331100",
@@ -71,7 +77,10 @@ def test_describe_and_missing_parameters() -> None:
         root=ROOT,
     )
     assert invalid_targeted["status"] == "invalid_input"
-    assert normalize_request({"operation": "coverage_only", "city": "宁波"}).city_adcode == "330200"
+    default_request = normalize_request({"operation": "coverage_only", "city": "宁波"})
+    assert default_request.city_adcode == "330200"
+    assert default_request.profile_slug == "siriagent_catalog_swath_v1"
+    assert default_request.tle_source == "siriagent_110_snapshot"
     print("[通过] describe、任务参数提示、缺参和 K 范围校验")
 
 

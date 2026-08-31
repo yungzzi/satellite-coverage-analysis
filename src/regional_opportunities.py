@@ -185,6 +185,8 @@ def _effective_satellite_cfg(cfg: Mapping[str, Any], sat_id: int) -> dict[str, A
         for key in (
             "sensor_type",
             "sensor_params",
+            "swath_km",
+            "along_track_half_angle_deg",
             "min_elevation_deg",
             "pointing",
             "attitude",
@@ -341,6 +343,8 @@ def _complex_pattern_grid(
     u: np.ndarray,
     v: np.ndarray,
     cfg: Mapping[str, Any],
+    *,
+    altitude_km: np.ndarray | None = None,
 ) -> np.ndarray:
     """把 sensor_geometry.pattern_covered 的不等式扩展到 ``(T, N)``。"""
 
@@ -353,8 +357,19 @@ def _complex_pattern_grid(
         eta = float(params[0]) if params else 45.0
         ok = z >= np.cos(np.radians(eta))
     elif sensor_type == "Rectangular":
-        vertical = float(params[0]) if params else 40.0
-        horizontal = float(params[1]) if len(params) > 1 else 60.0
+        swath_km = float(cfg.get("swath_km") or 0.0)
+        if swath_km > 0.0:
+            if altitude_km is None:
+                raise ValueError("Rectangular 幅宽口径缺少逐时刻卫星高度。")
+            # 平台幅宽是地面跨轨全宽。按当前轨道高度逐时刻换算成传感器跨轨半角，
+            # 不再把矩形条带错误退化为覆盖圆。
+            vertical = cov.swath_to_half_angle_deg(altitude_km, swath_km)[:, None]
+        else:
+            vertical = float(params[0]) if params else 40.0
+        horizontal = float(
+            cfg.get("along_track_half_angle_deg")
+            or (params[1] if len(params) > 1 else 60.0)
+        )
         ok = (
             (z > 0.0)
             & (np.abs(np.degrees(np.arctan2(y, z))) <= vertical)
@@ -426,7 +441,15 @@ def _complex_state_for_points(
     eps_ground = np.degrees(
         np.arcsin(np.clip(np.sum((-u) * point_up[None, :, :], axis=2), -1.0, 1.0))
     )
-    covered = _complex_pattern_grid(u_s, eps_ground, u, v, cfg)
+    altitude_km = np.linalg.norm(r, axis=1) - sg.R_EARTH_KM
+    covered = _complex_pattern_grid(
+        u_s,
+        eps_ground,
+        u,
+        v,
+        cfg,
+        altitude_km=altitude_km,
+    )
 
     # 约束暂按网格点循环，避免改变已经验证的 check_constraints 语义；
     # 视场本身仍是整块向量化，后续可针对约束类型再做专项向量化。

@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from siriagent_catalog import CATALOG_PROFILE_SLUG, CATALOG_SENSOR_TYPES
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -96,6 +98,7 @@ TASK_SPECS: dict[str, dict[str, Any]] = {
 TLE_SOURCES = {
     "jilin1_test": "data/test_data/jilin1_all.tle",
     "china_remote_sensing_test": "data/test_data/china_remote_sensing_all.tle",
+    "siriagent_110_snapshot": "data/test_data/siriagent_110_snapshot.tle",
 }
 
 CITY_NAME_TO_CODE = {
@@ -125,9 +128,18 @@ CITY_NAME_TO_CODE = {
     "丽水市": "331100",
 }
 
-# 当前只是可重复验收用的固定 Profile。正式接平台目录时必须按逐星幅宽/传感器表生成
-# Rectangular/SAR 参数，不能把这个演示 Profile 当作真实载荷参数。
+# 平台目录 Profile 会在 facade 中按逐星幅宽生成配置；其沿轨值仍是显式场景假设，SAR 缺参即阻止。
+# 其余固定 Profile 只用于可重复验收，不能当作平台卫星的真实载荷参数。
 PROFILE_SPECS: dict[str, dict[str, Any]] = {
+    CATALOG_PROFILE_SLUG: {
+        "label": "SIRIAgent 110 星目录幅宽 Profile（目录派生，SAR 严格缺参）",
+        "config": {"min_elevation_deg": 0.0},
+        "catalog_driven": True,
+        "assumption": (
+            "非 SAR 卫星按平台逐星幅宽生成矩形跨轨半角，沿轨半角使用明确的 60°场景假设；"
+            "这比统一圆锥更符合目录语义，但尚不是载荷厂家验证值。SAR 缺少原生入射角带时拒绝计算。"
+        ),
+    },
     "optical_rectangular_validation_v1": {
         "label": "光学矩形验收 Profile（固定角度，仅用于接入验收）",
         "config": {
@@ -178,9 +190,9 @@ PARAMETER_SPECS: dict[str, dict[str, Any]] = {
     "tle_source": {
         "type": "string",
         "required": False,
-        "default": "jilin1_test",
+        "default": "siriagent_110_snapshot",
         "allowed": list(TLE_SOURCES),
-        "description": "内置可重复验收 TLE 数据源；也可改传 tle_path。",
+        "description": "默认使用与平台目录配套的 110 星固定 TLE；也可显式改传验收源或 tle_path。",
     },
     "tle_path": {
         "type": "string",
@@ -193,10 +205,24 @@ PARAMETER_SPECS: dict[str, dict[str, Any]] = {
         "default": "TLE 文件中的全部卫星",
         "description": "可选 NORAD 编号白名单。",
     },
+    "catalog_sensor_type": {
+        "type": "string",
+        "required": False,
+        "default": "可见光",
+        "allowed": list(CATALOG_SENSOR_TYPES),
+        "description": "仅用于 SIRIAgent 110 星目录候选筛选；可见光/高光谱/红外/SAR/全部。",
+    },
+    "max_resolution_m": {
+        "type": "number",
+        "required": False,
+        "default": 1.0,
+        "range": "0 < value <= 10000",
+        "description": "目录分辨率筛选上限；resolution_m≤该值才进入候选池，不进入几何。",
+    },
     "profile_slug": {
         "type": "string",
         "required": False,
-        "default": "optical_rectangular_validation_v1",
+        "default": CATALOG_PROFILE_SLUG,
         "allowed": list(PROFILE_SPECS),
         "description": "普通模式选择预设 Profile；若明确提供 sensor_profile，则高级配置覆盖该预设。",
     },
@@ -365,6 +391,8 @@ class SkillRequest:
     tle_source: str
     tle_path: str | None
     satellite_ids: tuple[int, ...] | None
+    catalog_sensor_type: str
+    max_resolution_m: float
     profile_slug: str
     sensor_profile: dict[str, Any] | None
     satellite_profile_overrides: tuple[dict[str, Any], ...]
@@ -440,7 +468,8 @@ def describe_capabilities(
         task_items.append({"operation": key, **spec})
     common_names = [
         "city_adcode", "start_utc", "analysis_horizon_h", "tle_source", "tle_path",
-        "satellite_ids", "profile_slug", "sensor_profile", "satellite_profile_overrides",
+        "satellite_ids", "catalog_sensor_type", "max_resolution_m", "profile_slug",
+        "sensor_profile", "satellite_profile_overrides",
         "grid_size_km", "detection_step_s",
         "decision_step_s", "min_simultaneous", "method", "selection_time_limit_s",
         "debug", "max_windows", "max_weak_areas",
@@ -478,7 +507,7 @@ def describe_capabilities(
             "任务①③的时间覆盖率目标与城市空间覆盖率不是同一个参数。",
             "普通请求使用 profile_slug 预设；只有用户明确提出高级传感器/姿态需求时才传 sensor_profile。",
             "高级区域请求支持 SimpleCone、Rectangular、Conical、HalfPower、SAR，以及 Fixed/GrazingAlt/Spinning 指向；Targeted 自动跟踪区域网格形心。",
-            "正式载荷接入前必须用平台逐星参数替换验收 Profile。",
+            "SIRIAgent 目录 Profile 的分辨率只筛候选；非 SAR 使用平台幅宽+沿轨场景假设，SAR 缺入射角时拒绝计算。",
         ],
     }
 
@@ -555,6 +584,8 @@ def _satellite_ids(value: Any) -> tuple[int, ...] | None:
 _PROFILE_FIELDS = {
     "sensor_type",
     "sensor_params",
+    "swath_km",
+    "along_track_half_angle_deg",
     "min_elevation_deg",
     "pointing",
     "attitude",
@@ -607,6 +638,18 @@ def _normalize_profile_object(value: Any, name: str = "sensor_profile") -> dict[
                 raise SkillInputError(f"{name}.sensor_params[{index}] 必须是有限数字。")
             normalized_params.append(number)
         profile["sensor_params"] = normalized_params
+    for numeric_name in ("swath_km", "along_track_half_angle_deg"):
+        if numeric_name not in profile:
+            continue
+        try:
+            numeric_value = float(profile[numeric_name])
+        except (TypeError, ValueError) as exc:
+            raise SkillInputError(f"{name}.{numeric_name} 必须是数字。") from exc
+        if not math.isfinite(numeric_value) or numeric_value <= 0.0:
+            raise SkillInputError(f"{name}.{numeric_name} 必须是大于 0 的有限数字。")
+        if numeric_name == "along_track_half_angle_deg" and numeric_value >= 90.0:
+            raise SkillInputError(f"{name}.along_track_half_angle_deg 必须小于 90°。")
+        profile[numeric_name] = numeric_value
     if "min_elevation_deg" in profile:
         try:
             elevation = float(profile["min_elevation_deg"])
@@ -794,23 +837,38 @@ def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
     if not 1 <= max_windows <= 100 or not 1 <= max_weak_areas <= 100:
         raise SkillInputError("max_windows 和 max_weak_areas 必须在 1～100 之间。")
 
-    tle_source = str(payload.get("tle_source", "jilin1_test")).strip()
     tle_path = payload.get("tle_path")
-    if tle_path in (None, "") and tle_source not in TLE_SOURCES:
-        raise SkillInputError(
-            f"未知 tle_source：{tle_source}",
-            details={"allowed_tle_sources": list(TLE_SOURCES)},
-        )
-    profile_slug = str(payload.get("profile_slug", "optical_rectangular_validation_v1")).strip()
+    profile_slug = str(payload.get("profile_slug", CATALOG_PROFILE_SLUG)).strip()
     if profile_slug not in PROFILE_SPECS:
         raise SkillInputError(
             f"未知 profile_slug：{profile_slug}",
             details={"allowed_profiles": list(PROFILE_SPECS)},
         )
+    if "tle_source" in payload:
+        tle_source = str(payload["tle_source"]).strip()
+    elif profile_slug == CATALOG_PROFILE_SLUG:
+        # 普通用户默认走平台目录及其同版本 TLE；旧验收 Profile 仍自动配吉林一号测试集。
+        tle_source = "siriagent_110_snapshot"
+    else:
+        tle_source = "jilin1_test"
+    if tle_path in (None, "") and tle_source not in TLE_SOURCES:
+        raise SkillInputError(
+            f"未知 tle_source：{tle_source}",
+            details={"allowed_tle_sources": list(TLE_SOURCES)},
+        )
     sensor_profile = _normalize_profile_object(payload.get("sensor_profile"))
     satellite_profile_overrides = _normalize_profile_overrides(
         payload.get("satellite_profile_overrides")
     )
+    catalog_sensor_type = str(payload.get("catalog_sensor_type", "可见光")).strip()
+    if catalog_sensor_type not in CATALOG_SENSOR_TYPES:
+        raise SkillInputError(
+            f"catalog_sensor_type 不支持：{catalog_sensor_type}",
+            details={"allowed_catalog_sensor_types": list(CATALOG_SENSOR_TYPES)},
+        )
+    max_resolution_m = _as_float(payload, "max_resolution_m", 1.0)
+    if not 0.0 < max_resolution_m <= 10_000.0:
+        raise SkillInputError("max_resolution_m 必须在 0～10000 m 之间。")
 
     return SkillRequest(
         operation=operation,
@@ -820,6 +878,8 @@ def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
         tle_source=tle_source,
         tle_path=None if tle_path in (None, "") else str(tle_path),
         satellite_ids=_satellite_ids(payload.get("satellite_ids")),
+        catalog_sensor_type=catalog_sensor_type,
+        max_resolution_m=max_resolution_m,
         profile_slug=profile_slug,
         sensor_profile=sensor_profile,
         satellite_profile_overrides=satellite_profile_overrides,

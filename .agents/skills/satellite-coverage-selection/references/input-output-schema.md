@@ -106,3 +106,17 @@ x_c = Σ(a_g · x_g) / Σ(a_g),    y_c = Σ(a_g · y_g) / Σ(a_g)
 `completed` 中重点读取：`feasible`、`optimality`、`summary_cards`、`selection`、
 `satellite_table`、`city_pass_window_table`、`weak_areas`、`assumptions` 和 `warnings`。
 普通聊天保持 `debug=false`；只有调试/验收才打开逐网格 GeoJSON 和窗口明细。
+
+选星结果中的 `optimality` 还必须区分：
+
+| optimality | 含义 |
+| --- | --- |
+| `proven_optimal` | 最终窗口业务目标已证明最优，且原始窗口复核通过 |
+| `proven_discrete_optimal` | 只证明决策时间片或 MRT 桶模型最优；窗口指标已回算，但不声称连续目标全局最优 |
+| `feasible_heuristic` | 找到并复核了可行近似解，未证明全局最优 |
+| `feasible_time_limit` | 达到求解时限，保留当前可行解 |
+| `verification_failed` | 离散候选没有通过原始窗口复核，不能作为可行推荐 |
+
+任务③在 `method="both"` 时会按原始窗口的“达标面积优先、城市平均时间覆盖率次优先”比较贪心
+与 ILP，推荐窗口级得分更好的方案。不要只因某个 ILP 子结果带 `proven_discrete_optimal` 就覆盖
+最终推荐。

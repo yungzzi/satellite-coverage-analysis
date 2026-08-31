@@ -68,7 +68,10 @@
   场景假设。3 颗 SAR 因平台未给原生入射角带而阻止圆锥降级。完整审计和 11 城基准见
   `docs/current/SIRIAgent平台110星目录与Profile基线.md`。
 - 默认 88 星、8 小时、5 km、10 秒检测的 11 城顺序基准总计约 286 秒；单城市 12～38 秒，耗时与
-  网格数近似线性。下一步不是继续猜载荷参数，而是取得真实光学沿轨/SAR Profile 和平台注册样例。
+  网格数近似线性。绍兴 410 网格的完整业务验收也已通过：一次生成 3897 个窗口后复用到 K=1
+  五任务和 K=2/K=3 代表性场景，技术失败 0 项；任务⑤ K>1 已改用真实窗口重叠见证种子，任务③
+  的 ILP 只标 `proven_discrete_optimal` 并按原始窗口结果择优推荐。报告见
+  `docs/current/SIRIAgent平台默认业务验收报告.md`。下一步是取得平台注册样例和真实光学沿轨/SAR Profile。
 - 11 个城市边界已记录 `adcode`、边界版本/哈希、源坐标系和转换方法；每次网格结果继续记录投影、
   格长和原点。以后若换平台边界，必须先比较版本、坐标系和哈希，未知坐标系不可直接与 WGS84
   轨道地面点混用。
@@ -104,6 +107,7 @@ src/
 ├── prepare_siriagent_catalog.py 平台卫星字段清洗、NORAD/TLE 冻结
 ├── siriagent_catalog.py       平台目录筛选与逐星 Profile 适配
 ├── benchmark_siriagent_catalog.py  平台默认候选池 × 11 市性能基准
+├── benchmark_siriagent_business.py 平台 88 星五任务与 K=2/K=3 业务验收
 ├── benchmark_regional_k.py   真实城市网格 K=1/K=2 性能基准
 ├── loader_app.py / cli.py    本地 GUI / CLI
 ├── satellite_loader.py       TLE、目录与缓存

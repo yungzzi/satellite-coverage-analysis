@@ -7,6 +7,7 @@ import hashlib
 import json
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,15 @@ def _load_satellites(
             )
     if not satellites:
         raise SkillInputError("候选 TLE 中没有可用卫星。")
+    if request.satellite_profile_overrides:
+        available_ids = {int(sat.norad_id) for sat in satellites}
+        override_ids = {int(item["norad_id"]) for item in request.satellite_profile_overrides}
+        missing_overrides = sorted(override_ids - available_ids)
+        if missing_overrides:
+            raise SkillInputError(
+                "部分 satellite_profile_overrides 的 NORAD 不在候选 TLE 中。",
+                details={"missing_override_satellite_ids": missing_overrides},
+            )
     if request.n_budget is not None and request.n_budget > len(satellites):
         raise SkillInputError(
             f"n_budget={request.n_budget} 超过候选卫星数 {len(satellites)}。"
@@ -269,6 +279,10 @@ def _request_summary(
         "tle_path": str(tle_path),
         "candidate_satellite_count": satellite_count,
         "profile_slug": request.profile_slug,
+        "advanced_mode": bool(
+            request.sensor_profile or request.satellite_profile_overrides
+        ),
+        "satellite_profile_override_count": len(request.satellite_profile_overrides),
         "grid_size_km": request.grid_size_km,
         "detection_step_s": request.detection_step_s,
         "decision_step_s": request.decision_step_s,
@@ -300,7 +314,21 @@ def execute_request(
     grid_seconds = time.perf_counter() - grid_start
 
     profile = PROFILE_SPECS[request.profile_slug]
-    config = dict(profile["config"])
+    config = deepcopy(profile["config"])
+    advanced_mode = bool(request.sensor_profile or request.satellite_profile_overrides)
+    if request.sensor_profile:
+        # 高级字段只覆盖用户明确给出的项；没有给出的项仍沿用预设。
+        config.update(deepcopy(request.sensor_profile))
+    if request.satellite_profile_overrides:
+        # 对外使用 norad_id；区域几何内部沿用历史实现使用的 norad 键。
+        config["sat_sensor_overrides"] = [
+            {"norad": int(item["norad_id"]), **{
+                key: deepcopy(value)
+                for key, value in item.items()
+                if key != "norad_id"
+            }}
+            for item in request.satellite_profile_overrides
+        ]
     config["coarse_step_seconds"] = request.detection_step_s
     opportunity_start = time.perf_counter()
     store = regional_opportunities.compute_regional_opportunities(
@@ -363,6 +391,14 @@ def execute_request(
             tle_path=tle_path,
             satellite_count=len(satellites),
         ),
+        "profile": {
+            "slug": request.profile_slug,
+            "mode": "advanced" if advanced_mode else "preset",
+            "effective_config": deepcopy(config),
+            "satellite_profile_overrides": [
+                deepcopy(item) for item in request.satellite_profile_overrides
+            ],
+        },
         "city": {
             "adcode": grid.adcode,
             "name": grid.city_name,
@@ -385,7 +421,12 @@ def execute_request(
             "geojson": build_debug_map(store, metrics) if request.debug else None,
         },
         "assumptions": [
-            profile["assumption"],
+            (
+                "用户提供了高级 sensor_profile/逐星覆盖配置；本次计算以回显的 effective_config 为准，"
+                "未提供的字段继续继承 profile_slug 预设。"
+                if advanced_mode
+                else profile["assumption"]
+            ),
             "结果表示固定 Profile 下的几何观测机会，不包含云量、任务排程和姿态行为优化。",
             "代表点不带圆；面积由裁剪网格单元的真实面积权重统计。",
         ],
@@ -403,7 +444,7 @@ def execute_request(
             "tle_sha256": tle_hash,
             "boundary_sha256": grid.boundary_hash,
             "profile_sha256": _sha256_bytes(
-                json.dumps(profile["config"], sort_keys=True).encode("utf-8")
+                json.dumps(config, sort_keys=True).encode("utf-8")
             ),
             "profile_slug": request.profile_slug,
         },

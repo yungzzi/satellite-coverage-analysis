@@ -17,6 +17,38 @@
 所有计算都要求 `city_adcode`。当前默认：8 小时、5 km 网格、10 秒检测、60 秒决策、
 `K=1`；首版允许 `K=1/2/3`。任务①②默认先要求 100% 面积，失败后显式尝试 90%。
 
+## 普通预设与高级 Profile
+
+普通请求只传 `profile_slug`（或省略，使用默认验收预设）即可。只有用户明确提出“使用
+SAR 入射角带、矩形/锥形视场、侧摆/旋转姿态、指向或约束”等高级要求时，才传下面两个字段：
+
+```json
+{
+  "profile_slug": "optical_rectangular_validation_v1",
+  "sensor_profile": {
+    "sensor_type": "SAR",
+    "sensor_params": [12, 70, 30, 30],
+    "min_elevation_deg": 10,
+    "pointing": {"type": "Fixed", "method": "azel", "params": [90, -90]},
+    "attitude": {"profile": 0},
+    "constraints": []
+  },
+  "satellite_profile_overrides": [
+    {"norad_id": 40961, "sensor_type": "Rectangular", "sensor_params": [45, 45]}
+  ]
+}
+```
+
+`sensor_profile` 是全局覆盖配置；`satellite_profile_overrides` 按 NORAD 覆盖其中字段。
+支持的传感器类型为 `SimpleCone`、`Rectangular`、`Conical`、`HalfPower`、`SAR`；支持的区域
+统一指向为 `Fixed`、`GrazingAlt`、`Spinning`。`Targeted` 是对单个目标点逐时刻指向，不能
+代表整座城市的同时覆盖，因此区域 Skill 会拒绝。姿态 `profile` 使用项目已有的 0～4 定义；
+约束对象的具体字段沿用 `src/sensor_geometry.py` 的既有实现。
+
+高级参数必须有明确物理来源，Skill 不会把缺少的载荷数值自动猜成“真实卫星参数”。结果中的
+`profile.mode`、`profile.effective_config` 和 `profile.satellite_profile_overrides` 用来回显本次
+实际计算配置；`mode=preset` 表示完全使用预设，`mode=advanced` 表示至少有一个高级字段生效。
+
 ## 最小请求示例
 
 可直接运行的快速样例见同目录 `example-coverage-quick.json` 和

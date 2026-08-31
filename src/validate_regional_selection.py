@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import itertools
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -216,7 +217,7 @@ def test_budget_selection() -> None:
         assert all(abs(left - right) < 1e-9 for left, right in zip(actual, expected_score))
         assert len(result.recommended.selected_sat_indices) <= budget
         if result.ilp and result.ilp.status not in {"unsupported", "skipped"}:
-            assert result.ilp.status == "proven_optimal"
+            assert result.ilp.status == "proven_discrete_optimal"
     exact = rs.run_regional_budget_selection(
         store,
         n_budget=2,
@@ -349,6 +350,48 @@ def test_art_selection() -> None:
     assert k2.min_simultaneous == 2
     assert k2.feasible
     assert len(k2.selected_sat_indices) == 2
+
+    # K=3 回归：0 号是按索引排在最前的短窗口诱饵，1/2/3 才能形成三重覆盖。
+    # 旧算法会先随意拿 0 号，预算用完后仍无 K=3 覆盖，最终反向删除成空组合。
+    base = synthetic_store()
+    cell = base.grid.cells[0]
+
+    def k3_window(sat_index: int, start_minute: int, end_minute: int):
+        begin = base.start_utc + timedelta(minutes=start_minute)
+        finish = base.start_utc + timedelta(minutes=end_minute)
+        return ro.AccessWindow(
+            sat_index=sat_index,
+            sat_id=200 + sat_index,
+            sat_name=f"K3测试星{sat_index}",
+            grid_index=0,
+            grid_id=cell.grid_id,
+            start_utc=begin,
+            end_utc=finish,
+            duration_s=(finish - begin).total_seconds(),
+        )
+
+    k3_store = ro.OpportunityStore(
+        satellites=tuple(f"K3测试星{index}" for index in range(4)),
+        grid=base.grid,
+        start_utc=base.start_utc,
+        end_utc=base.end_utc,
+        detection_step_s=60,
+        decision_step_s=60,
+        windows={
+            (0, 0): (k3_window(0, 40, 50),),
+            (1, 0): (k3_window(1, 0, 30),),
+            (2, 0): (k3_window(2, 0, 30),),
+            (3, 0): (k3_window(3, 0, 30),),
+        },
+    )
+    k3 = rs.run_regional_art_selection(
+        k3_store,
+        n_budget=3,
+        min_simultaneous=3,
+        max_local_rounds=1,
+    )
+    assert k3.selected_sat_indices == (1, 2, 3)
+    assert k3.metrics.grid_metrics[0].temporal_coverage_pct > 0.0
     print("[通过] 任务⑤ ART 贪心/局部改进与全子集穷举一致")
 
 

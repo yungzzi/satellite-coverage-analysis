@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import math
+from itertools import combinations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Mapping, Sequence
@@ -1542,8 +1543,14 @@ def ilp_select_budget(
         index for index, variable in enumerate(x) if (pulp.value(variable) or 0.0) > 0.5
     ]
     if stage2_status == "Optimal":
-        status = "proven_optimal"
-        note = "两阶段预算 ILP 已证明：先最大化达标面积，再在同面积下最大化面积—时间平均覆盖率。"
+        # 两阶段目标建立在 decision_step_s 离散时间片上。与任务①/②的“最少卫星”不同，
+        # 最大化任务可能因时间片对短窗口的放大而改变不同组合的排序；把最终组合回到原始窗口
+        # 复核，只能证明它的真实指标，不能反推出连续窗口目标也已全局最优。
+        status = "proven_discrete_optimal"
+        note = (
+            "两阶段 ILP 已证明离散时间片模型的字典序最优；原始窗口指标已回算，"
+            "但离散化可能改变组合排序，因此不声称连续窗口目标全局最优。"
+        )
     elif stage2_status == "Not Solved":
         status = "feasible_time_limit"
         note = "第一阶段已找到最优达标面积，但第二阶段达到时间上限，未证明平均覆盖率最优。"
@@ -1953,6 +1960,59 @@ def _score_art_not_worse(
     )
 
 
+def _art_overlap_seed_candidates(
+    store: OpportunityStore,
+    usable: Sequence[int],
+    min_simultaneous: int,
+    *,
+    max_candidates: int = 256,
+) -> tuple[tuple[int, ...], ...]:
+    """从真实窗口中提取确实发生过 K 重叠的种子组合。
+
+    K>1 时，逐颗评分会遇到“前 K-1 颗都没有最终目标收益”的冷启动问题。这里对每个网格做
+    一次轻量扫描线：只要某段时间同时活跃至少 K 颗星，就从活跃集合中记录 K 元组。候选数有
+    上限，避免高重叠场景产生组合爆炸；但只要全池存在 K 重叠，至少会保留一个真实见证组合。
+    """
+
+    k = int(min_simultaneous)
+    if k <= 1 or max_candidates <= 0:
+        return ()
+    usable_set = {int(index) for index in usable}
+    events_by_grid: dict[int, dict[datetime, dict[str, list[int]]]] = {}
+    for (sat_index, grid_index), windows in store.windows.items():
+        sat_index = int(sat_index)
+        if sat_index not in usable_set:
+            continue
+        grid_events = events_by_grid.setdefault(int(grid_index), {})
+        for window in windows:
+            grid_events.setdefault(window.start_utc, {"start": [], "end": []})[
+                "start"
+            ].append(sat_index)
+            grid_events.setdefault(window.end_utc, {"start": [], "end": []})[
+                "end"
+            ].append(sat_index)
+
+    candidates: set[tuple[int, ...]] = set()
+    for grid_index in sorted(events_by_grid):
+        events = events_by_grid[grid_index]
+        timestamps = sorted(events)
+        active: set[int] = set()
+        for position, timestamp in enumerate(timestamps[:-1]):
+            event = events[timestamp]
+            # 半开区间 [start, end)：同一时刻先移除结束窗口，再加入开始窗口。
+            for sat_index in event["end"]:
+                active.discard(sat_index)
+            for sat_index in event["start"]:
+                active.add(sat_index)
+            if timestamps[position + 1] <= timestamp or len(active) < k:
+                continue
+            for candidate in combinations(sorted(active), k):
+                candidates.add(tuple(candidate))
+                if len(candidates) >= max_candidates:
+                    return tuple(sorted(candidates))
+    return tuple(sorted(candidates))
+
+
 def _art_result(
     store: OpportunityStore,
     selected: Sequence[int],
@@ -2027,7 +2087,24 @@ def greedy_select_art(
     current = _evaluate_art(store, selected, min_simultaneous)
     iterations = 0
 
-    # 正向贪心：每轮选择让 ART 字典序下降最多的卫星。
+    if min_simultaneous > 1 and limit >= min_simultaneous:
+        seeds = _art_overlap_seed_candidates(store, usable, min_simultaneous)
+        best_seed: tuple[int, ...] | None = None
+        best_seed_metrics: RegionalMetricsResult | None = None
+        best_seed_score = _score_art(current, mrt_area_quantile_pct)
+        for seed in seeds:
+            metrics = _evaluate_art(store, seed, min_simultaneous)
+            score = _score_art(metrics, mrt_area_quantile_pct)
+            if best_seed_metrics is None or _score_art_better(score, best_seed_score):
+                best_seed = seed
+                best_seed_metrics = metrics
+                best_seed_score = score
+        if best_seed is not None and best_seed_metrics is not None:
+            selected = list(best_seed)
+            current = best_seed_metrics
+            iterations = len(selected)
+
+    # 正向贪心：已有 K 重叠见证种子后，每轮再选择让最终 ART 字典序下降最多的卫星。
     while len(selected) < min(limit, len(usable)):
         current_score = _score_art(current, mrt_area_quantile_pct)
         best_index: int | None = None
@@ -2044,11 +2121,7 @@ def greedy_select_art(
                 best_score = score
         if best_index is None or best_metrics is None:
             break
-        if (
-            not exact_budget
-            and min_simultaneous <= len(selected)
-            and not _score_art_better(best_score, current_score)
-        ):
+        if not exact_budget and not _score_art_better(best_score, current_score):
             break
         selected.append(best_index)
         current = best_metrics
@@ -2117,7 +2190,12 @@ def greedy_select_art(
         exact_budget=exact_budget,
         mrt_area_quantile_pct=mrt_area_quantile_pct,
         status="feasible_heuristic",
-        note="贪心降低面积加权 ART，并完成单星交换和安全反向删除；结果是近似解。",
+        note=(
+            "K>1 先从真实窗口提取重叠见证种子，再贪心降低面积加权 ART，"
+            "并完成单星交换和安全反向删除；结果是近似解。"
+            if min_simultaneous > 1
+            else "贪心降低面积加权 ART，并完成单星交换和安全反向删除；结果是近似解。"
+        ),
         iterations=iterations,
         exchange_count=exchange_count,
         deletion_count=deletion_count,

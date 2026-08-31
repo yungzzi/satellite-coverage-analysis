@@ -11,6 +11,7 @@
 - [SIRIAgent 区域时间覆盖与选星数学依据](current/SIRIAgent区域时间覆盖与选星数学依据.md)：区域指标与选星约束。
 - [SIRIAgent 同机 Skill 使用与验收](current/SIRIAgent同机Skill使用与验收.md)：当前可调用入口、验收命令、Agent 用法和局限。
 - [SIRIAgent 平台 110 星目录与 Profile 基线](current/SIRIAgent平台110星目录与Profile基线.md)：平台目录审计、TLE 映射、幅宽 Profile、SAR 缺参规则和 11 城性能。
+- [SIRIAgent 平台默认业务验收报告](current/SIRIAgent平台默认业务验收报告.md)：绍兴 88 星、五项任务与 K=2/K=3 的真实结果、问题修正和复现方法。
 - [浙江 11 地市边界与网格基线](current/浙江11地市边界与网格基线.md)：边界来源、GCJ-02→WGS84 转换、哈希与全市 5 km 网格验收。
 - [SIRIAgent 后端部署白话说明](current/SIRIAgent后端部署白话说明.md)：当前同机决策，以及 FastAPI、Docker、Vercel 等跨机备用概念。
 

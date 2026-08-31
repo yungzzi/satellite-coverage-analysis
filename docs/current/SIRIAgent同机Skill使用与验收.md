@@ -140,6 +140,17 @@ $python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖
 平台目录自检会核对 110/110 TLE、默认 88 颗候选、矩形幅宽、SAR 缺参保护和宁波快速端到端；
 Skill 自检会验证六种调用语义、K=3 入参、五项选星分派，以及真实杭州边界+真实 TLE 的同链路执行。
 
+需要复跑完整业务验收时，再执行（约 1～2 分钟，输出 JSON 不入库）：
+
+```powershell
+& $python -B src\benchmark_siriagent_business.py `
+  --output output\siriagent_business_acceptance_shaoxing.json
+```
+
+通过标准是“业务验收：通过；技术失败 0 项”。离散模型与原始窗口排序差异可以作为科学发现被记录，
+但不能存在错误的预算、窗口、可行性或最优性声明。固定结果见
+[SIRIAgent平台默认业务验收报告.md](SIRIAgent平台默认业务验收报告.md)。
+
 ## 4. 怎样让 Agent 用
 
 ### Codex
@@ -193,3 +204,5 @@ Skill 会按任务只追问必需参数。项目内 Skill 位于 `.agents/skills
 说明参数、追问缺参、执行五项选星并返回结构化结果。**不应在补齐真实沿轨/SAR Profile、完成平台
 注册和前端联调前，对外声称已是 SIRIAgent 生产系统。详细数据见
 [SIRIAgent平台110星目录与Profile基线.md](SIRIAgent平台110星目录与Profile基线.md)。
+五项任务和 K=2/K=3 的真实业务验收见
+[SIRIAgent平台默认业务验收报告.md](SIRIAgent平台默认业务验收报告.md)。

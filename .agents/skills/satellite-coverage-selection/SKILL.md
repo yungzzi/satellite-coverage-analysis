@@ -22,7 +22,9 @@ description: 计算浙江城市的卫星区域覆盖窗口，并执行五项虚�
 - `min_simultaneous` 是同一网格同一时刻至少覆盖的卫星数 K，不是窗口次数。
 - 代表点不带半径圆；区域面积使用裁剪网格的真实面积权重。
 - 严格目标不可行时只能显式报告并按请求尝试面积降级，不得静默降低门槛。
-- `proven_optimal` 才能称为离散模型已证明最优；任务⑤固定为贪心近似。
+- `proven_optimal` 才能称最终窗口业务目标已证明最优；`proven_discrete_optimal` 只证明离散时间片或
+  MRT 桶模型最优，不能扩大解释为连续窗口全局最优。任务③会比较贪心/ILP 的原始窗口结果后再推荐，
+  任务⑤固定为贪心近似。
 - 平台目录 Profile 不是完整厂家 Profile：非 SAR 的沿轨 60°是场景假设；3 颗 SAR 缺原生入射角带时必须阻止圆锥降级。请求“全部”若排除了缺参 SAR，不得称为完整 110 星全池最优。
 - `optical_rectangular_validation_v1` 等固定验收 Profile 只验证调用链，不得描述成平台卫星的真实载荷性能。
 - 高级区域 Profile 支持 `SimpleCone`、`Rectangular`、`Conical`、`HalfPower`、`SAR`，以及 `Fixed`、`GrazingAlt`、`Spinning` 指向；`Targeted` 在区域模式自动跟踪全体保留网格代表点的面积加权形心，不是每个网格点各自独立转轴。

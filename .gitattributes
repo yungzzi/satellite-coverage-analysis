@@ -1,0 +1,6 @@
+# 这些文件的 SHA-256 进入边界清单，Windows 检出时不能自动改换行符。
+data/geo/*.json text eol=lf
+data/geo/metadata/*.json text eol=lf
+
+# 原始 DataV 响应是字节级审计快照，必须按仓库中的原始字节保存。
+data/geo/raw_datav_gcj02/*.json -text

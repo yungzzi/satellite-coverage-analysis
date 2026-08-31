@@ -41,9 +41,20 @@ SAR 入射角带、矩形/锥形视场、侧摆/旋转姿态、指向或约束�
 
 `sensor_profile` 是全局覆盖配置；`satellite_profile_overrides` 按 NORAD 覆盖其中字段。
 支持的传感器类型为 `SimpleCone`、`Rectangular`、`Conical`、`HalfPower`、`SAR`；支持的区域
-统一指向为 `Fixed`、`GrazingAlt`、`Spinning`。`Targeted` 是对单个目标点逐时刻指向，不能
-代表整座城市的同时覆盖，因此区域 Skill 会拒绝。姿态 `profile` 使用项目已有的 0～4 定义；
+统一指向为 `Fixed`、`GrazingAlt`、`Spinning`；区域模式还支持 `Targeted`，但它自动把目标设为
+所有保留网格代表点的面积加权形心，表示整座区域共用一个跟踪目标，不是每个网格点各自转轴。
+姿态 `profile` 使用项目已有的 0～4 定义；
 约束对象的具体字段沿用 `src/sensor_geometry.py` 的既有实现。
+
+形心口径不是直接平均经纬度。对第 `g` 个网格代表点在冻结等面积投影中的坐标
+`(x_g, y_g)` 和裁剪面积 `a_g`，先计算：
+
+```text
+x_c = Σ(a_g · x_g) / Σ(a_g),    y_c = Σ(a_g · y_g) / Σ(a_g)
+```
+
+再把 `(x_c, y_c)` 反投影到 WGS84，作为 Targeted 的唯一地面跟踪目标。这样与区域面积统计
+使用同一套网格和权重，避免经纬度单位不等距造成偏差。
 
 高级参数必须有明确物理来源，Skill 不会把缺少的载荷数值自动猜成“真实卫星参数”。结果中的
 `profile.mode`、`profile.effective_config` 和 `profile.satellite_profile_overrides` 用来回显本次

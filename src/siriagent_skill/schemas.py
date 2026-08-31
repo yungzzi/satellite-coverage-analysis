@@ -450,7 +450,7 @@ def describe_capabilities(
             "默认 8 小时，K 默认 1；K 首版支持 1～3。",
             "任务①③的时间覆盖率目标与城市空间覆盖率不是同一个参数。",
             "普通请求使用 profile_slug 预设；只有用户明确提出高级传感器/姿态需求时才传 sensor_profile。",
-            "高级区域请求支持 SimpleCone、Rectangular、Conical、HalfPower、SAR，以及 Fixed/GrazingAlt/Spinning 指向；Targeted 不用于整市区域覆盖。",
+            "高级区域请求支持 SimpleCone、Rectangular、Conical、HalfPower、SAR，以及 Fixed/GrazingAlt/Spinning 指向；Targeted 自动跟踪区域网格形心。",
             "正式载荷接入前必须用平台逐星参数替换验收 Profile。",
         ],
     }
@@ -599,9 +599,13 @@ def _normalize_profile_object(value: Any, name: str = "sensor_profile") -> dict[
                     details={"allowed_pointing_types": ["Fixed", "GrazingAlt", "Spinning", "Targeted"]},
                 )
             if pointing_type == "Targeted":
-                raise SkillInputError(
-                    "区域 Skill 不接受 Targeted 指向；请改用 Fixed、GrazingAlt 或 Spinning。"
-                )
+                # 区域口径会自动把 Targeted 的目标设为全体保留网格代表点的
+                # 面积加权形心；不允许再混入另一套手工目标坐标。
+                if any(key in pointing for key in ("target", "target_lat", "target_lon")):
+                    raise SkillInputError(
+                        f"{name}.pointing 的 Targeted 目标由区域网格形心自动确定，"
+                        "不需要也不允许手工传 target 坐标。"
+                    )
             pointing["type"] = pointing_type
         profile["pointing"] = pointing
     if "attitude" in profile and profile["attitude"] not in (None, ""):

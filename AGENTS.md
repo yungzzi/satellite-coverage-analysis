@@ -57,12 +57,18 @@
   `.agents/skills/satellite-coverage-selection/`；`src/validate_siriagent_skill.py` 已通过综合自检。浙江省及
   11 地市边界已全部冻结：原始 DataV/高德 2021-05 GCJ-02 快照保留在
   `data/geo/raw_datav_gcj02/`，计算文件由固定迭代逆变换归一为 WGS84，并在
-  `data/geo/metadata/zhejiang_boundaries.json` 记录源文件、转换文件和几何哈希。内置 Profile 仍是
-  接入验收参数，不是真实载荷。
+  `data/geo/metadata/zhejiang_boundaries.json` 记录源文件、转换文件和几何哈希。
   现已支持普通请求按预设运行；用户明确提出高级需求时，可通过 `sensor_profile` 和
   `satellite_profile_overrides` 将已有复杂传感器、统一指向、姿态和约束参数接入区域路径，结果会回显
   `profile.effective_config`。区域 `Targeted` 统一跟踪所有保留网格代表点的面积加权形心，
   不再逐网格点独立转轴。
+- 平台 110 星目录已冻结为 `data/platform/siriagent_110_catalog.json`，NORAD 与固定 TLE 快照
+  `data/test_data/siriagent_110_snapshot.tle` 110/110 匹配。默认“可见光且分辨率不差于 1 m”候选池为
+  88 颗；`siriagent_catalog_swath_v1` 对 107 颗非 SAR 由逐星幅宽生成矩形跨轨范围，沿轨 60°明确为
+  场景假设。3 颗 SAR 因平台未给原生入射角带而阻止圆锥降级。完整审计和 11 城基准见
+  `docs/current/SIRIAgent平台110星目录与Profile基线.md`。
+- 默认 88 星、8 小时、5 km、10 秒检测的 11 城顺序基准总计约 286 秒；单城市 12～38 秒，耗时与
+  网格数近似线性。下一步不是继续猜载荷参数，而是取得真实光学沿轨/SAR Profile 和平台注册样例。
 - 11 个城市边界已记录 `adcode`、边界版本/哈希、源坐标系和转换方法；每次网格结果继续记录投影、
   格长和原点。以后若换平台边界，必须先比较版本、坐标系和哈希，未知坐标系不可直接与 WGS84
   轨道地面点混用。
@@ -95,6 +101,9 @@ src/
 ├── regional_metrics.py       新区域指标与城市汇总
 ├── regional_selection.py     新区域任务①～⑤（支持 K=1/K>1）选星
 ├── siriagent_skill/           同机 Skill Schema、编排、人类可读输出与 JSON 入口
+├── prepare_siriagent_catalog.py 平台卫星字段清洗、NORAD/TLE 冻结
+├── siriagent_catalog.py       平台目录筛选与逐星 Profile 适配
+├── benchmark_siriagent_catalog.py  平台默认候选池 × 11 市性能基准
 ├── benchmark_regional_k.py   真实城市网格 K=1/K=2 性能基准
 ├── loader_app.py / cli.py    本地 GUI / CLI
 ├── satellite_loader.py       TLE、目录与缓存

@@ -11,7 +11,7 @@ description: 计算浙江城市的卫星区域覆盖窗口，并执行五项虚�
 
 1. 先判断用户要“只分析覆盖”还是五项选星任务之一。任务不明确时，运行 `scripts/run_skill.py --describe --pretty`，向用户列出六种 operation。
 2. 确定任务后，只询问该任务的必填参数。需要完整字段时读取 [参数与结果约定](references/input-output-schema.md)，不要把平台旧的空间 `coverage_target_pct` 猜成网格时间覆盖率。
-3. 普通用户按 `profile_slug` 预设直接计算；只有用户明确提出 SAR、矩形/锥形视场、侧摆、旋转、姿态偏置或光照/约束等高级要求时，才读取参数约定中的高级 Profile 字段并追问缺少的高级参数。不要替用户臆造传感器数值。
+3. 普通用户默认使用 `siriagent_catalog_swath_v1`：平台 110 星目录按“可见光、分辨率不差于 1 m”筛为 88 颗，分辨率只筛选，逐星幅宽按矩形跨轨范围计算。只有用户明确提出 SAR、其他传感器类别、矩形/锥形视场、侧摆、旋转、姿态偏置或光照/约束等高级要求时，才读取参数约定中的高级 Profile 字段并追问缺少的高级参数。不要替用户臆造传感器数值。
 4. 将用户输入组成 JSON，运行 `scripts/run_skill.py --input-file <json文件> --pretty`；也可以通过标准输入传 JSON。
 5. 若返回 `needs_input`，按 `missing_fields` 和 `parameter_hints` 继续提问，不启动重计算。
 6. 若返回 `completed`，先回答是否可行、是否从严格面积降级、推荐卫星和最优性，再展示指标卡、薄弱区域和最有用的覆盖窗口。高级请求还要说明结果中的 `profile.mode=advanced` 和 `profile.effective_config` 是本次实际使用的配置。
@@ -23,7 +23,8 @@ description: 计算浙江城市的卫星区域覆盖窗口，并执行五项虚�
 - 代表点不带半径圆；区域面积使用裁剪网格的真实面积权重。
 - 严格目标不可行时只能显式报告并按请求尝试面积降级，不得静默降低门槛。
 - `proven_optimal` 才能称为离散模型已证明最优；任务⑤固定为贪心近似。
-- 固定验收 Profile 只验证调用链，不得描述成平台卫星的真实载荷性能。
+- 平台目录 Profile 不是完整厂家 Profile：非 SAR 的沿轨 60°是场景假设；3 颗 SAR 缺原生入射角带时必须阻止圆锥降级。请求“全部”若排除了缺参 SAR，不得称为完整 110 星全池最优。
+- `optical_rectangular_validation_v1` 等固定验收 Profile 只验证调用链，不得描述成平台卫星的真实载荷性能。
 - 高级区域 Profile 支持 `SimpleCone`、`Rectangular`、`Conical`、`HalfPower`、`SAR`，以及 `Fixed`、`GrazingAlt`、`Spinning` 指向；`Targeted` 在区域模式自动跟踪全体保留网格代表点的面积加权形心，不是每个网格点各自独立转轴。
 - 逐星配置放在 `satellite_profile_overrides`，按 `norad_id` 覆盖全局 `sensor_profile`；普通请求不要传这两个字段。
 

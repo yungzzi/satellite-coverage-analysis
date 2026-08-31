@@ -19,12 +19,26 @@
 
 ## 普通预设与高级 Profile
 
-普通请求只传 `profile_slug`（或省略，使用默认验收预设）即可。只有用户明确提出“使用
+普通请求可省略 `profile_slug`，默认使用 `siriagent_catalog_swath_v1` 和配套的
+`siriagent_110_snapshot`。平台目录默认按 `catalog_sensor_type="可见光"`、
+`max_resolution_m=1.0` 筛出 88 颗候选；分辨率只筛选，非 SAR 的逐星幅宽生成矩形跨轨范围。
+
+若要修改目录筛选，可传：
+
+```json
+{
+  "catalog_sensor_type": "可见光",
+  "max_resolution_m": 1.0
+}
+```
+
+3 颗 SAR 只有幅宽、没有原生入射角带，默认不会退回圆锥；SAR 请求缺参会返回 `invalid_input`。
+只有用户明确提出“使用
 SAR 入射角带、矩形/锥形视场、侧摆/旋转姿态、指向或约束”等高级要求时，才传下面两个字段：
 
 ```json
 {
-  "profile_slug": "optical_rectangular_validation_v1",
+  "profile_slug": "siriagent_catalog_swath_v1",
   "sensor_profile": {
     "sensor_type": "SAR",
     "sensor_params": [12, 70, 30, 30],
@@ -59,6 +73,8 @@ x_c = Σ(a_g · x_g) / Σ(a_g),    y_c = Σ(a_g · y_g) / Σ(a_g)
 高级参数必须有明确物理来源，Skill 不会把缺少的载荷数值自动猜成“真实卫星参数”。结果中的
 `profile.mode`、`profile.effective_config` 和 `profile.satellite_profile_overrides` 用来回显本次
 实际计算配置；`mode=preset` 表示完全使用预设，`mode=advanced` 表示至少有一个高级字段生效。
+平台目录模式还会在 `input_summary.catalog_mapping`、`profile.catalog_mapping` 和
+`reproducibility.catalog_sha256` 回显筛选条件、被阻止卫星和目录版本。
 
 ## 最小请求示例
 

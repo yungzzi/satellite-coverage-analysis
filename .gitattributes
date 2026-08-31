@@ -4,3 +4,7 @@ data/geo/metadata/*.json text eol=lf
 
 # 原始 DataV 响应是字节级审计快照，必须按仓库中的原始字节保存。
 data/geo/raw_datav_gcj02/*.json -text
+
+# 平台目录清单和其 TLE 哈希同样需要跨平台稳定。
+data/platform/*.json text eol=lf
+data/test_data/siriagent_110_snapshot.tle text eol=lf

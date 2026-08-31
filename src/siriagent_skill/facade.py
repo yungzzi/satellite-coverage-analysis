@@ -16,6 +16,7 @@ import regional_metrics
 import regional_opportunities
 import regional_selection
 import satellite_loader
+import siriagent_catalog
 from region_grid import build_clipped_grid, load_city_boundary
 
 from .formatter import (
@@ -66,7 +67,7 @@ def _resolve_project_file(root: Path, value: str) -> Path:
 def _load_satellites(
     request: SkillRequest,
     root: Path,
-) -> tuple[list[Any], Any, Path, str]:
+) -> tuple[list[Any], Any, Path, str, dict[str, Any] | None]:
     tle_value = request.tle_path or TLE_SOURCES[request.tle_source]
     tle_path = _resolve_project_file(root, tle_value)
     tle_bytes = tle_path.read_bytes()
@@ -76,7 +77,87 @@ def _load_satellites(
         raise SkillInputError("TLE 文件必须是 UTF-8 文本。") from exc
     timescale = satellite_loader.load.timescale(builtin=True)
     satellites = satellite_loader.parse_tle_text(tle_text, ts=timescale)
-    if request.satellite_ids is not None:
+    catalog_context: dict[str, Any] | None = None
+    use_catalog = (
+        request.tle_source == "siriagent_110_snapshot"
+        or request.profile_slug == siriagent_catalog.CATALOG_PROFILE_SLUG
+    )
+    if use_catalog:
+        try:
+            catalog = siriagent_catalog.load_catalog(root)
+            entries = siriagent_catalog.select_entries(
+                catalog,
+                sensor_type=request.catalog_sensor_type,
+                max_resolution_m=request.max_resolution_m,
+                satellite_ids=request.satellite_ids,
+            )
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            raise SkillInputError(f"SIRIAgent 冻结目录不可用：{exc}") from exc
+        if request.satellite_ids is not None:
+            catalog_ids = {int(item["norad_id"]) for item in entries}
+            filtered_ids = sorted(set(request.satellite_ids) - catalog_ids)
+            if filtered_ids:
+                raise SkillInputError(
+                    "部分 satellite_ids 不满足平台目录的传感器/分辨率筛选。",
+                    details={"filtered_satellite_ids": filtered_ids},
+                )
+        if not entries:
+            raise SkillInputError(
+                "平台目录筛选后没有候选卫星。",
+                details={
+                    "catalog_sensor_type": request.catalog_sensor_type,
+                    "max_resolution_m": request.max_resolution_m,
+                },
+            )
+        profile_overrides: list[dict[str, Any]] = []
+        blocked: list[dict[str, Any]] = []
+        if (
+            request.profile_slug == siriagent_catalog.CATALOG_PROFILE_SLUG
+            and request.sensor_profile is None
+        ):
+            profile_overrides, blocked = siriagent_catalog.build_catalog_overrides(
+                entries,
+                user_overrides=request.satellite_profile_overrides,
+            )
+            ready_ids = {int(item["norad"]) for item in profile_overrides}
+            entries = [item for item in entries if int(item["norad_id"]) in ready_ids]
+            if not entries:
+                raise SkillInputError(
+                    "候选卫星都缺少可运行的几何 Profile。SAR 必须补充原生入射角带。",
+                    details={"blocked_satellites": blocked},
+                )
+        allowed_ids = {int(item["norad_id"]) for item in entries}
+        satellites = [sat for sat in satellites if int(sat.norad_id) in allowed_ids]
+        found_ids = {int(sat.norad_id) for sat in satellites}
+        missing_tle_ids = sorted(allowed_ids - found_ids)
+        if missing_tle_ids:
+            raise SkillInputError(
+                "当前 TLE 文件缺少平台目录筛选后的候选卫星，不能静默缩小候选池。",
+                details={"missing_tle_satellite_ids": missing_tle_ids},
+            )
+        entry_by_id = {int(item["norad_id"]): item for item in entries}
+        for sat in satellites:
+            entry = entry_by_id[int(sat.norad_id)]
+            # Satellite 包装类原本就预留 sensor 铭牌；这里只附目录展示字段，
+            # 几何仍由下方版本化 Profile override 决定。
+            sat.sensor = {
+                "sensor_class": entry["sensor_class"],
+                "resolution_m": float(entry["resolution_m"]),
+                "swath_km": float(entry["swath_km"]),
+                "profile_engine_ready": bool((entry.get("profile") or {}).get("engine_ready")),
+            }
+        catalog_context = {
+            "path": catalog["_catalog_path"],
+            "sha256": catalog["_catalog_sha256"],
+            "snapshot_label": catalog.get("snapshot_label"),
+            "profile_policy_version": catalog.get("profile_policy_version"),
+            "sensor_type_filter": request.catalog_sensor_type,
+            "max_resolution_m": request.max_resolution_m,
+            "selected_catalog_count": len(satellites),
+            "blocked_satellites": blocked,
+            "profile_overrides": profile_overrides,
+        }
+    elif request.satellite_ids is not None:
         wanted = set(request.satellite_ids)
         satellites = [sat for sat in satellites if int(sat.norad_id) in wanted]
         found = {int(sat.norad_id) for sat in satellites}
@@ -101,7 +182,7 @@ def _load_satellites(
         raise SkillInputError(
             f"n_budget={request.n_budget} 超过候选卫星数 {len(satellites)}。"
         )
-    return satellites, timescale, tle_path, _sha256_bytes(tle_bytes)
+    return satellites, timescale, tle_path, _sha256_bytes(tle_bytes), catalog_context
 
 
 def _leaf(result: Any) -> Any:
@@ -268,8 +349,9 @@ def _request_summary(
     *,
     tle_path: Path,
     satellite_count: int,
+    catalog_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    return {
+    summary = {
         "operation": request.operation,
         "city_adcode": request.city_adcode,
         "start_utc": request.start_utc.isoformat().replace("+00:00", "Z"),
@@ -278,6 +360,8 @@ def _request_summary(
         "tle_source": request.tle_source,
         "tle_path": str(tle_path),
         "candidate_satellite_count": satellite_count,
+        "catalog_sensor_type": request.catalog_sensor_type,
+        "max_resolution_m": request.max_resolution_m,
         "profile_slug": request.profile_slug,
         "advanced_mode": bool(
             request.sensor_profile or request.satellite_profile_overrides
@@ -289,6 +373,19 @@ def _request_summary(
         "min_simultaneous": request.min_simultaneous,
         "method": request.method,
     }
+    if catalog_context:
+        summary["catalog_mapping"] = {
+            key: deepcopy(catalog_context[key])
+            for key in (
+                "snapshot_label",
+                "profile_policy_version",
+                "sensor_type_filter",
+                "max_resolution_m",
+                "selected_catalog_count",
+                "blocked_satellites",
+            )
+        }
+    return summary
 
 
 def execute_request(
@@ -300,7 +397,9 @@ def execute_request(
 
     project_root = Path(root).resolve() if root else PROJECT_ROOT
     total_start = time.perf_counter()
-    satellites, timescale, tle_path, tle_hash = _load_satellites(request, project_root)
+    satellites, timescale, tle_path, tle_hash, catalog_context = _load_satellites(
+        request, project_root
+    )
     boundary_path = project_root / "data" / "geo" / f"{request.city_adcode}.json"
     if not boundary_path.is_file():
         raise SkillInputError(
@@ -319,7 +418,13 @@ def execute_request(
     if request.sensor_profile:
         # 高级字段只覆盖用户明确给出的项；没有给出的项仍沿用预设。
         config.update(deepcopy(request.sensor_profile))
-    if request.satellite_profile_overrides:
+    if (
+        catalog_context
+        and request.profile_slug == siriagent_catalog.CATALOG_PROFILE_SLUG
+        and request.sensor_profile is None
+    ):
+        config["sat_sensor_overrides"] = deepcopy(catalog_context["profile_overrides"])
+    elif request.satellite_profile_overrides:
         # 对外使用 norad_id；区域几何内部沿用历史实现使用的 norad 键。
         config["sat_sensor_overrides"] = [
             {"norad": int(item["norad_id"]), **{
@@ -409,6 +514,7 @@ def execute_request(
             request,
             tle_path=tle_path,
             satellite_count=len(satellites),
+            catalog_context=catalog_context,
         ),
         "profile": {
             "slug": request.profile_slug,
@@ -418,6 +524,14 @@ def execute_request(
                 deepcopy(item) for item in request.satellite_profile_overrides
             ],
             "targeting": deepcopy(store.metadata.get("targeting")),
+            "catalog_mapping": {
+                "catalog_sha256": catalog_context["sha256"],
+                "profile_policy_version": catalog_context["profile_policy_version"],
+                "generated_override_count": len(catalog_context["profile_overrides"]),
+                "blocked_satellites": deepcopy(catalog_context["blocked_satellites"]),
+            }
+            if catalog_context
+            else None,
         },
         "city": {
             "adcode": grid.adcode,
@@ -441,9 +555,23 @@ def execute_request(
             "geojson": build_debug_map(store, metrics) if request.debug else None,
         },
         "assumptions": assumptions,
-        "warnings": [
-            "当前内置 TLE 和 Profile 用于 Skill 接入验收；正式平台目录映射尚待研发注册样例和逐星参数。"
-        ],
+        "warnings": (
+            [
+                "平台 110 星目录与 TLE 已冻结；分辨率只作候选筛选，平台 orbit_period_min 不参与计算。",
+                "非 SAR 跨轨宽度来自平台 swath_km，沿轨 60°仍是场景假设；尚不能称为厂家验证的真实载荷 Profile。",
+            ]
+            + (
+                [
+                    f"有 {len(catalog_context['blocked_satellites'])} 颗 SAR 因缺原生入射角带已从候选池排除。"
+                ]
+                if catalog_context["blocked_satellites"]
+                else []
+            )
+            if catalog_context
+            else [
+                "当前内置 TLE 和 Profile 用于 Skill 接入验收；正式平台逐星载荷参数仍待补齐。"
+            ]
+        ),
         "timings_s": {
             "grid": round(grid_seconds, 4),
             "opportunities": round(opportunity_seconds, 4),
@@ -458,6 +586,10 @@ def execute_request(
                 json.dumps(config, sort_keys=True).encode("utf-8")
             ),
             "profile_slug": request.profile_slug,
+            "catalog_sha256": catalog_context["sha256"] if catalog_context else None,
+            "profile_policy_version": (
+                catalog_context["profile_policy_version"] if catalog_context else None
+            ),
         },
         "debug_artifacts": {
             "grid_metrics": metrics.to_grid_rows(),

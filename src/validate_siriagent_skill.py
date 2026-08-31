@@ -36,7 +36,10 @@ def test_describe_and_missing_parameters() -> None:
     assert len(described["tasks"]) == 6
     assert described["mcp_required"] is False
     assert described["fastapi_required"] is False
-    assert {item["adcode"] for item in described["available_cities"]} >= {"330100"}
+    assert {item["adcode"] for item in described["available_cities"]} >= {
+        "330000", "330100", "330200", "330300", "330400", "330500",
+        "330600", "330700", "330800", "330900", "331000", "331100",
+    }
     described_task5 = run_skill(
         {"action": "describe", "describe_operation": "task5"}, root=ROOT
     )
@@ -68,6 +71,7 @@ def test_describe_and_missing_parameters() -> None:
         root=ROOT,
     )
     assert invalid_targeted["status"] == "invalid_input"
+    assert normalize_request({"operation": "coverage_only", "city": "宁波"}).city_adcode == "330200"
     print("[通过] describe、任务参数提示、缺参和 K 范围校验")
 
 

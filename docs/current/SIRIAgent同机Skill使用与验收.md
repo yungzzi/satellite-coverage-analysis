@@ -113,12 +113,15 @@ $python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖
 ### 第六步：跑自动回归
 
 ```powershell
+& $python src\validate_zhejiang_boundaries.py
+& $python src\validate_region_grid.py
 & $python src\validate_siriagent_skill.py
 & $python src\validate_regional_selection.py
 ```
 
-通过标准：前者应包含高级 Profile 校验并全部通过，后者 `7/7`。前者会验证六种调用语义、K=3 入参、
-五项选星分派，以及真实杭州边界+真实 TLE 的同链路执行。
+通过标准：浙江边界 `4/4`、区域格网 `4/4`、Skill `3/3`、区域选星 `7/7`。边界自检会遍历
+11 市 5 km 网格；Skill 自检会验证六种调用语义、K=3 入参、五项选星分派，以及真实杭州
+边界+真实 TLE 的同链路执行。
 
 ## 4. 怎样让 Agent 用
 
@@ -155,7 +158,8 @@ Skill 会按任务只追问必需参数。项目内 Skill 位于 `.agents/skills
 
 ## 5. 当前验收边界（不能误当正式产品）
 
-- 项目中目前只冻结了浙江省 `330000` 和杭州市 `330100` 边界，不是 11 地市已全部就绪；
+- 浙江省及 11 地市边界已全部冻结；原始 DataV/高德 2021-05 GCJ-02 快照和转换后的 WGS84
+  计算文件都有版本与哈希。平台若要求使用另一套边界，仍需先比较后重新验收；
 - `jilin1_test` 和 `china_remote_sensing_test` 是固定验收 TLE，还没有映射平台 110 星目录；
 - `optical_rectangular_validation_v1` 与 `simple_cone_benchmark_v1` 是验收/回归 Profile，不是真实逐星光学幅宽或 SAR 入射角；
 - 高级 `sensor_profile`/`satellite_profile_overrides` 已能把已有复杂传感器、姿态和约束引擎接到区域 Skill，
@@ -163,4 +167,4 @@ Skill 会按任务只追问必需参数。项目内 Skill 位于 `.agents/skills
 - 当前输出是 JSON 数据，覆盖薄弱区前端地图还需 SIRIAgent 平台展示层对接；
 - 当前是同步、单次调用，尚未做跨请求缓存和任务队列。
 
-因此，这一版可验收的是：**Skill 能正确说明参数、追问缺参、调用真实区域引擎、执行五项选星并返回结构化结果。**不应在补齐正式边界、星目录和载荷 Profile 前，对外声称已是 SIRIAgent 生产系统。
+因此，这一版可验收的是：**Skill 能正确说明参数、追问缺参、调用真实区域引擎、执行五项选星并返回结构化结果。**不应在补齐平台星目录和真实载荷 Profile、完成平台联调前，对外声称已是 SIRIAgent 生产系统。

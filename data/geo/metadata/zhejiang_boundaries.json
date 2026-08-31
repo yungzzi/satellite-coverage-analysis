@@ -1,0 +1,131 @@
+{
+  "boundary_version": "datav-areas_v3-amap-2021-05-wgs84-v1",
+  "coordinate_system_documentation": "https://help.aliyun.com/zh/datav/datav-7-0/user-guide/map-data-format-1",
+  "coordinate_transform": "gcj02_to_wgs84_iterative_v1",
+  "dataset": "DataV areas_v3 / AMap 2021-05",
+  "geometry_crs": "EPSG:4326",
+  "regions": [
+    {
+      "adcode": "330000",
+      "geometry_sha256": "2b8c87405e05bef197c60ce761b6e7e4ee240b7d2c2e84ab6429683f21779e77",
+      "name": "浙江省",
+      "normalized_path": "data/geo/330000.json",
+      "normalized_sha256": "a72f2a4eee8220f63dae5edb90961b8e6c652351afaabefa792168f375406008",
+      "raw_path": "data/geo/raw_datav_gcj02/330000.json",
+      "raw_sha256": "6f77e046a8938bc703fa69b630fd616f46b761ad32f46675dd32d32ecdb1d24c",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330000.json"
+    },
+    {
+      "adcode": "330100",
+      "geometry_sha256": "8703ec576c7e9c69d184385867d9e235dd3d1ed1bc365a2f6d0cf2c16529db2a",
+      "name": "杭州市",
+      "normalized_path": "data/geo/330100.json",
+      "normalized_sha256": "8e4ab3a3f5458afa7d5d464637c76387a5f34b45f418b635da16443e7bc8ecbc",
+      "raw_path": "data/geo/raw_datav_gcj02/330100.json",
+      "raw_sha256": "d11e9109aeab2f443bc84e29d47f38f1b31100a570700b947dc1c29e71747ccd",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330100.json"
+    },
+    {
+      "adcode": "330200",
+      "geometry_sha256": "fa60d9ddfe346b4fd9418e8fe9cc9b88e73d2e7f5438ba10e2bfe4f5205ca269",
+      "name": "宁波市",
+      "normalized_path": "data/geo/330200.json",
+      "normalized_sha256": "209a62d9f648df2891761f644fee17c5b30be857eefc4479c0f169d86a3be21b",
+      "raw_path": "data/geo/raw_datav_gcj02/330200.json",
+      "raw_sha256": "f2c42a3125e76c7a096529f283056b92a1dfc38d7aaef51f0071e5640e7f3abc",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330200.json"
+    },
+    {
+      "adcode": "330300",
+      "geometry_sha256": "1e4dbfbe5b105f4e34ccf2f9f3c2ad74ef12d1bd561a11469f1c4be8017cf154",
+      "name": "温州市",
+      "normalized_path": "data/geo/330300.json",
+      "normalized_sha256": "3a089d6ccf69b983dae0b54a81e1a29e793c7bf396609881895eeed09b6eb77d",
+      "raw_path": "data/geo/raw_datav_gcj02/330300.json",
+      "raw_sha256": "128eaf42b260bc2447f0e2a5165ae2802f232ccecbd844df7b16e2a4fc41cc5c",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330300.json"
+    },
+    {
+      "adcode": "330400",
+      "geometry_sha256": "7ebfc34d4437bb7caa145b4f8f9d6a9cc5ec34dce8df48f565381209d629749a",
+      "name": "嘉兴市",
+      "normalized_path": "data/geo/330400.json",
+      "normalized_sha256": "995283474a70ef4513e302dfbf10f2b2755bfa01562a068a206dd97d2e60f6d2",
+      "raw_path": "data/geo/raw_datav_gcj02/330400.json",
+      "raw_sha256": "80d016bdf3962e734cf716e8be701e2562e5674552be80ae8c4ae199d3b6de82",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330400.json"
+    },
+    {
+      "adcode": "330500",
+      "geometry_sha256": "67303ac3a7a47cf8f0f1d4b3250e745f87e4182930d0010b2205b97057decfee",
+      "name": "湖州市",
+      "normalized_path": "data/geo/330500.json",
+      "normalized_sha256": "231422bac58dde0a5c8591f92f079c717fb2a8004dceeadd7ebf8f82b656c7e0",
+      "raw_path": "data/geo/raw_datav_gcj02/330500.json",
+      "raw_sha256": "bebd165a2b69d60d48413f9d1b4ca474a16a1e3ad989cc05c47f372a109636d6",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330500.json"
+    },
+    {
+      "adcode": "330600",
+      "geometry_sha256": "ef4d5d53de964e855fadd56371fcef26080b52b21b85f3889ad6d381c64a7e42",
+      "name": "绍兴市",
+      "normalized_path": "data/geo/330600.json",
+      "normalized_sha256": "737f6c0c4888ff705bb666e8fb69aeeda3f7112008990b9f45c42ea6648016a8",
+      "raw_path": "data/geo/raw_datav_gcj02/330600.json",
+      "raw_sha256": "151a9ce0f9167eee6f0f5e68431fb8209e05e41cdeb393214082a53b2bc372f9",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330600.json"
+    },
+    {
+      "adcode": "330700",
+      "geometry_sha256": "067d488a72f62f7532739228017a8852f5c8709410d7d3ba539ff3b5b66f4f66",
+      "name": "金华市",
+      "normalized_path": "data/geo/330700.json",
+      "normalized_sha256": "dba16c4d8d4da0e5d7c3220f72ea0520153a593b70bac25a26d9254df2f24ca1",
+      "raw_path": "data/geo/raw_datav_gcj02/330700.json",
+      "raw_sha256": "c0f1441993d78e09e0fb5c69f9c7fa868a32dacc0331b712b8475d02f47cc017",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330700.json"
+    },
+    {
+      "adcode": "330800",
+      "geometry_sha256": "b9e5e59a65bbe2834a85f019a5c50ed64b3b2219e00ac01fc1c55dbaae389ba9",
+      "name": "衢州市",
+      "normalized_path": "data/geo/330800.json",
+      "normalized_sha256": "d4971766684ab4ebf337ba1c3bb58dddfe584d438a001fc97b7fdfd038327b29",
+      "raw_path": "data/geo/raw_datav_gcj02/330800.json",
+      "raw_sha256": "cf30bcd1ba2f43e166720f841edb6775932ad235c0c33b46619d4142eec0741c",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330800.json"
+    },
+    {
+      "adcode": "330900",
+      "geometry_sha256": "8e77bea8fd68be20a9c2c8c65a5909a61781916c24eb00aabf0a3413c97287c5",
+      "name": "舟山市",
+      "normalized_path": "data/geo/330900.json",
+      "normalized_sha256": "5e3b31c7deef3aded8f07b5c7725ba54047157705c0a67ee2722550d819d7df4",
+      "raw_path": "data/geo/raw_datav_gcj02/330900.json",
+      "raw_sha256": "d19a1365146e4125a1618489bdb46f766c3c66bd2b604080fded56beb5eac8b3",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/330900.json"
+    },
+    {
+      "adcode": "331000",
+      "geometry_sha256": "f15ea86e6ee3861576a3b290f657b70fe378650094db3b8836c9ab9b00e65ac1",
+      "name": "台州市",
+      "normalized_path": "data/geo/331000.json",
+      "normalized_sha256": "7369c5400acd42f60143f40e97efa6af37c6169d721f1c84ebfd88e2157e916b",
+      "raw_path": "data/geo/raw_datav_gcj02/331000.json",
+      "raw_sha256": "393cf3b09a2c3501e3d2f7b6b25ae7f9571bfb50c4a6d79e9445f4d87791f68f",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/331000.json"
+    },
+    {
+      "adcode": "331100",
+      "geometry_sha256": "d9cc6799c5ae70d2dd5b37fd716edcedf84b66c53b60509e62c62362d805de2a",
+      "name": "丽水市",
+      "normalized_path": "data/geo/331100.json",
+      "normalized_sha256": "9fb0cba3b5f2b27850027f58cab03155dd1137de9b45c748dc241b3bbb6ca177",
+      "raw_path": "data/geo/raw_datav_gcj02/331100.json",
+      "raw_sha256": "cc7d065952f787e4b06537ed1cf38b48071344b3b33183e7cc9ef3f3bde4bf11",
+      "source_url": "https://geo.datav.aliyun.com/areas_v3/bound/331100.json"
+    }
+  ],
+  "source_crs": "GCJ-02",
+  "source_documentation": "https://datav.aliyun.com/portal/school/atlas/area_selector"
+}

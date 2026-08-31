@@ -98,6 +98,33 @@ TLE_SOURCES = {
     "china_remote_sensing_test": "data/test_data/china_remote_sensing_all.tle",
 }
 
+CITY_NAME_TO_CODE = {
+    "浙江": "330000",
+    "浙江省": "330000",
+    "杭州": "330100",
+    "杭州市": "330100",
+    "宁波": "330200",
+    "宁波市": "330200",
+    "温州": "330300",
+    "温州市": "330300",
+    "嘉兴": "330400",
+    "嘉兴市": "330400",
+    "湖州": "330500",
+    "湖州市": "330500",
+    "绍兴": "330600",
+    "绍兴市": "330600",
+    "金华": "330700",
+    "金华市": "330700",
+    "衢州": "330800",
+    "衢州市": "330800",
+    "舟山": "330900",
+    "舟山市": "330900",
+    "台州": "331000",
+    "台州市": "331000",
+    "丽水": "331100",
+    "丽水市": "331100",
+}
+
 # 当前只是可重复验收用的固定 Profile。正式接平台目录时必须按逐星幅宽/传感器表生成
 # Rectangular/SAR 参数，不能把这个演示 Profile 当作真实载荷参数。
 PROFILE_SPECS: dict[str, dict[str, Any]] = {
@@ -695,8 +722,7 @@ def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
         raise SkillNeedsInput(missing, operation)
 
     city_text = str(city_value).strip()
-    city_name_to_code = {"杭州": "330100", "杭州市": "330100", "浙江": "330000", "浙江省": "330000"}
-    city_adcode = city_name_to_code.get(city_text, city_text)
+    city_adcode = CITY_NAME_TO_CODE.get(city_text, city_text)
 
     horizon = _as_float(payload, "analysis_horizon_h", 8.0)
     if not 0.0 < horizon <= 168.0:
@@ -820,6 +846,7 @@ def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
 
 __all__ = [
     "PARAMETER_SPECS",
+    "CITY_NAME_TO_CODE",
     "PROFILE_SPECS",
     "PROJECT_ROOT",
     "SkillInputError",

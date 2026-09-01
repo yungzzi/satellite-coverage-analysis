@@ -5,6 +5,10 @@
 
 ## operation
 
+省略 `operation` 时默认进入 `task_1_min_satellites_temporal`，即覆盖分析后按时间覆盖率目标选出
+尽量少的卫星；此时仍必须提供 `temporal_coverage_target_pct`。只有用户明确要求不选星时才传
+`coverage_only`。
+
 | operation | 含义 | 必填任务参数 |
 | --- | --- | --- |
 | `coverage_only` | 使用全部候选卫星评估区域覆盖 | 无 |

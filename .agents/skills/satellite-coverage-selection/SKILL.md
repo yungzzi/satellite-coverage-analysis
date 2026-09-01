@@ -15,8 +15,8 @@ description: 计算浙江城市的卫星区域覆盖窗口，并执行五项虚�
 
 1. 在新的 Agent/机器首次执行时，运行 `scripts/run_skill.py --self-check --pretty`。只有返回
    `status=ok` 和 `ready_for_direct_agent_use=true` 才启动计算；已在本任务验证过时无需每次重复。
-2. 先判断用户要“只分析覆盖”还是五项选星任务之一。任务不明确时，运行 `scripts/run_skill.py --describe --pretty`，向用户列出六种 operation。
-3. 确定任务后，只询问该任务的必填参数。需要完整字段时读取 [参数与结果约定](references/input-output-schema.md)，不要把平台旧的空间 `coverage_target_pct` 猜成网格时间覆盖率。
+2. 默认将普通区域分析理解为“覆盖分析并选星”，使用任务①：以网格时间覆盖率为主指标，求达到目标所需的最少卫星。缺少 `temporal_coverage_target_pct` 时先追问，不能臆造阈值。只有用户明确说“只看覆盖”“不选星”时才使用 `coverage_only`；用户给出 MRT、卫星预算或其他明确目标时改用对应任务②～⑤。
+3. 确定任务后，只询问该任务的必填参数。需要完整字段时读取 [参数与结果约定](references/input-output-schema.md)，不要把平台旧的空间 `coverage_target_pct` 猜成网格时间覆盖率。任务仍不明确时优先说明推荐的任务①及其含义，再列出其余选星目标，不把“不选星”作为推荐行为。
 4. 普通用户默认使用 `siriagent_catalog_swath_v1`：平台 110 星目录按“可见光、分辨率不差于 1 m”筛为 88 颗，分辨率只筛选，逐星幅宽按矩形跨轨范围计算。只有用户明确提出 SAR、其他传感器类别、矩形/锥形视场、侧摆、旋转、姿态偏置或光照/约束等高级要求时，才读取参数约定中的高级 Profile 字段并追问缺少的高级参数。不要替用户臆造传感器数值。
 5. 将用户输入组成 JSON，运行 `scripts/run_skill.py --input-file <json文件> --pretty`；也可以通过标准输入传 JSON。
 6. 若返回 `needs_input`，按 `missing_fields` 和 `parameter_hints` 继续提问，不启动重计算。

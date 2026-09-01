@@ -50,7 +50,7 @@ python scripts/run_skill.py --self-check --pretty
 `.agents/skills/satellite-coverage-selection/SKILL.md`。新任务中可显式输入：
 
 ```text
-请用 $satellite-coverage-selection 分析宁波未来 8 小时的覆盖情况，不选星。
+请用 $satellite-coverage-selection 分析宁波未来 8 小时的覆盖情况，并按时间覆盖率目标推荐最少卫星。
 ```
 
 也可以自然描述需求，由 Codex 根据 Skill 的 `description` 自动匹配。Skill 更新后通常会自动发现；

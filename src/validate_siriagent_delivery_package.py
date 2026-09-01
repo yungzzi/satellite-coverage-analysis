@@ -52,6 +52,8 @@ def main() -> int:
             "engine/data/test_data/siriagent_110_snapshot.tle",
         ]
         assert all((package / relative).is_file() for relative in required)
+        skill_text = (package / "skill.md").read_text(encoding="utf-8")
+        assert "default: task_1_min_satellites_temporal" in skill_text
         forbidden = ["loader_app.py", "atk_parallel", "output", "tle_cache"]
         package_files = [path.relative_to(package).as_posix() for path in package.rglob("*")]
         assert not any(any(word in relative for word in forbidden) for relative in package_files)
@@ -74,6 +76,39 @@ def main() -> int:
             "task_5_min_area_weighted_art",
         }
         checks.append("覆盖分析与五项选星注册能力")
+
+        default_behavior = _command(
+            launcher,
+            "--input-json",
+            '{"city":"宁波"}',
+            cwd=temp,
+        )["result"]
+        assert default_behavior["status"] == "needs_input"
+        assert default_behavior["operation"] == "task_1_min_satellites_temporal"
+        assert default_behavior["missing_fields"] == ["temporal_coverage_target_pct"]
+        default_run = _command(
+            launcher,
+            "--input-json",
+            json.dumps(
+                {
+                    "city": "杭州",
+                    "temporal_coverage_target_pct": 1,
+                    "start_utc": "2026-08-08T00:00:00Z",
+                    "analysis_horizon_h": 8,
+                    "tle_source": "jilin1_test",
+                    "profile_slug": "optical_rectangular_validation_v1",
+                    "grid_size_km": 30,
+                    "detection_step_s": 60,
+                    "decision_step_s": 60,
+                    "method": "greedy",
+                },
+                ensure_ascii=False,
+            ),
+            cwd=temp,
+        )["result"]
+        assert default_run["status"] == "completed"
+        assert default_run["operation"] == "task_1_min_satellites_temporal"
+        assert default_run["selection"] is not None
 
         coverage = _command(
             launcher,

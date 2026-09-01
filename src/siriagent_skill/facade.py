@@ -10,6 +10,7 @@ import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import regional_metrics
@@ -46,8 +47,72 @@ class TaskOutcome:
     used_area_target_pct: float | None
 
 
+# 同一进程中连续选择不同任务时，覆盖机会窗口完全相同，可以直接复用。
+# 只保留少量最近结果，避免常驻服务长期积累大城市的窗口数据。
+_OPPORTUNITY_CACHE_LIMIT = 2
+_OPPORTUNITY_CACHE: dict[str, regional_opportunities.OpportunityStore] = {}
+_OPPORTUNITY_CACHE_ORDER: list[str] = []
+_OPPORTUNITY_CACHE_LOCK = RLock()
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _opportunity_cache_key(
+    request: SkillRequest,
+    *,
+    project_root: Path,
+    tle_hash: str,
+    grid: Any,
+    config: dict[str, Any],
+    satellites: list[Any],
+) -> str:
+    """为覆盖机会缓存生成稳定键；所有会影响几何结果的输入都必须纳入。"""
+
+    satellite_ids = []
+    for satellite in satellites:
+        value = getattr(satellite, "norad_id", None)
+        if value is None:
+            value = getattr(getattr(satellite, "model", None), "satnum", None)
+        satellite_ids.append(int(value))
+    payload = {
+        "version": 1,
+        "project_root": str(project_root),
+        "tle_hash": tle_hash,
+        "boundary_hash": getattr(grid, "boundary_hash", None),
+        "city_adcode": request.city_adcode,
+        "start_utc": request.start_utc.isoformat(),
+        "end_utc": request.end_utc.isoformat(),
+        "grid_size_km": request.grid_size_km,
+        "detection_step_s": request.detection_step_s,
+        "decision_step_s": request.decision_step_s,
+        "satellite_ids": satellite_ids,
+        "config": config,
+    }
+    return _sha256_bytes(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
+
+
+def _cached_opportunities(key: str) -> regional_opportunities.OpportunityStore | None:
+    with _OPPORTUNITY_CACHE_LOCK:
+        store = _OPPORTUNITY_CACHE.get(key)
+        if store is None:
+            return None
+        if key in _OPPORTUNITY_CACHE_ORDER:
+            _OPPORTUNITY_CACHE_ORDER.remove(key)
+        _OPPORTUNITY_CACHE_ORDER.append(key)
+        return store
+
+
+def _store_cached_opportunities(key: str, store: regional_opportunities.OpportunityStore) -> None:
+    with _OPPORTUNITY_CACHE_LOCK:
+        _OPPORTUNITY_CACHE[key] = store
+        if key in _OPPORTUNITY_CACHE_ORDER:
+            _OPPORTUNITY_CACHE_ORDER.remove(key)
+        _OPPORTUNITY_CACHE_ORDER.append(key)
+        while len(_OPPORTUNITY_CACHE_ORDER) > _OPPORTUNITY_CACHE_LIMIT:
+            old_key = _OPPORTUNITY_CACHE_ORDER.pop(0)
+            _OPPORTUNITY_CACHE.pop(old_key, None)
 
 
 def _resolve_project_file(root: Path, value: str) -> Path:
@@ -435,17 +500,29 @@ def execute_request(
             for item in request.satellite_profile_overrides
         ]
     config["coarse_step_seconds"] = request.detection_step_s
-    opportunity_start = time.perf_counter()
-    store = regional_opportunities.compute_regional_opportunities(
-        satellites,
-        grid,
-        request.start_utc,
-        request.end_utc,
-        config,
-        decision_step_s=request.decision_step_s,
-        cell_chunk_size=256,
-        timescale=timescale,
+    cache_key = _opportunity_cache_key(
+        request,
+        project_root=project_root,
+        tle_hash=tle_hash,
+        grid=grid,
+        config=config,
+        satellites=satellites,
     )
+    opportunity_start = time.perf_counter()
+    store = _cached_opportunities(cache_key)
+    opportunity_cache_hit = store is not None
+    if store is None:
+        store = regional_opportunities.compute_regional_opportunities(
+            satellites,
+            grid,
+            request.start_utc,
+            request.end_utc,
+            config,
+            decision_step_s=request.decision_step_s,
+            cell_chunk_size=256,
+            timescale=timescale,
+        )
+        _store_cached_opportunities(cache_key, store)
     opportunity_seconds = time.perf_counter() - opportunity_start
 
     selection_seconds = 0.0
@@ -582,6 +659,7 @@ def execute_request(
         "timings_s": {
             "grid": round(grid_seconds, 4),
             "opportunities": round(opportunity_seconds, 4),
+            "opportunity_cache_hit": opportunity_cache_hit,
             "metrics": round(metrics_seconds, 4),
             "selection": round(selection_seconds, 4),
             "total": round(time.perf_counter() - total_start, 4),

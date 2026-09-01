@@ -183,6 +183,10 @@ def test_real_city_direct_skill() -> None:
     first_window = result["city_pass_window_table"][0]
     assert first_window["start_utc"] < first_window["end_utc"]
     assert first_window["duration_minutes"] > 0.0
+    cached = run_skill({"operation": "coverage_only", **common}, root=ROOT)
+    assert cached["status"] == "completed"
+    assert cached["timings_s"]["opportunity_cache_hit"] is True
+    assert cached["opportunity_summary"] == result["opportunity_summary"]
     advanced = run_skill(
         {
             "operation": "coverage_only",

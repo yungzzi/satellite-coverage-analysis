@@ -107,7 +107,7 @@ def _summary(result: Mapping[str, Any]) -> str:
         f"{city.get('name', city.get('adcode', '目标区域'))}分析完成："
         f"候选/选中卫星 {cards.get('satellite_count', 0)} 颗，"
         f"城市面积加权时间覆盖率 {cards.get('city_mean_temporal_coverage_pct', 0)}%，"
-        f"面积加权 MRT {cards.get('area_weighted_mrt_minutes', 0)} 分钟。"
+        f"网格最长等待的面积加权平均值 {cards.get('area_weighted_mrt_minutes', 0)} 分钟。"
     )
     if operation != "coverage_only":
         feasible = "达到严格或允许的降级目标" if result.get("feasible") else "未达到目标"
@@ -139,8 +139,8 @@ def _view_html(result: Mapping[str, Any]) -> str:
     card_specs = [
         ("卫星数", cards.get("satellite_count")),
         ("平均时间覆盖率", f"{cards.get('city_mean_temporal_coverage_pct', 0)}%"),
-        ("面积加权 MRT", f"{cards.get('area_weighted_mrt_minutes', 0)} 分钟"),
-        ("面积加权 ART", f"{cards.get('area_weighted_art_minutes', 0)} 分钟"),
+        ("最长等待（面积加权）", f"{cards.get('area_weighted_mrt_minutes', 0)} 分钟"),
+        ("平均等待（面积加权）", f"{cards.get('area_weighted_art_minutes', 0)} 分钟"),
     ]
     card_html = "".join(
         f"<div class=card><span>{html.escape(label)}</span><strong>{html.escape(str(value))}</strong></div>"
@@ -158,7 +158,7 @@ def _view_html(result: Mapping[str, Any]) -> str:
     )
     weak = _table(
         [("grid_id", "薄弱单元"), ("representative_lat", "纬度"), ("representative_lon", "经度"),
-         ("temporal_coverage_pct", "时间覆盖率/%"), ("mrt_minutes", "MRT/分钟")],
+         ("temporal_coverage_pct", "时间覆盖率/%"), ("mrt_minutes", "最长等待/分钟")],
         list(result.get("weak_areas") or []),
     )
     assumptions = "".join(f"<li>{html.escape(str(item))}</li>" for item in result.get("assumptions") or [])

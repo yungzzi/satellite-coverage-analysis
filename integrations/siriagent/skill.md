@@ -2,7 +2,7 @@
 name: 卫星区域覆盖与选星
 slug: satellite_coverage_selection
 description: >-
-  当用户需要分析浙江城市未来一段时间的卫星覆盖窗口、覆盖率、MRT、ART、薄弱区域，
+  当用户需要分析浙江城市未来一段时间的卫星覆盖窗口、覆盖率、最长等待、平均等待、薄弱区域，
   或执行五项虚拟星座选星任务时调用。支持 K 重同时覆盖、面积严格/降级口径和高级传感器 Profile；
   不用于云量预测、轨道设计或真实任务排程。
 goal: >-
@@ -57,7 +57,7 @@ inputs:
   - name: mrt_target_minutes
     type: number
     required: false
-    description: 任务②的最大空窗 MRT 门槛，单位分钟。
+    description: 任务②中一个地点最长允许连续多久看不到卫星，单位分钟。
   - name: n_budget
     type: integer
     required: false
@@ -116,20 +116,20 @@ hitl_questions:
     required: true
     options:
       - value: task_1_min_satellites_temporal
-        label: 任务① 时间覆盖率
-        description: 满足时间覆盖率门槛时尽量少选卫星。
+        label: 任务① 最少卫星达到覆盖率目标
+        description: 指定每个网格的时间覆盖率和达标面积比例，满足要求时尽量少选卫星。
       - value: task_2_min_satellites_mrt
-        label: 任务② 最大空窗
-        description: 满足 MRT 门槛时尽量少选卫星。
+        label: 任务② 最少卫星满足最长等待要求
+        description: 指定一个地点最长允许连续多久看不到卫星，满足要求时尽量少选卫星。
       - value: task_3_max_qualified_area
-        label: 任务③ 最大覆盖率
-        description: 给定卫星预算，最大化达标面积和时间覆盖率。
+        label: 任务③ 给定数量扩大达标区域
+        description: 给定卫星数量，先让尽可能多的城市面积达到覆盖率目标，再提高全市平均覆盖率。
       - value: task_4_min_area_quantile_mrt
-        label: 任务④ 最小MRT
-        description: 给定卫星预算，最小化面积分位 MRT。
+        label: 任务④ 缩短大部分区域最长等待
+        description: 给定卫星数量，让至少目标面积比例（如 90%）的最坏等待上限尽可能短。
       - value: task_5_min_area_weighted_art
-        label: 任务⑤ 最小ART
-        description: 给定卫星预算，最小化面积加权 ART。
+        label: 任务⑤ 缩短全市平均等待
+        description: 给定卫星数量，按网格真实面积加权，尽量缩短全市平均重访间隔并报告薄弱区。
   - id: city_adcode
     label: 请选择浙江省目标城市
     type: city_picker
@@ -187,7 +187,7 @@ metadata:
 
 ## 应调用的情况
 
-- 用户要查看浙江省地级市未来一段时间的卫星覆盖窗口、覆盖率、MRT、ART 或薄弱区域。
+- 用户要查看浙江省地级市未来一段时间的卫星覆盖窗口、覆盖率、最长等待、平均等待或薄弱区域。
 - 用户要求按覆盖率、最大空窗或卫星预算组成虚拟星座。
 - 用户明确要求 K=2/K=3 同时覆盖，或提供复杂传感器、指向、姿态和约束参数。
 

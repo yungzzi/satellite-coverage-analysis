@@ -12,10 +12,15 @@
 | --- | --- | --- |
 | `coverage_only` | 使用全部候选卫星评估区域覆盖 | 无 |
 | `task_1_min_satellites_temporal` | 时间覆盖率达标的最少卫星 | `temporal_coverage_target_pct` |
-| `task_2_min_satellites_mrt` | MRT 达标的最少卫星 | `mrt_target_minutes` |
+| `task_2_min_satellites_mrt` | 最长等待达标的最少卫星 | `mrt_target_minutes` |
 | `task_3_max_qualified_area` | 给定 N 最大化达标面积 | `n_budget`、`temporal_coverage_target_pct` |
-| `task_4_min_area_quantile_mrt` | 给定 N 最小化面积分位 MRT | `n_budget` |
-| `task_5_min_area_weighted_art` | 给定 N 最小化面积加权 ART | `n_budget` |
+| `task_4_min_area_quantile_mrt` | 给定 N，缩短大部分区域的最长等待 | `n_budget` |
+| `task_5_min_area_weighted_art` | 给定 N，缩短全市面积加权平均等待 | `n_budget` |
+
+面向用户解释时：MRT 是“最大重访间隔”，即最坏情况下一个地点连续多久看不到卫星；ART 是
+“平均重访间隔”，即平均需要等待多久。任务④的“面积分位”表示至少目标面积比例（如 90%）
+的最长等待不超过某个上限，并让这个上限尽可能短。任务⑤的“面积加权”表示各网格按真实面积
+参与全市平均，面积大的区域权重更大，不是把大小不同的网格简单等权平均。
 
 所有计算都要求 `city_adcode`。当前默认：8 小时、5 km 网格、10 秒检测、60 秒决策、
 `K=1`；首版允许 `K=1/2/3`。任务①②默认先要求 100% 面积，失败后显式尝试 90%。

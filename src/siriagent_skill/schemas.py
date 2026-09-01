@@ -49,8 +49,8 @@ TASK_SPECS: dict[str, dict[str, Any]] = {
         "task_parameters": [],
     },
     "task_1_min_satellites_temporal": {
-        "label": "任务①：满足时间覆盖率的最少卫星",
-        "description": "要求目标面积中的每个单元达到时间覆盖率门槛，尽量少选卫星。",
+        "label": "任务①：用最少卫星达到时间覆盖率目标",
+        "description": "指定每个网格要被看到多长时间，以及至少多少城市面积要达标；在满足要求的前提下尽量少选卫星。",
         "required": ["city_adcode", "temporal_coverage_target_pct"],
         "task_parameters": [
             "temporal_coverage_target_pct",
@@ -60,8 +60,8 @@ TASK_SPECS: dict[str, dict[str, Any]] = {
         ],
     },
     "task_2_min_satellites_mrt": {
-        "label": "任务②：满足 MRT 的最少卫星",
-        "description": "要求目标面积中的每个单元最大空窗不超过门槛，尽量少选卫星。",
+        "label": "任务②：用最少卫星满足最长等待要求",
+        "description": "指定一个地点最长允许连续多久看不到卫星，以及至少多少城市面积要达标；在满足要求的前提下尽量少选卫星。",
         "required": ["city_adcode", "mrt_target_minutes"],
         "task_parameters": [
             "mrt_target_minutes",
@@ -71,20 +71,20 @@ TASK_SPECS: dict[str, dict[str, Any]] = {
         ],
     },
     "task_3_max_qualified_area": {
-        "label": "任务③：给定 N 最大化达标面积",
-        "description": "在卫星预算内先最大化时间覆盖率达标面积，再最大化面积加权时间覆盖率。",
+        "label": "任务③：给定卫星数量，让尽可能多的区域达到覆盖率目标",
+        "description": "先让达到时间覆盖率门槛的城市面积尽可能大；若面积相同，再提高全市面积加权平均覆盖率。",
         "required": ["city_adcode", "n_budget", "temporal_coverage_target_pct"],
         "task_parameters": ["n_budget", "exact_budget", "temporal_coverage_target_pct"],
     },
     "task_4_min_area_quantile_mrt": {
-        "label": "任务④：给定 N 最小化面积分位 MRT",
-        "description": "在卫星预算内最小化指定面积比例对应的 MRT 分位值。",
+        "label": "任务④：给定卫星数量，缩短大部分区域的最长等待",
+        "description": "让至少目标面积比例（例如 90%）的区域，其最坏情况下的连续等待上限尽可能短；允许剩余少量薄弱区域较差。",
         "required": ["city_adcode", "n_budget"],
         "task_parameters": ["n_budget", "area_target_pct"],
     },
     "task_5_min_area_weighted_art": {
-        "label": "任务⑤：给定 N 最小化面积加权 ART",
-        "description": "在卫星预算内降低全市面积加权平均空窗，并报告薄弱区域和面积分位 MRT。",
+        "label": "任务⑤：给定卫星数量，缩短全市平均等待",
+        "description": "按每个网格的真实面积加权，降低全市平均重访间隔；面积大的区域影响更大，并额外报告局部薄弱区域。",
         "required": ["city_adcode", "n_budget"],
         "task_parameters": [
             "n_budget",
@@ -292,7 +292,7 @@ PARAMETER_SPECS: dict[str, dict[str, Any]] = {
         "type": "number",
         "required": "任务②必填",
         "range": "value >= 0",
-        "description": "最大允许重访空窗 MRT，单位分钟。",
+        "description": "一个地点最长允许连续多久看不到卫星，即最大重访间隔，单位分钟。",
     },
     "area_target_pct": {
         "type": "number",
@@ -331,7 +331,7 @@ PARAMETER_SPECS: dict[str, dict[str, Any]] = {
         "required": False,
         "default": 90.0,
         "range": "0..100",
-        "description": "任务⑤附带报告的面积分位 MRT 比例。",
+        "description": "任务⑤附带报告：至少多少城市面积的最长等待不超过所报告上限，默认 90%。",
     },
     "max_local_rounds": {
         "type": "integer",

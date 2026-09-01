@@ -193,14 +193,23 @@ Skill 的标准 UI 元数据位于 `agents/openai.yaml`，允许显式调用和�
 
 ### SIRIAgent
 
-还不能只靠本仓库自动出现在 SIRIAgent 网页里。平台研发需要：
+2026-09-01 已从公开部署确认：平台当前是 Vercel 上的 Flask API + Web 前端，已有 Skill 也在
+Vercel Python 运行时执行。浏览器向 `/api/skill/run` 发送 `{slug, script_id, inputs}`，服务端以
+NDJSON 返回进度、错误和结果；已有 `zhejiang_remote_sensing` 的注册结构包含脚本 id、路径、语言和入口。
 
-1. 用平台的注册样例登记 slug、意图、参数和 `script_id`；
-2. 把 `script_id` 指向 `scripts/run_skill.py` 或直接 import `run_skill(inputs)`；
-3. 确保 runner 的 Python 环境装有项目依赖，并能读取边界/TLE 文件；
-4. 把 JSON 中的指标卡、薄弱区和窗口表接到前端展示。
+本项目已在 `integrations/siriagent/` 增加平台交付源，运行生成器后得到
+`dist/satellite_coverage_selection/`。平台研发首选在 Vercel Preview 中验证方案一：
 
-如果他们证实 skill runner 与引擎不同机，我们再在现有 `run_skill` 外包 FastAPI，算法与 JSON 口径不需重写。
+1. 把整个交付目录放入平台 Skill 根目录；
+2. 登记 slug `satellite_coverage_selection`、script id `run_satellite_coverage_selection`、入口 `run`；
+3. 把 `requirements-skill.txt` 合并到部署根依赖，确保 `engine/data/` 被打包；
+4. 配置 Python Function 时限，验证体积、内存、Linux CBC、NDJSON 和 HTML 结果展示；
+5. Preview 全部通过后再进生产。
+
+本地先运行 `python src/validate_siriagent_delivery_package.py`，可验证独立包、覆盖和选星调用。
+完整命令和失败回退条件见 `integrations/siriagent/README_部署验收.md`。若 Vercel Preview 因体积、
+CBC、内存或时限失败，再在同一 facade 外包 FastAPI，由 Vercel 转发到研究院服务器；算法和 JSON
+口径不重写。
 
 ### Coze 等其他 Agent
 
@@ -219,7 +228,8 @@ Skill 的标准 UI 元数据位于 `agents/openai.yaml`，允许显式调用和�
 - `optical_rectangular_validation_v1` 与 `simple_cone_benchmark_v1` 是验收/回归 Profile，不是真实逐星光学幅宽或 SAR 入射角；
 - 高级 `sensor_profile`/`satellite_profile_overrides` 已能把已有复杂传感器、姿态和约束引擎接到区域 Skill，
   但参数仍必须由研发提供真实载荷 Profile，不能把验收数值当作平台 110 颗星的生产配置；
-- 当前输出是 JSON 数据，覆盖薄弱区前端地图还需 SIRIAgent 平台展示层对接；
+- 平台交付启动器已返回结构化 JSON、HTML 指标/窗口/薄弱点预览；覆盖薄弱区的交互地图仍需
+  SIRIAgent 前端展示层对接；
 - 当前是同步、单次调用，尚未做跨请求缓存和任务队列。
 
 因此，这一版可验收的是：**平台 110 星目录/TLE 已接入，默认 88 星非 SAR 链路可计算；Skill 能正确

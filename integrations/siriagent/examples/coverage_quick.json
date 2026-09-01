@@ -1,0 +1,13 @@
+{
+  "operation": "coverage_only",
+  "city_adcode": "330100",
+  "start_utc": "2026-08-08T00:00:00Z",
+  "analysis_horizon_h": 8,
+  "tle_source": "jilin1_test",
+  "profile_slug": "optical_rectangular_validation_v1",
+  "grid_size_km": 30,
+  "detection_step_s": 60,
+  "decision_step_s": 60,
+  "max_windows": 5,
+  "max_weak_areas": 5
+}

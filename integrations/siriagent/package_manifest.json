@@ -1,0 +1,36 @@
+{
+  "schema_version": "siriagent_delivery_manifest_v1",
+  "package_name": "satellite_coverage_selection",
+  "package_version": "0.1.0",
+  "engine_files": [
+    "src/coverage_analysis.py",
+    "src/sensor_geometry.py",
+    "src/region_grid.py",
+    "src/regional_opportunities.py",
+    "src/regional_metrics.py",
+    "src/regional_selection.py",
+    "src/satellite_loader.py",
+    "src/siriagent_catalog.py",
+    "src/siriagent_skill/__init__.py",
+    "src/siriagent_skill/schemas.py",
+    "src/siriagent_skill/facade.py",
+    "src/siriagent_skill/formatter.py",
+    "src/siriagent_skill/runner.py"
+  ],
+  "data_globs": [
+    "data/geo/*.json",
+    "data/geo/metadata/zhejiang_boundaries.json",
+    "data/platform/siriagent_110_catalog.json",
+    "data/test_data/jilin1_all.tle",
+    "data/test_data/china_remote_sensing_all.tle",
+    "data/test_data/siriagent_110_snapshot.tle"
+  ],
+  "excluded_runtime_features": [
+    "Streamlit GUI",
+    "ATK automation",
+    "Excel export",
+    "development tests",
+    "download caches",
+    "generated outputs"
+  ]
+}

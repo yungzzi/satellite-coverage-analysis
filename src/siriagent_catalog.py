@@ -45,7 +45,7 @@ def select_entries(
     catalog: Mapping[str, Any],
     *,
     sensor_type: str = "可见光",
-    max_resolution_m: float = 1.0,
+    max_resolution_m: float = 10.0,
     satellite_ids: Iterable[int] | None = None,
 ) -> list[dict[str, Any]]:
     if sensor_type not in CATALOG_SENSOR_TYPES:

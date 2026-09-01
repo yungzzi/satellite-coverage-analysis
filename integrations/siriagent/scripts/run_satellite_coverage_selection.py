@@ -129,6 +129,93 @@ def _table(headers: list[tuple[str, str]], rows: list[Mapping[str, Any]], limit:
     return f"<div class=table-wrap><table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
 
 
+def _quality_map_svg(result: Mapping[str, Any]) -> str:
+    """把紧凑 GeoJSON 渲染成无外部依赖的预览图。
+
+    平台前端可直接使用 ``coverage_map.geojson`` 做交互式地图；这里的 SVG 只是
+    view_html 的降级预览，避免 skill 单独打开时还依赖 Leaflet/网络地图底图。
+    """
+
+    coverage_map = result.get("coverage_map") or {}
+    geojson = coverage_map.get("geojson") or {}
+    features = geojson.get("features") or []
+    if not features:
+        return '<p class="muted">暂无可绘制的网格质量地图。</p>'
+
+    def rings(geometry: Mapping[str, Any]) -> list[list[tuple[float, float]]]:
+        kind = geometry.get("type")
+        coordinates = geometry.get("coordinates") or []
+        if kind == "Polygon":
+            return [
+                [(float(point[0]), float(point[1])) for point in ring]
+                for ring in coordinates
+                if len(ring) >= 3
+            ]
+        if kind == "MultiPolygon":
+            return [
+                [(float(point[0]), float(point[1])) for point in ring]
+                for polygon in coordinates
+                for ring in polygon
+                if len(ring) >= 3
+            ]
+        return []
+
+    all_points = [
+        point
+        for feature in features
+        for ring in rings(feature.get("geometry") or {})
+        for point in ring
+    ]
+    if not all_points:
+        return '<p class="muted">网格几何为空，无法绘制地图。</p>'
+    min_lon = min(point[0] for point in all_points)
+    max_lon = max(point[0] for point in all_points)
+    min_lat = min(point[1] for point in all_points)
+    max_lat = max(point[1] for point in all_points)
+    lon_span = max(max_lon - min_lon, 1e-9)
+    lat_span = max(max_lat - min_lat, 1e-9)
+    width, height, pad = 800.0, 430.0, 12.0
+
+    def project(point: tuple[float, float]) -> tuple[float, float]:
+        x = pad + (point[0] - min_lon) / lon_span * (width - 2 * pad)
+        y = pad + (max_lat - point[1]) / lat_span * (height - 2 * pad)
+        return x, y
+
+    def color(value: float) -> str:
+        # 预览采用连续的红-黄-绿三段色阶；不做空间平滑，避免制造不存在的覆盖。
+        bounded = max(0.0, min(100.0, value)) / 100.0
+        if bounded < 0.5:
+            ratio = bounded * 2.0
+            return f"rgb(239,{int(80 + 130 * ratio)},{int(70 - 20 * ratio)})"
+        ratio = (bounded - 0.5) * 2.0
+        return f"rgb({int(239 - 170 * ratio)},{int(210 + 25 * ratio)},{int(50 + 75 * ratio)})"
+
+    paths: list[str] = []
+    for feature in features:
+        props = feature.get("properties") or {}
+        value = float(props.get("temporal_coverage_pct") or 0.0)
+        subpaths: list[str] = []
+        for ring in rings(feature.get("geometry") or {}):
+            points = [project(point) for point in ring]
+            subpaths.append("M " + " L ".join(f"{x:.2f},{y:.2f}" for x, y in points) + " Z")
+        if subpaths:
+            paths.append(
+                f'<path d="{" ".join(subpaths)}" fill="{color(value)}" '
+                'stroke="#ffffff" stroke-width="0.35" fill-rule="evenodd">'
+                f'<title>{html.escape(str(props.get("grid_id", "网格")))}：时间覆盖率 {value:.2f}%</title></path>'
+            )
+    city_name = html.escape(str(geojson.get("properties", {}).get("city_name") or "目标城市"))
+    return (
+        f'<div class="quality-map"><div class="map-caption">{city_name} 覆盖质量地图（默认：时间覆盖率）</div>'
+        f'<svg viewBox="0 0 {int(width)} {int(height)}" role="img" aria-label="{city_name} 覆盖质量地图">'
+        f'{"".join(paths)}</svg>'
+        '<div class="legend"><span><i style="background:#ef5046"></i>低</span>'
+        '<span><i style="background:#efd232"></i>中</span>'
+        '<span><i style="background:#45b96b"></i>高</span></div>'
+        '<small>颜色表示分析时段内累计时间覆盖率；平台前端可切换最长等待、平均等待和达标状态。</small></div>'
+    )
+
+
 def _view_html(result: Mapping[str, Any]) -> str:
     title = html.escape(_summary(result))
     if result.get("status") != "completed":
@@ -161,6 +248,7 @@ def _view_html(result: Mapping[str, Any]) -> str:
          ("temporal_coverage_pct", "时间覆盖率/%"), ("mrt_minutes", "最长等待/分钟")],
         list(result.get("weak_areas") or []),
     )
+    quality_map = _quality_map_svg(result)
     assumptions = "".join(f"<li>{html.escape(str(item))}</li>" for item in result.get("assumptions") or [])
     return f"""<!doctype html><meta charset=utf-8><style>
     .sat-result{{font-family:system-ui,sans-serif;color:#172033;line-height:1.5}}
@@ -170,8 +258,12 @@ def _view_html(result: Mapping[str, Any]) -> str:
     h2{{margin:18px 0 8px}} table{{border-collapse:collapse;width:100%;font-size:13px}}
     th,td{{border-bottom:1px solid #e5e9f0;padding:7px;text-align:left;white-space:nowrap}}
     .table-wrap{{overflow:auto}} .muted,small{{color:#657086}}
+    .quality-map{{border:1px solid #dde4ee;border-radius:10px;padding:10px;background:#fff}}
+    .quality-map svg{{display:block;width:100%;height:auto;max-height:430px;background:#f5f7fa;border-radius:7px}}
+    .map-caption{{font-weight:600;margin:2px 0 8px}} .legend{{display:flex;gap:16px;margin:8px 0 3px;font-size:12px;color:#657086}}
+    .legend i{{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px}}
     </style><section class=sat-result><h2>卫星区域覆盖与选星结果</h2><p>{title}</p>
-    <div class=cards>{card_html}</div><h2>卫星摘要</h2>{satellites}<h2>城市覆盖窗口</h2>{windows}
+    <div class=cards>{card_html}</div><h2>覆盖质量地图</h2>{quality_map}<h2>卫星摘要</h2>{satellites}<h2>城市覆盖窗口</h2>{windows}
     <h2>覆盖薄弱区域</h2>{weak}<h2>口径与假设</h2><ul>{assumptions}</ul></section>"""
 
 

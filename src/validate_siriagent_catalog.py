@@ -44,9 +44,9 @@ def test_candidate_filter_and_profile_completeness() -> None:
     default_rows = sc.select_entries(
         catalog,
         sensor_type="可见光",
-        max_resolution_m=1.0,
+        max_resolution_m=10.0,
     )
-    assert len(default_rows) == 88
+    assert len(default_rows) == 100
 
     all_rows = sc.select_entries(catalog, sensor_type="全部", max_resolution_m=10_000.0)
     ready, blocked = sc.build_catalog_overrides(all_rows)
@@ -72,7 +72,7 @@ def test_candidate_filter_and_profile_completeness() -> None:
     )
     assert len(ready_sar) == 1 and not blocked_sar
     assert ready_sar[0]["sensor_type"] == "SAR"
-    print("[通过] 默认可见光≤1 m 为 88 颗；107 颗目录派生矩形，3 颗 SAR 严格缺参")
+    print("[通过] 默认可见光≤10 m 为 100 颗；107 颗目录派生矩形，3 颗 SAR 严格缺参")
 
 
 def test_rectangular_swath_is_cross_track_not_circle() -> None:
@@ -108,8 +108,8 @@ def test_skill_catalog_defaults_and_sar_guard() -> None:
     )
     assert request.tle_source == "siriagent_110_snapshot"
     satellites, _, _, _, context = _load_satellites(request, ROOT)
-    assert len(satellites) == 88
-    assert context is not None and len(context["profile_overrides"]) == 88
+    assert len(satellites) == 100
+    assert context is not None and len(context["profile_overrides"]) == 100
 
     sar_error = run_skill(
         {
@@ -153,17 +153,17 @@ def test_skill_catalog_end_to_end() -> None:
         root=ROOT,
     )
     assert result["status"] == "completed"
-    assert result["input_summary"]["candidate_satellite_count"] == 88
-    assert result["profile"]["catalog_mapping"]["generated_override_count"] == 88
+    assert result["input_summary"]["candidate_satellite_count"] == 100
+    assert result["profile"]["catalog_mapping"]["generated_override_count"] == 100
     assert result["reproducibility"]["catalog_sha256"]
     assert result["satellite_table"]
     assert all(
         row["sensor_class"] == "可见光"
-        and float(row["resolution_m"]) <= 1.0
+        and float(row["resolution_m"]) <= 10.0
         and float(row["swath_km"]) > 0.0
         for row in result["satellite_table"]
     )
-    print("[通过] 宁波 1 小时快速端到端：88 颗候选、矩形幅宽、窗口和目录哈希完整")
+    print("[通过] 宁波 1 小时快速端到端：100 颗候选、矩形幅宽、窗口和目录哈希完整")
 
 
 def main() -> int:

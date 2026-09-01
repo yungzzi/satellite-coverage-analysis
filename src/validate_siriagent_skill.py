@@ -172,7 +172,8 @@ def test_real_city_direct_skill() -> None:
     assert result["input_summary"]["candidate_satellite_count"] == 58
     assert result["city"]["grid_cell_count"] > 0
     assert result["summary_cards"]["satellite_count"] == 58
-    assert result["coverage_map"]["geojson"] is None
+    assert result["coverage_map"]["geojson_included"] is True
+    assert result["coverage_map"]["geojson"]["features"]
     assert result["debug_artifacts"] is None
     assert isinstance(result["satellite_table"], list)
     assert isinstance(result["city_pass_window_table"], list)

@@ -20,8 +20,8 @@ import siriagent_catalog
 from region_grid import build_clipped_grid, load_city_boundary
 
 from .formatter import (
-    build_debug_map,
     build_human_tables,
+    build_quality_map,
     build_summary_cards,
     build_weak_areas,
 )
@@ -550,9 +550,16 @@ def execute_request(
         "city_pass_window_table": pass_table,
         "weak_areas": build_weak_areas(store, metrics, limit=request.max_weak_areas),
         "coverage_map": {
+            "kind": "grid_quality_map",
+            "description": (
+                "按 5 km 裁剪网格显示所选卫星组合的区域覆盖质量；"
+                "时间覆盖率是分析时段内累计被覆盖的时间比例。"
+            ),
             "available_metrics": ["temporal_coverage_pct", "mrt_s", "art_s", "qualified"],
-            "geojson_included": bool(request.debug),
-            "geojson": build_debug_map(store, metrics) if request.debug else None,
+            "default_metric": "temporal_coverage_pct",
+            # 地图是人类可读的正式结果，不再依赖 debug 开关；debug 只控制更大的逐格审计表。
+            "geojson_included": True,
+            "geojson": build_quality_map(store, metrics),
         },
         "assumptions": assumptions,
         "warnings": (

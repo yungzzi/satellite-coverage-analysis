@@ -18,7 +18,7 @@
 普通请求默认包含选星；如果没有说明优化目标，Skill 会先展示任务①～⑤供用户选择，不默认其中
 任何一项。只有明确说“不选星/只看覆盖”时才使用 `coverage_only`。
 
-结果保留人真正关心的信息：指标卡、推荐卫星、城市过境窗口、薄弱区域、严格/降级状态、最优性声明和可复现哈希。
+结果保留人真正关心的信息：指标卡、推荐卫星、城市过境窗口、覆盖质量地图、薄弱区域、严格/降级状态、最优性声明和可复现哈希。
 
 ## 2. 验收前的环境
 
@@ -32,7 +32,7 @@ $python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖
 这里只是让开发工作树共用主工作树的虚拟环境。最终合并回主工作树后，在项目根目录直接用 `.\.venv\Scripts\python.exe` 即可。
 
 平台 110 星目录已与固定 TLE 110/110 映射。普通请求默认使用平台目录 Profile，按平台默认条件
-“可见光且分辨率不差于 1 m”得到 88 颗候选；分辨率只筛选，非 SAR 的幅宽进入矩形几何。
+“可见光且分辨率不差于 10 m”得到 100 颗候选；分辨率只筛选，非 SAR 的幅宽进入矩形几何。
 
 ## 3. 八步验收
 
@@ -89,7 +89,7 @@ $env:SATELLITE_COVERAGE_PROJECT_ROOT = 'D:\path\to\卫星覆盖性分析'
 
 - `status=completed`；
 - `city.adcode=330100`，并有网格数和城市面积；
-- 有 `summary_cards`、`satellite_table`、`city_pass_window_table`、`weak_areas`；
+- 有 `summary_cards`、`satellite_table`、`city_pass_window_table`、`weak_areas` 和 `coverage_map.geojson`；
 - 窗口保留开始、结束和持续时间；
 - `reproducibility` 包含 TLE、边界和 Profile 哈希。
 
@@ -115,7 +115,7 @@ $env:SATELLITE_COVERAGE_PROJECT_ROOT = 'D:\path\to\卫星覆盖性分析'
   --pretty
 ```
 
-通过标准：候选数为 88，`profile.catalog_mapping.generated_override_count=88`；卫星表回显
+通过标准：候选数为 100，`profile.catalog_mapping.generated_override_count=100`；卫星表回显
 `sensor_class`、`resolution_m` 和 `swath_km`；`reproducibility` 包含目录和 TLE 哈希。这个快速样例
 只跑 1 小时/30 km，正式默认仍是 8 小时/5 km。
 
@@ -158,7 +158,7 @@ $env:SATELLITE_COVERAGE_PROJECT_ROOT = 'D:\path\to\卫星覆盖性分析'
 
 通过标准：浙江边界 `4/4`、区域格网 `4/4`、平台目录 `5/5`、Skill 业务 `3/3`、Agent Skill
 包装 `3/3`、区域选星 `7/7`。
-平台目录自检会核对 110/110 TLE、默认 88 颗候选、矩形幅宽、SAR 缺参保护和宁波快速端到端；
+平台目录自检会核对 110/110 TLE、默认 100 颗候选、矩形幅宽、SAR 缺参保护和宁波快速端到端；
 Skill 自检会验证六种调用语义、K=3 入参、五项选星分派，以及真实杭州边界+真实 TLE 的同链路执行。
 
 需要复跑完整业务验收时，再执行（约 1～2 分钟，输出 JSON 不入库）：
@@ -224,18 +224,18 @@ CBC、内存或时限失败，再在同一 facade 外包 FastAPI，由 Vercel �
   计算文件都有版本与哈希。平台若要求使用另一套边界，仍需先比较后重新验收；
 - `siriagent_110_snapshot` 已完整映射平台 110 星目录，但它是 2026-08-31 的可复现快照；正式运行仍需
   规定 TLE 更新频率、版本留存和结果绑定哈希；
-- 默认 88 星候选来自平台“可见光且分辨率不差于 1 m”筛选。107 颗非 SAR 可由平台幅宽派生矩形
+- 默认 100 星候选来自平台“可见光且分辨率不差于 10 m”筛选。107 颗非 SAR 可由平台幅宽派生矩形
   跨轨范围，但沿轨 60°仍是明确场景假设，不是厂家验证参数；
 - 3 颗 SAR 缺少原生入射角带，当前会阻止圆锥降级；请求“全部”而不补参数时不能声称是完整
   110 星全池最优；
 - `optical_rectangular_validation_v1` 与 `simple_cone_benchmark_v1` 是验收/回归 Profile，不是真实逐星光学幅宽或 SAR 入射角；
 - 高级 `sensor_profile`/`satellite_profile_overrides` 已能把已有复杂传感器、姿态和约束引擎接到区域 Skill，
   但参数仍必须由研发提供真实载荷 Profile，不能把验收数值当作平台 110 颗星的生产配置；
-- 平台交付启动器已返回结构化 JSON、HTML 指标/窗口/薄弱点预览；覆盖薄弱区的交互地图仍需
-  SIRIAgent 前端展示层对接；
+- 平台交付启动器已返回结构化 JSON、HTML 指标/窗口/薄弱点和覆盖质量地图预览；交互式地图仍需
+  SIRIAgent 前端读取 `coverage_map.geojson` 后对接地图组件；
 - 当前是同步、单次调用，尚未做跨请求缓存和任务队列。
 
-因此，这一版可验收的是：**平台 110 星目录/TLE 已接入，默认 88 星非 SAR 链路可计算；Skill 能正确
+因此，这一版可验收的是：**平台 110 星目录/TLE 已接入，默认 100 星非 SAR 链路可计算；Skill 能正确
 说明参数、追问缺参、执行五项选星并返回结构化结果。**不应在补齐真实沿轨/SAR Profile、完成平台
 注册和前端联调前，对外声称已是 SIRIAgent 生产系统。详细数据见
 [SIRIAgent平台110星目录与Profile基线.md](SIRIAgent平台110星目录与Profile基线.md)。

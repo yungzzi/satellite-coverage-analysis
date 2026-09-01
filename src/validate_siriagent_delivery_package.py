@@ -111,6 +111,9 @@ def main() -> int:
         assert coverage_result["summary_cards"]
         assert "city_pass_window_table" in coverage_result
         assert "weak_areas" in coverage_result
+        assert coverage_result["coverage_map"]["geojson_included"] is True
+        assert coverage_result["coverage_map"]["geojson"]["features"]
+        assert "覆盖质量地图" in coverage["view_html"]
         assert coverage["view_html"].startswith("<!doctype html>")
         checks.append("覆盖分析与人类可读输出")
 

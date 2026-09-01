@@ -187,7 +187,7 @@ def build_weak_areas(
 
 
 def build_debug_map(store: OpportunityStore, metrics: RegionalMetricsResult) -> dict[str, Any]:
-    """把网格几何和指标拼成 GeoJSON，仅在 ``debug=true`` 时返回。"""
+    """把完整网格几何和指标拼成调试 GeoJSON。"""
 
     feature_collection = store.grid.to_feature_collection()
     metric_by_id = {item.grid_id: item for item in metrics.grid_metrics}
@@ -205,8 +205,52 @@ def build_debug_map(store: OpportunityStore, metrics: RegionalMetricsResult) -> 
     return feature_collection
 
 
+def build_quality_map(store: OpportunityStore, metrics: RegionalMetricsResult) -> dict[str, Any]:
+    """生成面向前端地图的紧凑 GeoJSON。
+
+    地图需要每个裁剪网格的几何和少量指标，但普通用户不需要看到网格编号、投影
+    原点等审计字段。因此这里保留地图着色所需的最小属性，完整逐格数据仍由
+    ``debug=true`` 下的 ``debug_artifacts.grid_metrics`` 提供。
+    """
+
+    source = store.grid.to_feature_collection()
+    metric_by_id = {item.grid_id: item for item in metrics.grid_metrics}
+    features: list[dict[str, Any]] = []
+    for feature in source["features"]:
+        properties = feature.get("properties") or {}
+        grid_id = properties["grid_id"]
+        metric = metric_by_id[grid_id]
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "grid_id": grid_id,
+                    "area_km2": round(float(metric.area_m2) / 1_000_000.0, 6),
+                    "temporal_coverage_pct": round(float(metric.temporal_coverage_pct), 6),
+                    "mrt_s": round(float(metric.mrt_s), 3),
+                    "art_s": round(float(metric.art_s), 3),
+                    "qualified": bool(metric.qualified),
+                },
+                "geometry": feature["geometry"],
+            }
+        )
+    return {
+        "type": "FeatureCollection",
+        "properties": {
+            "adcode": source["properties"]["adcode"],
+            "city_name": source["properties"]["city_name"],
+            "boundary_hash": source["properties"]["boundary_hash"],
+            "grid_size_km": source["properties"]["grid_size_m"] / 1000.0,
+            "available_metrics": ["temporal_coverage_pct", "mrt_s", "art_s", "qualified"],
+            "default_metric": "temporal_coverage_pct",
+        },
+        "features": features,
+    }
+
+
 __all__ = [
     "build_debug_map",
+    "build_quality_map",
     "build_human_tables",
     "build_summary_cards",
     "build_weak_areas",

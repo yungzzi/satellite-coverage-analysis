@@ -1,0 +1,7 @@
+interface:
+  display_name: "卫星覆盖与选星"
+  short_description: "分析浙江城市卫星覆盖窗口并完成五项虚拟星座选星"
+  default_prompt: "使用 $satellite-coverage-selection 分析指定浙江城市未来 8 小时并选星；请先列出五项选星任务让我选择。"
+
+policy:
+  allow_implicit_invocation: true

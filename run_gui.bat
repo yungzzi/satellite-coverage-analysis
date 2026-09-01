@@ -1,21 +1,40 @@
 @echo off
-cd /d %~dp0
+setlocal EnableExtensions EnableDelayedExpansion
+cd /d "%~dp0"
+
 echo ============================================================
-echo   卫星覆盖分析工作台
-echo   启动后浏览器自动打开（或手动访问 http://localhost:8501）
-echo.
-echo   提示：
-echo    - 关闭浏览器标签页【不会】停止程序，重新打开上面的网址即可回来；
-echo    - 彻底停止：点界面左侧"停止并退出程序"按钮，或按 Ctrl+C。
+echo   Satellite coverage analysis workbench
+echo   Open http://localhost:8501 if the browser does not open.
+echo   Close this window or press Ctrl+C to stop the service.
 echo ============================================================
-set "VENV=.venv"
-if not exist "%VENV%\Scripts\streamlit.exe" if exist "..\卫星覆盖性分析\.venv\Scripts\streamlit.exe" set "VENV=..\卫星覆盖性分析\.venv"
-if not exist "%VENV%\Scripts\streamlit.exe" (
-  echo [ERROR] Python env not found: .venv
-  echo 本工作树没有安装 Python 依赖；可到主工程工作树运行，或在本目录执行：
+
+rem Prefer this worktree's venv. Otherwise reuse the first sibling venv found.
+set "PYTHON=%~dp0.venv\Scripts\python.exe"
+if not exist "%PYTHON%" (
+  set "SHARED_PYTHON="
+  for /d %%D in ("%~dp0..\*") do (
+    if not defined SHARED_PYTHON if exist "%%~fD\.venv\Scripts\python.exe" (
+      set "SHARED_PYTHON=%%~fD\.venv\Scripts\python.exe"
+    )
+  )
+  if defined SHARED_PYTHON set "PYTHON=!SHARED_PYTHON!"
+)
+
+if not exist "%PYTHON%" (
+  echo [ERROR] No usable Python virtual environment was found.
+  echo Run these commands in this worktree:
   echo   python -m venv .venv
-  echo   .venv\Scripts\pip install -r requirements.txt
+  echo   .venv\Scripts\python.exe -m pip install -r requirements.txt
   pause
   exit /b 1
 )
-"%VENV%\Scripts\streamlit" run src\loader_app.py
+
+"%PYTHON%" -c "import streamlit" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Streamlit is not installed in: %PYTHON%
+  echo Install this project's dependencies and try again.
+  pause
+  exit /b 1
+)
+
+"%PYTHON%" -m streamlit run src\loader_app.py

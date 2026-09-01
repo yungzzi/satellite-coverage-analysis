@@ -1,0 +1,15 @@
+{
+  "operation": "coverage_only",
+  "city_adcode": "330600",
+  "start_utc": "2026-08-31T00:00:00Z",
+  "analysis_horizon_h": 8,
+  "tle_source": "siriagent_110_snapshot",
+  "profile_slug": "siriagent_catalog_swath_v1",
+  "catalog_sensor_type": "可见光",
+  "max_resolution_m": 10.0,
+  "grid_size_km": 5,
+  "detection_step_s": 10,
+  "decision_step_s": 60,
+  "max_windows": 20,
+  "max_weak_areas": 10
+}

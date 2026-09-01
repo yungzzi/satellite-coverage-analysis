@@ -13,8 +13,7 @@ open_manually: true
 inputs:
   - name: operation
     type: string
-    required: false
-    default: task_1_min_satellites_temporal
+    required: true
     enum:
       - coverage_only
       - task_1_min_satellites_temporal
@@ -111,19 +110,14 @@ scripts:
     description: 执行区域覆盖与五项选星，并返回结构化结果和 HTML 预览。
 hitl_questions:
   - id: operation
-    label: 请选择分析任务
+    label: 请选择选星任务
     type: select
     control: buttons
     required: true
-    default: task_1_min_satellites_temporal
     options:
-      - value: coverage_only
-        label: 只分析覆盖
-        description: 仅在用户明确要求不选星时使用。
       - value: task_1_min_satellites_temporal
         label: 任务① 时间覆盖率
         description: 满足时间覆盖率门槛时尽量少选卫星。
-        recommended: true
       - value: task_2_min_satellites_mrt
         label: 任务② 最大空窗
         description: 满足 MRT 门槛时尽量少选卫星。
@@ -205,7 +199,7 @@ metadata:
 
 ## 执行口径
 
-1. 普通请求默认执行“覆盖分析 + 任务①选星”，以网格时间覆盖率为主要指标并尽量少选卫星；缺少时间覆盖率目标时必须追问。只有用户明确要求不选星时才执行 `coverage_only`。默认分析 8 小时、5 km 裁剪网格，候选池为平台可见光且分辨率不差于 1 m 的卫星。
+1. 普通请求默认包含选星；用户未指定优化目标时，只展示任务①～⑤并让用户选择，不默认其中任何一项。只有用户明确要求不选星时才执行 `coverage_only`。默认分析 8 小时、5 km 裁剪网格，候选池为平台可见光且分辨率不差于 1 m 的卫星。
 2. 分辨率只筛选候选卫星，不参与覆盖几何；代表点不带半径圆，面积按裁剪网格真实面积加权。
 3. 输出必须保留覆盖窗口，不能退化为布尔结果。
 4. 严格面积目标不可行时先报告物理上限；只有用户允许时才尝试 90% 等面积降级。

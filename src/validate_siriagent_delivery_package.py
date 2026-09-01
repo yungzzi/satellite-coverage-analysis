@@ -53,7 +53,12 @@ def main() -> int:
         ]
         assert all((package / relative).is_file() for relative in required)
         skill_text = (package / "skill.md").read_text(encoding="utf-8")
-        assert "default: task_1_min_satellites_temporal" in skill_text
+        operation_question = skill_text.split("  - id: operation", 1)[1].split(
+            "  - id: city_adcode", 1
+        )[0]
+        assert "default:" not in operation_question
+        assert "coverage_only" not in operation_question
+        assert operation_question.count("      - value: task_") == 5
         forbidden = ["loader_app.py", "atk_parallel", "output", "tle_cache"]
         package_files = [path.relative_to(package).as_posix() for path in package.rglob("*")]
         assert not any(any(word in relative for word in forbidden) for relative in package_files)
@@ -84,31 +89,14 @@ def main() -> int:
             cwd=temp,
         )["result"]
         assert default_behavior["status"] == "needs_input"
-        assert default_behavior["operation"] == "task_1_min_satellites_temporal"
-        assert default_behavior["missing_fields"] == ["temporal_coverage_target_pct"]
-        default_run = _command(
-            launcher,
-            "--input-json",
-            json.dumps(
-                {
-                    "city": "杭州",
-                    "temporal_coverage_target_pct": 1,
-                    "start_utc": "2026-08-08T00:00:00Z",
-                    "analysis_horizon_h": 8,
-                    "tle_source": "jilin1_test",
-                    "profile_slug": "optical_rectangular_validation_v1",
-                    "grid_size_km": 30,
-                    "detection_step_s": 60,
-                    "decision_step_s": 60,
-                    "method": "greedy",
-                },
-                ensure_ascii=False,
-            ),
-            cwd=temp,
-        )["result"]
-        assert default_run["status"] == "completed"
-        assert default_run["operation"] == "task_1_min_satellites_temporal"
-        assert default_run["selection"] is not None
+        assert default_behavior["operation"] is None
+        assert default_behavior["missing_fields"] == ["operation"]
+        assert len(default_behavior["selection_task_choices"]) == 5
+        assert all(
+            item["operation"].startswith("task_")
+            for item in default_behavior["selection_task_choices"]
+        )
+        assert "coverage_only" not in default_behavior["parameter_hints"]["operation"]["allowed"]
 
         coverage = _command(
             launcher,

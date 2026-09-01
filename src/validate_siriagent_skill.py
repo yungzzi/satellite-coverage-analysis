@@ -42,9 +42,8 @@ def test_describe_and_missing_parameters() -> None:
     assert described["parameters"]["tle_source"]["default"] == (
         "siriagent_110_snapshot"
     )
-    assert described["parameters"]["operation"]["default"] == (
-        "task_1_min_satellites_temporal"
-    )
+    assert described["parameters"]["operation"]["required"] is True
+    assert "default" not in described["parameters"]["operation"]
     assert {item["adcode"] for item in described["available_cities"]} >= {
         "330000", "330100", "330200", "330300", "330400", "330500",
         "330600", "330700", "330800", "330900", "331000", "331100",
@@ -59,11 +58,26 @@ def test_describe_and_missing_parameters() -> None:
     assert missing["missing_fields"] == ["city_adcode", "mrt_target_minutes"]
     assert "mrt_target_minutes" in missing["parameter_hints"]
 
-    default_selection = run_skill({"city": "宁波"}, root=ROOT)
-    assert default_selection["status"] == "needs_input"
-    assert default_selection["operation"] == "task_1_min_satellites_temporal"
-    assert default_selection["missing_fields"] == ["temporal_coverage_target_pct"]
-    assert "temporal_coverage_target_pct" in default_selection["parameter_hints"]
+    selection_menu = run_skill({"city": "宁波"}, root=ROOT)
+    assert selection_menu["status"] == "needs_input"
+    assert selection_menu["operation"] is None
+    assert selection_menu["missing_fields"] == ["operation"]
+    choice_operations = {
+        item["operation"] for item in selection_menu["selection_task_choices"]
+    }
+    assert choice_operations == {
+        "task_1_min_satellites_temporal",
+        "task_2_min_satellites_mrt",
+        "task_3_max_qualified_area",
+        "task_4_min_area_quantile_mrt",
+        "task_5_min_area_weighted_art",
+    }
+    assert {
+        item["operation"] for item in selection_menu["capabilities"]["tasks"]
+    } == choice_operations
+    assert selection_menu["parameter_hints"]["operation"]["allowed"] == [
+        item["operation"] for item in selection_menu["selection_task_choices"]
+    ]
 
     invalid = run_skill(
         {"operation": "coverage_only", "city_adcode": "330100", "min_simultaneous": 4},

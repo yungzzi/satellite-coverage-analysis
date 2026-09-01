@@ -20,7 +20,6 @@ from siriagent_catalog import CATALOG_PROFILE_SLUG, CATALOG_SENSOR_TYPES
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OPERATION = "task_1_min_satellites_temporal"
 
 OPERATION_ALIASES = {
     "coverage": "coverage_only",
@@ -166,11 +165,9 @@ PROFILE_SPECS: dict[str, dict[str, Any]] = {
 PARAMETER_SPECS: dict[str, dict[str, Any]] = {
     "operation": {
         "type": "string",
-        "required": False,
-        "default": DEFAULT_OPERATION,
+        "required": True,
         "description": (
-            "默认执行任务①（满足时间覆盖率的最少卫星）；只有用户明确要求不选星时才用 "
-            "coverage_only，也可显式选择其他四项选星任务。"
+            "普通请求必须从五项选星任务中选择；只有用户明确要求不选星时才用 coverage_only。"
         ),
         "allowed": list(TASK_SPECS),
     },
@@ -508,7 +505,7 @@ def describe_capabilities(
             for key, value in PROFILE_SPECS.items()
         },
         "notes": [
-            "普通请求默认执行任务①并包含选星；只有明确要求不选星时才使用 coverage_only。",
+            "普通请求默认包含选星；目标不明确时先展示任务①～⑤供用户选择，不替用户猜优化目标。",
             "默认 8 小时，K 默认 1；K 首版支持 1～3。",
             "任务①③的时间覆盖率目标与城市空间覆盖率不是同一个参数。",
             "普通请求使用 profile_slug 预设；只有用户明确提出高级传感器/姿态需求时才传 sensor_profile。",
@@ -752,7 +749,7 @@ def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
         raise SkillInputError("输入必须是 JSON 对象。")
     raw_operation = payload.get("operation", payload.get("task_type"))
     if raw_operation in (None, ""):
-        raw_operation = DEFAULT_OPERATION
+        raise SkillNeedsInput(["operation"])
     operation = OPERATION_ALIASES.get(str(raw_operation).strip().lower())
     if operation is None:
         raise SkillInputError(

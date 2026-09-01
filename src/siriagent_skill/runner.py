@@ -43,12 +43,36 @@ def run_skill(
         return execute_request(request, root=project_root)
     except SkillNeedsInput as exc:
         operation = exc.operation
+        details = dict(exc.details)
+        capabilities = describe_capabilities(project_root, operation=operation)
+        message = str(exc)
+        if operation is None and "operation" in exc.missing_fields:
+            selection_tasks = [
+                item
+                for item in capabilities["tasks"]
+                if item["operation"] != "coverage_only"
+            ]
+            capabilities = {**capabilities, "tasks": selection_tasks}
+            hints = {
+                name: dict(value)
+                for name, value in details.get("parameter_hints", {}).items()
+            }
+            if "operation" in hints:
+                hints["operation"]["allowed"] = [
+                    item["operation"] for item in selection_tasks
+                ]
+                hints["operation"]["description"] = (
+                    "请选择任务①～⑤之一；coverage_only 只在用户明确要求不选星时使用。"
+                )
+            details["parameter_hints"] = hints
+            details["selection_task_choices"] = selection_tasks
+            message = "请选择一项选星任务（任务①～⑤）。"
         return {
             "status": "needs_input",
             "operation": operation,
-            "message": str(exc),
-            **exc.details,
-            "capabilities": describe_capabilities(project_root, operation=operation),
+            "message": message,
+            **details,
+            "capabilities": capabilities,
         }
     except SkillInputError as exc:
         return {

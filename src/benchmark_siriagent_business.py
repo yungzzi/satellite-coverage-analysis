@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""平台默认 88 星在真实城市网格上的业务验收。
+"""平台默认 10 m 候选星在真实城市网格上的业务验收。
 
 与逐个调用六次 Skill 不同，本脚本只生成一次“卫星 × 网格”机会窗口，然后复用这份事实数据
 验收覆盖指标和五项选星。这样测到的是选星算法本身的耗时，也符合覆盖层与选星层分离的设计。
@@ -7,7 +7,7 @@
 默认验收口径：
 
 * 绍兴 5 km 裁剪网格；
-* SIRIAgent 目录中可见光且分辨率不差于 1 m 的 88 颗候选；
+* SIRIAgent 目录中可见光且分辨率不差于 10 m 的 100 颗候选；
 * 2026-08-30 00:00 UTC 起算 8 小时；10 秒检测、60 秒决策；
 * K=1 完整运行任务①～⑤；K=2/K=3 运行全池指标、任务②和任务⑤代表性测试。
 
@@ -111,7 +111,7 @@ def _base_payload(args: argparse.Namespace) -> dict[str, Any]:
         "decision_step_s": args.decision_step_s,
         "profile_slug": "siriagent_catalog_swath_v1",
         "catalog_sensor_type": "可见光",
-        "max_resolution_m": 1.0,
+        "max_resolution_m": 10.0,
         "selection_time_limit_s": args.ilp_time_limit_s,
         "debug": False,
     }

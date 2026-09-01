@@ -29,14 +29,14 @@
 
 普通请求可省略 `profile_slug`，默认使用 `siriagent_catalog_swath_v1` 和配套的
 `siriagent_110_snapshot`。平台目录默认按 `catalog_sensor_type="可见光"`、
-`max_resolution_m=1.0` 筛出 88 颗候选；分辨率只筛选，非 SAR 的逐星幅宽生成矩形跨轨范围。
+默认 `max_resolution_m=10.0`；分辨率只筛选，非 SAR 的逐星幅宽生成矩形跨轨范围。需要严格高分辨率候选时可显式传入 `1.0`。
 
 若要修改目录筛选，可传：
 
 ```json
 {
   "catalog_sensor_type": "可见光",
-  "max_resolution_m": 1.0
+  "max_resolution_m": 10.0
 }
 ```
 

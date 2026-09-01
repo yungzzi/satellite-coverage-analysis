@@ -38,7 +38,10 @@
    `coverage_only`；选定任务后再追问该任务的覆盖率、MRT 或预算等必填参数。
 8. **Skill 用户术语（2026-09-01）**：面向普通用户的五任务菜单优先说“最长等待/最大重访间隔”和
    “平均等待/平均重访间隔”，不能把 MRT 错译为“最小重访时间”。任务④解释为“至少目标面积比例
-   的最长等待上限”，任务⑤解释为“网格按真实面积加权后的全市平均等待”；JSON 字段名保持兼容。
+  的最长等待上限”，任务⑤解释为“网格按真实面积加权后的全市平均等待”；JSON 字段名保持兼容。
+9. **Skill 默认分辨率与地图（2026-09-01）**：平台默认最大分辨率改为 10 m（只筛选候选，不进入几何）；
+   1 m 仍可作为显式严格筛选。completed 结果默认返回紧凑 `coverage_map.geojson`，按 5 km 裁剪网格
+   提供时间覆盖率、最长等待、平均等待和达标状态四种着色指标；完整逐网格审计表仍只在 `debug=true` 返回。
 
 ## 3. 当前开发状态与下一段
 
@@ -73,12 +76,13 @@
   `profile.effective_config`。区域 `Targeted` 统一跟踪所有保留网格代表点的面积加权形心，
   不再逐网格点独立转轴。
 - 平台 110 星目录已冻结为 `data/platform/siriagent_110_catalog.json`，NORAD 与固定 TLE 快照
-  `data/test_data/siriagent_110_snapshot.tle` 110/110 匹配。默认“可见光且分辨率不差于 1 m”候选池为
-  88 颗；`siriagent_catalog_swath_v1` 对 107 颗非 SAR 由逐星幅宽生成矩形跨轨范围，沿轨 60°明确为
+  `data/test_data/siriagent_110_snapshot.tle` 110/110 匹配。默认“可见光且分辨率不差于 10 m”候选池为
+  100 颗；`siriagent_catalog_swath_v1` 对 107 颗非 SAR 由逐星幅宽生成矩形跨轨范围，沿轨 60°明确为
   场景假设。3 颗 SAR 因平台未给原生入射角带而阻止圆锥降级。完整审计和 11 城基准见
   `docs/current/SIRIAgent平台110星目录与Profile基线.md`。
-- 默认 88 星、8 小时、5 km、10 秒检测的 11 城顺序基准总计约 286 秒；单城市 12～38 秒，耗时与
-  网格数近似线性。绍兴 410 网格的完整业务验收也已通过：一次生成 3897 个窗口后复用到 K=1
+- 默认 10 m 候选星、8 小时、5 km、10 秒检测的 11 城顺序基准需重新测量；已实测绍兴 410 网格
+  单城市覆盖机会计算约 23.3 秒、总计约 24.2 秒，单城市耗时仍需结合网格数和窗口数量评估。绍兴
+  410 网格的完整业务验收也已通过：一次生成 3897 个窗口后复用到 K=1
   五任务和 K=2/K=3 代表性场景，技术失败 0 项；任务⑤ K>1 已改用真实窗口重叠见证种子，任务③
   的 ILP 只标 `proven_discrete_optimal` 并按原始窗口结果择优推荐。报告见
   `docs/current/SIRIAgent平台默认业务验收报告.md`。下一步是取得平台注册样例和真实光学沿轨/SAR Profile。
@@ -121,7 +125,7 @@ src/
 ├── prepare_siriagent_catalog.py 平台卫星字段清洗、NORAD/TLE 冻结
 ├── siriagent_catalog.py       平台目录筛选与逐星 Profile 适配
 ├── benchmark_siriagent_catalog.py  平台默认候选池 × 11 市性能基准
-├── benchmark_siriagent_business.py 平台 88 星五任务与 K=2/K=3 业务验收
+├── benchmark_siriagent_business.py 平台 10 m 候选五任务与 K=2/K=3 业务验收
 ├── benchmark_regional_k.py   真实城市网格 K=1/K=2 性能基准
 ├── loader_app.py / cli.py    本地 GUI / CLI
 ├── satellite_loader.py       TLE、目录与缓存

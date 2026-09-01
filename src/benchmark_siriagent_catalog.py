@@ -51,7 +51,7 @@ def run_one(
             "decision_step_s": 60,
             "profile_slug": "siriagent_catalog_swath_v1",
             "catalog_sensor_type": "可见光",
-            "max_resolution_m": 1.0,
+            "max_resolution_m": 10.0,
             "debug": False,
         },
         root=ROOT,
@@ -76,7 +76,7 @@ def run_one(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="平台 88 颗默认候选星 × 浙江城市网格性能基准")
+    parser = argparse.ArgumentParser(description="平台 10 m 默认候选星 × 浙江城市网格性能基准")
     parser.add_argument("--all-cities", action="store_true")
     parser.add_argument("--cities", nargs="*", choices=sorted(CITIES))
     parser.add_argument("--start-utc", default="2026-08-30T00:00:00Z")

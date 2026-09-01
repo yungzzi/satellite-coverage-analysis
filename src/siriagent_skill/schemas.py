@@ -217,7 +217,7 @@ PARAMETER_SPECS: dict[str, dict[str, Any]] = {
     "max_resolution_m": {
         "type": "number",
         "required": False,
-        "default": 1.0,
+        "default": 10.0,
         "range": "0 < value <= 10000",
         "description": "目录分辨率筛选上限；resolution_m≤该值才进入候选池，不进入几何。",
     },
@@ -869,7 +869,7 @@ def normalize_request(payload: Mapping[str, Any]) -> SkillRequest:
             f"catalog_sensor_type 不支持：{catalog_sensor_type}",
             details={"allowed_catalog_sensor_types": list(CATALOG_SENSOR_TYPES)},
         )
-    max_resolution_m = _as_float(payload, "max_resolution_m", 1.0)
+    max_resolution_m = _as_float(payload, "max_resolution_m", 10.0)
     if not 0.0 < max_resolution_m <= 10_000.0:
         raise SkillInputError("max_resolution_m 必须在 0～10000 m 之间。")
 

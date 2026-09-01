@@ -20,11 +20,12 @@
 1. **主覆盖引擎**：纯 Python 物理计算（TLE/SGP4 + 自研几何），不依赖商业软件。
 2. **ATK**：不进入未来 Skill、FastAPI、Docker 或 Linux 服务，也不再新增产品功能；目前仅允许在本机作为
    自研复杂传感器的临时对拍参考。自研区域路径验收后，再单独裁剪 ATK 运行代码与依赖。
-3. **SIRIAgent 接入（2026-08-31 更新）**：已按“Agent 与计算引擎在同一台服务器”实现
-   同机 Python Skill；当前不需要 FastAPI、MCP、Docker 或数据库。如平台真实 skill runner 在
-   Vercel/另一台机器，再在同一 facade 外加 FastAPI 网络壳，不重写算法。平台 skill 注册样例、
-   `script_id` 映射、Python 环境与超时仍需向研发同学确认；访问 `https://siri-iota.vercel.app`
-   必须使用本机 mihomo 代理 `http://127.0.0.1:7890`，直连 443 不通。
+3. **SIRIAgent 接入（2026-09-01 更新）**：公开部署已确认是 Vercel 上的 Web + Flask API +
+   Python Skill runner；调用为 `/api/skill/run` 的 `{slug, script_id, inputs}`，结果走 NDJSON。
+   首选方案一是在 Vercel 同运行时部署瘦身引擎包，不需要 MCP、FastAPI、Docker 或数据库；只有
+   Preview 证明包体、CBC、内存或时限不合适时，才切方案二（Vercel 转发到研究院 FastAPI 服务），
+   不重写业务 facade。访问 `https://siri-iota.vercel.app` 必须使用本机 mihomo 代理
+   `http://127.0.0.1:7890`，直连 443 不通。
 4. **区域建模**：城市边界在冻结的浙江等面积米制投影中裁剪为 5 km 方格单元；
    面积权重为裁剪面积，代表点只做覆盖判定且不带圆。优先全部面积达标，确实不可行时才显式降为
    至少 90% 面积达标；不得静默改变阈值。
@@ -75,6 +76,10 @@
   五任务和 K=2/K=3 代表性场景，技术失败 0 项；任务⑤ K>1 已改用真实窗口重叠见证种子，任务③
   的 ILP 只标 `proven_discrete_optimal` 并按原始窗口结果择优推荐。报告见
   `docs/current/SIRIAgent平台默认业务验收报告.md`。下一步是取得平台注册样例和真实光学沿轨/SAR Profile。
+- `integrations/siriagent/` 已提供平台注册 `skill.md`、统一启动器、瘦身依赖、三组样例、自动生成器
+  和部署说明；生成物是忽略版本控制的 `dist/satellite_coverage_selection/`，内含最小引擎与冻结数据。
+  `src/validate_siriagent_delivery_package.py` 会从包外验证目录、依赖/CBC、覆盖和任务②选星。下一步由
+  平台研发把生成包加入真实仓库做 Vercel Preview，方案一失败才启动 FastAPI 方案二。
 - 11 个城市边界已记录 `adcode`、边界版本/哈希、源坐标系和转换方法；每次网格结果继续记录投影、
   格长和原点。以后若换平台边界，必须先比较版本、坐标系和哈希，未知坐标系不可直接与 WGS84
   轨道地面点混用。
@@ -140,3 +145,5 @@ src/
   `docs/current/SIRIAgent同机Skill使用与验收.md`。
 - Agent Skill 包装或启动器变化：运行 `python src/validate_agent_skill_package.py`，核对项目外工作目录、
   全局 Skill 缺引擎报错，以及显式参数/环境变量连接。
+- SIRIAgent 平台交付包：运行 `python src/validate_siriagent_delivery_package.py`；真实平台可行性最终以
+  Vercel Preview 的包体、Linux CBC、内存、时限、NDJSON 和响应大小验收为准。

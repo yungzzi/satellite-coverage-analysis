@@ -75,6 +75,15 @@ def test_describe_and_missing_parameters() -> None:
     assert {
         item["operation"] for item in selection_menu["capabilities"]["tasks"]
     } == choice_operations
+    menu_text = " ".join(
+        f"{item['label']} {item['description']}"
+        for item in selection_menu["selection_task_choices"]
+    )
+    assert "MRT" not in menu_text and "ART" not in menu_text
+    task4 = selection_menu["selection_task_choices"][3]
+    task5 = selection_menu["selection_task_choices"][4]
+    assert "90%" in task4["description"] and "最长等待" in task4["label"]
+    assert "真实面积" in task5["description"] and "平均等待" in task5["label"]
     assert selection_menu["parameter_hints"]["operation"]["allowed"] == [
         item["operation"] for item in selection_menu["selection_task_choices"]
     ]

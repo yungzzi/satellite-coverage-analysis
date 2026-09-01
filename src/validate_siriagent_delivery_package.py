@@ -59,6 +59,8 @@ def main() -> int:
         assert "default:" not in operation_question
         assert "coverage_only" not in operation_question
         assert operation_question.count("      - value: task_") == 5
+        assert "MRT" not in operation_question and "ART" not in operation_question
+        assert "90%" in operation_question and "真实面积" in operation_question
         forbidden = ["loader_app.py", "atk_parallel", "output", "tle_cache"]
         package_files = [path.relative_to(package).as_posix() for path in package.rglob("*")]
         assert not any(any(word in relative for word in forbidden) for relative in package_files)

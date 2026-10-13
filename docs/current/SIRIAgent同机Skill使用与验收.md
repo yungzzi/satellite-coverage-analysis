@@ -22,14 +22,15 @@
 
 ## 2. 验收前的环境
 
-在开发工作树中执行：
+在当前主代码仓库中验收（开发时仍使用独立工作树）：
 
 ```powershell
-Set-Location 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析-dev'
-$python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析\.venv\Scripts\python.exe'
+Set-Location 'D:\研究生学习资料\02_课题组工作\卫星覆盖与选星\05_代码\satellite-coverage-analysis'
+$python = (Resolve-Path '.\.venv\Scripts\python.exe').Path
 ```
 
-这里只是让开发工作树共用主工作树的虚拟环境。最终合并回主工作树后，在项目根目录直接用 `.\.venv\Scripts\python.exe` 即可。
+2026-10-13 整理后旧开发工作树已退休；新建开发工作树时，可显式使用主仓库的 Python 环境。
+在主仓库中直接用 `.\.venv\Scripts\python.exe`，安装依赖优先用该解释器的 `-m pip`。
 
 平台 110 星目录已与固定 TLE 110/110 映射。普通请求默认使用平台目录 Profile，按平台默认条件
 “可见光且分辨率不差于 10 m”得到 100 颗候选；分辨率只筛选，非 SAR 的幅宽进入矩形几何。

@@ -121,7 +121,7 @@
 ## 6. 重建、验收与复测
 
 ```powershell
-$python = "D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析\.venv\Scripts\python.exe"
+$python = (Resolve-Path '.\.venv\Scripts\python.exe').Path # 在当前代码仓库根目录执行
 
 # 在线更新目录时必须走本机代理；更新属于显式基线变更，不能在正式计算中悄悄执行
 & $python -B src\prepare_siriagent_catalog.py --active-tle data\tle_cache\active.tle

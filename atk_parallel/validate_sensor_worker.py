@@ -23,7 +23,8 @@ import os, re, socket, subprocess, sys, tempfile, time, json
 ATK_ROOT = r"D:\ATK航天任务设计工作箱\ATK-v4.0.1-rc.5-windows-x64\ATK-4.0.1-rc.5"
 ATK_EXE = os.path.join(ATK_ROOT, "ATK.exe")
 PYMOD = os.path.join(ATK_ROOT, "IntegratingWithATK", "connect", "Python")
-WS = r"D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析-atk-experiment"
+# 历史 ATK 对拍工具跟随所在仓库定位，不依赖已移除的实验工作树。
+WS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PYMOD)
 sys.path.insert(0, WS)
 sys.path.insert(0, os.path.join(WS, "atk_parallel"))

@@ -43,10 +43,10 @@ satellite_coverage_selection/
 
 ## 2. 在本工程中生成交付包
 
-在开发工作树根目录执行：
+在当前代码仓库根目录执行：
 
 ```powershell
-& 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析\.venv\Scripts\python.exe' `
+& '.\.venv\Scripts\python.exe' `
   integrations\siriagent\build_package.py
 ```
 
@@ -58,7 +58,7 @@ satellite_coverage_selection/
 最快是一条总验收：
 
 ```powershell
-& 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析\.venv\Scripts\python.exe' `
+& '.\.venv\Scripts\python.exe' `
   src\validate_siriagent_delivery_package.py
 ```
 
@@ -69,8 +69,8 @@ satellite_coverage_selection/
 也可以逐项看结果：
 
 ```powershell
-$py = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析\.venv\Scripts\python.exe'
-$pkg = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析-dev\dist\satellite_coverage_selection'
+$py = (Resolve-Path '.\.venv\Scripts\python.exe').Path
+$pkg = (Resolve-Path '.\dist\satellite_coverage_selection').Path
 
 & $py "$pkg\scripts\run_satellite_coverage_selection.py" --self-check --pretty
 & $py "$pkg\scripts\run_satellite_coverage_selection.py" --input-file "$pkg\examples\coverage_quick.json" --pretty

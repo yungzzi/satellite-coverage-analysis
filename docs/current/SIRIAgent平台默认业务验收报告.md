@@ -105,7 +105,7 @@ TLE/时间快照和一台机器；贪心任务不保证全局最优；没有验�
 在开发工作树中运行：
 
 ```powershell
-$python = 'D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖性分析\.venv\Scripts\python.exe'
+$python = (Resolve-Path '.\.venv\Scripts\python.exe').Path # 在当前代码仓库根目录执行
 & $python -B src\benchmark_siriagent_business.py `
   --output output\siriagent_business_acceptance_shaoxing.json
 ```

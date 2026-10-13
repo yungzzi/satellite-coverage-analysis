@@ -2,7 +2,7 @@
 """构建交付版：PyInstaller 打包 → 组装交付文件夹 → 写《使用说明.txt》。
 
 用法：.venv\\Scripts\\python build_delivery.py
-输出：D:\\研究生学习资料\\02_课题组工作\\长期项目\\卫星覆盖分析-交付版\\
+输出：项目工作区的 04_对外交付/卫星覆盖分析-交付版/。
 原工程文件夹不会被改动。
 """
 
@@ -16,7 +16,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist" / "sat"
-TARGET = Path(r"D:\研究生学习资料\02_课题组工作\长期项目\卫星覆盖分析-交付版")
+# 由仓库位置推导，不再绑定已撤销的“长期项目”目录。
+WORKSPACE_ROOT = ROOT.parent.parent if ROOT.parent.name == "05_代码" else ROOT.parent
+TARGET = WORKSPACE_ROOT / "04_对外交付" / "卫星覆盖分析-交付版"
 
 
 USAGE = """卫星覆盖分析工作台 —— 使用说明

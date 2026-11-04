@@ -69,7 +69,8 @@ def build(output, version):
         # 与在线 /docs 使用同一模型。导入只生成 schema，不启动 lifespan/计算 worker。
         env = os.environ.copy()
         env.update(PYTHONPATH=str(staging / 'src'), SAT_PROJECT_ROOT=str(staging),
-                   SAT_STATE_DIR=str(staging / 'output/api'), PYTHONIOENCODING='utf-8')
+                   SAT_STATE_DIR=str(staging / 'output/api'), PYTHONIOENCODING='utf-8',
+                   PYTHONDONTWRITEBYTECODE='1')
         code = "import json; from coverage_api.app import app; print(json.dumps(app.openapi(), ensure_ascii=False, indent=2))"
         schema = subprocess.check_output([sys.executable, '-c', code], cwd=staging, env=env)
         (staging / 'openapi.json').write_bytes(schema)
@@ -80,6 +81,11 @@ def build(output, version):
         for name, example in examples.items():
             (example_path / f'{name}.json').write_text(
                 json.dumps(example['value'], ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        forbidden = [p.relative_to(staging).as_posix() for p in staging.rglob('*')
+                     if '__pycache__' in p.parts or p.suffix in {'.pyc', '.db', '.sqlite', '.sqlite3'}
+                     or p.name in {'.env', '.venv', '.git'}]
+        if forbidden:
+            raise RuntimeError(f'交付包混入运行产物：{forbidden}')
         metadata = {'package_name': NAME, 'package_version': version,
                     'source_git_commit': git('rev-parse', 'HEAD'),
                     'api_schema_version': from_schema['info']['version'],

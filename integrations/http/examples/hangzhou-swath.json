@@ -1,0 +1,435 @@
+{
+  "operation": "coverage_only",
+  "city_adcode": "330100",
+  "start_utc": "2026-08-30T00:00:00Z",
+  "analysis_horizon_h": 8,
+  "grid_size_km": 5,
+  "detection_step_s": 10,
+  "satellite_ids": [
+    31490,
+    33446,
+    36834,
+    37165,
+    38354,
+    39011,
+    39012,
+    39150,
+    39239,
+    39240,
+    40118,
+    40143,
+    40701,
+    40894,
+    40961,
+    41026,
+    41556,
+    43028,
+    43029,
+    43081
+  ],
+  "max_resolution_m": 10,
+  "max_windows": 100,
+  "profile_slug": "siriagent_catalog_swath_v1",
+  "satellite_profile_overrides": [
+    {
+      "norad_id": 31490,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 33446,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 36834,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 37165,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 38354,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 39011,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 39012,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 39150,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 39239,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 39240,
+      "sensor_type": "Rectangular",
+      "swath_km": 20,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 40118,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 40143,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 40701,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 40894,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 40961,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 41026,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 41556,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 43028,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 43029,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    },
+    {
+      "norad_id": 43081,
+      "sensor_type": "Rectangular",
+      "swath_km": 30,
+      "along_track_half_angle_deg": 60,
+      "attitude": {
+        "profile": 0
+      },
+      "pointing": {
+        "type": "Fixed",
+        "method": "YPR",
+        "params": [
+          "YPR",
+          0,
+          0,
+          0
+        ]
+      },
+      "constraints": []
+    }
+  ]
+}

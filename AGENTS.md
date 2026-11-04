@@ -7,8 +7,8 @@
 ## 1. 项目目标
 
 “卫星覆盖性分析”以 TLE + SGP4 + 几何判定计算卫星对目标的覆盖窗口，并在窗口结果上进行
-虚拟星座/选星。当前扩展目标是将“区域时间覆盖 + 选星”作为 Skill 接入
-研究院 SIRIAgent；首版按 Agent 与引擎同机直接调用 Python 实现。
+虚拟星座/选星。2026-11-04 起，交付主线改为传统前后端：区域计算模块作为 FastAPI 后端，
+前端通过 HTTP 提交任务。原同机 Skill/CLI 保留为兼容入口，不再要求平台注册 Skill 或使用 Agent。
 
 ### 不可退化的输出
 
@@ -20,7 +20,11 @@
 1. **主覆盖引擎**：纯 Python 物理计算（TLE/SGP4 + 自研几何），不依赖商业软件。
 2. **ATK**：不进入未来 Skill、FastAPI、Docker 或 Linux 服务，也不再新增产品功能；目前仅允许在本机作为
    自研复杂传感器的临时对拍参考。自研区域路径验收后，再单独裁剪 ATK 运行代码与依赖。
-3. **SIRIAgent 接入（2026-09-01 更新）**：公开部署已确认是 Vercel 上的 Web + Flask API +
+3. **平台接入（2026-11-04 更新）**：按用户与平台研发的新要求，使用独立 FastAPI 计算后端，
+   不再以前端 Agent/Skill 作为必需调用环节。`src/coverage_api/` 复用原应用编排，六种操作全部暴露，
+   返回 JSON/GeoJSON。单 API + 单计算 worker、有界队列、SQLite 状态、持久化结果和 Docker。
+   同目录只允许一个服务实例，不能用 Uvicorn 多 worker。部署与验收见 `docs/current/计算后端API部署与验收.md`。
+   以下是历史背景，不再作为当前交付优先级：2026-09-01 公开部署是 Vercel 上的 Web + Flask API +
    Python Skill runner；调用为 `/api/skill/run` 的 `{slug, script_id, inputs}`，结果走 NDJSON。
    首选方案一是在 Vercel 同运行时部署瘦身引擎包，不需要 MCP、FastAPI、Docker 或数据库；只有
    Preview 证明包体、CBC、内存或时限不合适时，才切方案二（Vercel 转发到研究院 FastAPI 服务），
@@ -47,6 +51,11 @@
    `timings_s.opportunity_cache_hit` 回显是否命中。缓存只改善重复请求，不改变物理口径；冷启动或输入变化会重新计算。
 
 ## 3. 当前开发状态与下一段
+
+- 2026-11-04 HTTP 主线：`src/coverage_api/` 已新增 FastAPI 和类型模型、单进程计算 worker、SQLite 有界任务队列、
+  超时/崩溃/重启处理、健康检查和 JSON/GeoJSON 结果。Docker 使用 Linux/amd64 和非 root 用户；旧引擎不改。
+  正式联调以 `docs/current/计算后端API部署与验收.md` 为准，测试见 `tests/test_coverage_api.py`。
+  后续由平台确认常驻主机、HTTPS 网关、鉴权和 TLE 更新策略，不再等待 Skill 注册。
 
 - `src/region_grid.py` 已完成：固定米制格网、裁剪单元、面积权重、内部代表点和调试 GeoJSON 导出。
 - `src/validate_region_grid.py` 已覆盖规则格、带洞/凹形单元、离散面、稳定性和杭州 5 km/2.5 km 面积守恒。
@@ -99,7 +108,7 @@
 
 ## 4. 用户沟通
 
-- 全程中文；用户非航天专业、是 vibe coding 新手。
+- 全程中文；用户非航天专业，但已了解 Python/FastAPI、前端和 Docker，可使用必要开发术语。
 - 每个模块交付附白话说明（类比 + 必要公式拆解）；关键代码写中文注释。
 - 用户说“没听懂”时先解释清楚再继续；提交信息用中文。
 
@@ -130,6 +139,7 @@ src/
 ├── regional_metrics.py       新区域指标与城市汇总
 ├── regional_selection.py     新区域任务①～⑤（支持 K=1/K>1）选星
 ├── siriagent_skill/           同机 Skill Schema、编排、人类可读输出与 JSON 入口
+├── coverage_api/              FastAPI、类型模型、持久化任务队列和独立计算进程
 ├── prepare_siriagent_catalog.py 平台卫星字段清洗、NORAD/TLE 冻结
 ├── siriagent_catalog.py       平台目录筛选与逐星 Profile 适配
 ├── benchmark_siriagent_catalog.py  平台默认候选池 × 11 市性能基准
@@ -147,6 +157,7 @@ src/
 先读 `docs/README.md`；具体任务按需读取：
 
 - SIRIAgent 的数学、实现、部署：`docs/current/`。
+- 当前 HTTP 后端：`docs/current/计算后端API部署与验收.md`，以该文档为平台接入主线。
 - 自研物理模型、验证、缓存：`docs/reference/`。
 - 当前阶段问答：`docs/答疑记录.md`；每次涉及概念、方法或验证的用户提问，在该文件追加一条并提交。
 - `docs/history/` 仅保存旧答疑、ATK 对拍和早期单点资料；**只有**用户要求追溯历史或当前资料不足时才读取。

@@ -52,6 +52,11 @@
 
 ## 3. 当前开发状态与下一段
 
+- HTTP交付生成：`python integrations/http/build_release.py --version 0.1.0-rc.1 --output <空的版本输出目录>`。
+  必须从干净提交构建，白名单源码/数据、OpenAPI、13份示例、SHA256SUMS和ZIP；不手工维护两份引擎。
+  用 `integrations/http/verify_package.py` 校验解压包；`scripts/accept_backend_release.py` 验收六操作和杭州三方案。
+  主交付不再使用旧Skill打包器。平台研发已确认不再使用Vercel，只需源码文件夹；附Dockerfile/Compose，不附镜像。
+
 - 2026-11-04 HTTP 主线：`src/coverage_api/` 已新增 FastAPI 和类型模型、单进程计算 worker、SQLite 有界任务队列、
   超时/崩溃/重启处理、健康检查和 JSON/GeoJSON 结果。Docker 使用 Linux/amd64 和非 root 用户；旧引擎不改。
   正式联调以 `docs/current/计算后端API部署与验收.md` 为准，测试见 `tests/test_coverage_api.py`。

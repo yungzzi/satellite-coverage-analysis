@@ -1,0 +1,9 @@
+{
+  "operation": "coverage_only",
+  "city_adcode": "330100",
+  "start_utc": "2026-08-30T00:00:00Z",
+  "analysis_horizon_h": 8,
+  "grid_size_km": 5,
+  "detection_step_s": 10,
+  "max_windows": 100
+}

@@ -5,6 +5,7 @@
 
 ## 当前主线
 
+- [独立后端交付包使用说明](../integrations/http/README_交付使用.md)：源码ZIP、接口定义、安装与验收，Docker为可选部署方式。
 - [计算后端 API 部署与验收](current/计算后端API部署与验收.md)：2026-11-04 起的 HTTP 主交付方式，任务接口、前端字段、Docker 与验收。
 - [计算后端 API 验证记录](current/计算后端API验证记录.md)：Windows/Linux 测试、杭州演示复现与本轮部署边界。
 

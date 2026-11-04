@@ -8,3 +8,8 @@ data/geo/raw_datav_gcj02/*.json -text
 # 平台目录清单和其 TLE 哈希同样需要跨平台稳定。
 data/platform/*.json text eol=lf
 data/test_data/siriagent_110_snapshot.tle text eol=lf
+
+# 保持构建输入换行稳定，避免 Windows checkout 让依赖层缓存无故失效。
+/Dockerfile text eol=lf
+/.dockerignore text eol=lf
+/requirements-api.lock text eol=lf

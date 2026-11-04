@@ -2,6 +2,14 @@
 
 用纯 Python 完成“哪些卫星在什么时间能覆盖某个地区”的分析，替代 ATK 仿真软件，无商业软件依赖。
 
+## 计算后端（2026-11-04）
+
+新增独立 FastAPI 后端：支持覆盖分析、五项选星、传感器/姿态参数和地图 GeoJSON。
+使用持久化异步任务接口，不要求 Agent、Skill 注册或 MCP。核心物理/选星算法保持不变。
+详见 [API 部署与验收](docs/current/计算后端API部署与验收.md)。本机入口是
+`python -m uvicorn coverage_api.app:app --app-dir src --workers 1`，Docker 入口是 `docker compose up --build -d`。
+下文主要为旧 GUI/CLI 使用说明，请勿将其单点+半径、圆锥幅宽口径用于新区域 API。
+
 ## 项目位置（2026-10-13）
 
 本仓库位于 `D:\研究生学习资料\02_课题组工作\卫星覆盖与选星\05_代码\satellite-coverage-analysis`。

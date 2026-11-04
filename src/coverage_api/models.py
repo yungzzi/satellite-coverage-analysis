@@ -2,14 +2,15 @@
 from datetime import datetime
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
-from siriagent_skill.schemas import PARAMETER_SPECS
+from siriagent_skill.schemas import OPERATION_ALIASES, PARAMETER_SPECS
+from .examples import REQUEST_EXAMPLES
+from .profiles import SensorProfile, SatelliteProfileOverride
 
 
 class AnalysisInput(BaseModel):
     # 不给可选项重复赋业务默认值。提交时 exclude_unset，让 normalize_request 统一处理。
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False, json_schema_extra={'examples': [
-        {'operation': 'coverage_only', 'city_adcode': '330100', 'start_utc': '2026-08-30T00:00:00Z'},
-        {'operation': 'task2', 'city_adcode': '330100', 'start_utc': '2026-08-30T00:00:00Z', 'mrt_target_minutes': 180},
+        REQUEST_EXAMPLES['fixed']['value'], REQUEST_EXAMPLES['per_satellite']['value'],
     ]})
     operation: str
     city_adcode: str
@@ -20,8 +21,8 @@ class AnalysisInput(BaseModel):
     catalog_sensor_type: str | None = None
     max_resolution_m: float | None = None
     profile_slug: str | None = None
-    sensor_profile: dict[str, Any] | None = None
-    satellite_profile_overrides: list[dict[str, Any]] | None = Field(default=None, max_length=500)
+    sensor_profile: SensorProfile | None = Field(default=None, description='展开 SensorProfile 查看完整字段。pointing/attitude 为整体替换，显式 null 可清除；不是深合并。')
+    satellite_profile_overrides: list[SatelliteProfileOverride] | None = Field(default=None, max_length=500, description='展开 SatelliteProfileOverride；各项包含 norad_id 与需要覆盖的 Profile 字段。')
     grid_size_km: float | None = None
     detection_step_s: int | None = Field(default=None, strict=True)
     decision_step_s: int | None = Field(default=None, strict=True)
@@ -41,9 +42,26 @@ class AnalysisInput(BaseModel):
     max_windows: int | None = Field(default=None, strict=True)
     max_weak_areas: int | None = Field(default=None, strict=True)
 
-# OpenAPI 字段说明直接取原 Schema；高级对象的解释见 capabilities，不复制另一份业务规则。
+    def engine_payload(self):
+        # 原接口忽略顶层 null，但保留嵌套字典里的 null（用于清除继承的指向/姿态）。
+        # exclude_none=True 会递归删掉新嵌套模型的显式 null，故这里仅过滤最外层。
+        data = self.model_dump(mode='json', exclude_unset=True)
+        return {key: value for key, value in data.items() if value is not None}
+
+# 默认值/条件必填/范围只从原 Schema 生成文案，不重新指定一套业务默认值。
 for name, field in AnalysisInput.model_fields.items():
-    field.description = PARAMETER_SPECS.get(name, {}).get('description', '')
+    spec = PARAMETER_SPECS.get(name, {})
+    parts = [spec.get('description', ''), field.description or '']
+    if 'default' in spec:
+        parts.append(f"省略时：{spec['default']}。")
+    if 'range' in spec:
+        parts.append(f"取值范围：{spec['range']}。")
+    if isinstance(spec.get('required'), str):
+        parts.append(f"条件必填：{spec['required']}。")
+    field.description = ' '.join(part for part in parts if part)
+    if 'allowed' in spec:
+        allowed = list(OPERATION_ALIASES) if name == 'operation' else list(spec['allowed'])
+        field.json_schema_extra = {'enum': allowed + ([None] if field.default is None else [])}
 AnalysisInput.model_rebuild(force=True)
 
 

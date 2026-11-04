@@ -14,6 +14,12 @@
 
 浏览器访问 `http://127.0.0.1:8000/docs`。在 Swagger 中选择 `POST /api/v1/jobs`，点 Try it out，提交：
 
+页面现在内置完整参数手册，并有 **13 个命名示例**：展开 POST 后，在 Request body 的 **Examples** 下拉菜单
+选择覆盖分析、五项选星、固定侧偏、形心跟踪、旋转/往复扫描、掠射、附加约束或 A/B 逐星配置。
+可以[直接定位提交接口](http://127.0.0.1:8000/docs#/analysis/submit_api_v1_jobs_post)。
+下方 Schemas 可展开 SensorProfile、PointingConfig、AttitudeConfig、ObservationConstraint 和 SatelliteProfileOverride。
+Swagger 是 JSON 调试编辑器，不是动态表单，切换 pointing.type 不会自动补齐必填值；优先从对应示例开始。
+
 ```json
 {
   "operation": "coverage_only",
@@ -71,12 +77,18 @@ mrt_target_minutes 是最长连续不可见时间上限，不是最小重访时�
 ## 3. 高级传感器与姿态
 
 仍支持全局 sensor_profile 和用 norad_id 标识的逐星 satellite_profile_overrides。
+pointing、attitude 和 constraints 都是整体替换，不做深合并。默认目录下，传入全局 sensor_profile 后，
+原有代码进入统一高级模式，不再自动派生目录逐星幅宽；因此只想保留目录几何、改部分星的指向时，
+应省略全局 sensor_profile，使用逐星覆盖。统一高级模式请明确模型和几何参数，不能只传一个 pointing 就假定仍沿用目录幅宽。
 模型包括 SimpleCone、Rectangular、Conical、HalfPower、SAR；指向包括 Fixed、GrazingAlt、Spinning、Targeted。
 姿态使用 attitude.profile 和 attitude.offset；给定参数进入几何计算，不自动优化机动或拍摄排程。
 Targeted 是整座区域共享面积加权网格形心，不是每格独立指向。
 
 光学幅宽使用矩形足印，swath_km 表示名义天底跨轨全宽。SAR 必须给原生入射角带，不能退回圆锥。
 目录中缺参 SAR 继续按原策略排除/拒绝；接口化没有补出真实载荷参数。
+具体到现有引擎，SAR 数组约束的是目标点仰角带和前后排除角，不是直接输入入射角；
+入射角范围需要按同一模型的竖直方向换算为仰角范围。完整字段顺序与限制见 /docs。
+TerrainMask 仍是未生效占位，不代表已有 DEM 遮挡；新增参数文档不会自动补齐这类物理能力。
 结果的 profile.effective_config 回显实际配置。分辨率只筛选候选，不改变几何。
 
 ## 4. 前端展示约定
@@ -166,6 +178,9 @@ Vercel 前端使用 HTTPS 时，对外 API 也需要 HTTPS 入口，避免浏览
 仅检验调用链，不代表正式 5 km 精度。通过 --input 指定其他 JSON，--base-url 指定地址，--output 保存原始结果。
 设置了服务 API Key 时，客户端也设置同值 SAT_API_TOKEN。Windows 与 Linux 必须分别检查 CBC 和真实计算，
 不能把健康检查或镜像构建成功当成物理/业务验收通过。
+
+高级配置现在通过嵌套模型校验：错误的 YPR 数组长度、未知约束名、非法扫角区间等在入队前返回 422。
+原规范 JSON 格式不变，没有增加另一个“高级配置协议”；未提供的字段不会被文档默认值自动写入计算参数。
 
 `integrations/http/examples/` 提供历史杭州默认全池、20 星基线、B 组加宽幅宽、B 组固定侧摆四份输入。
 例如：`python scripts/api_smoke.py --input integrations/http/examples/hangzhou-swing.json`。

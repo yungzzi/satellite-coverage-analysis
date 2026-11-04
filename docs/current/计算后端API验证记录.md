@@ -71,3 +71,24 @@ api-docker-hangzhou-default.json。临时验收服务使用 18765/18766 端口�
 
 旧引擎的覆盖地图 description 文案固定写“5 km”。使用其他网格精度时，前端应以
 input_summary.grid_size_km 及 city.grid_cell_count 为准；本轮为保持旧入口兼容，没有修改该文案。
+
+## 5. 同日追加：/docs 高级配置补全
+
+新增可展开的 SensorProfile、PointingConfig、AttitudeConfig、AttitudeOffset、ObservationConstraint、
+SatelliteProfileOverride。公开配置格式仍为原来的 JSON；不改覆盖、姿态几何或选星算法。
+基础字段的默认值/范围/条件必填说明从原 PARAMETER_SPECS 生成，避免维护另一套业务默认值。
+请求体增加13个 OpenAPI 命名示例。页面明确字段单位、Fixed数组顺序、扫描速率rad/s、SAR实际仰角带口径、
+嵌套对象整体覆盖、全局高级模式与目录几何的关系，以及未实现DEM/SAR完整左右视/自动机动等边界。
+
+- Windows：74项测试通过，39.27秒；Linux/amd64容器：74项通过，37.61秒。
+- 13个命名示例全部通过HTTP入队格式与条件校验；其中7个高级示例按原样完整8小时/5km运行完成。
+- 五任务与覆盖的既有真实请求回归仍通过；原杭州PPT三份输入的归一化序列化文本保持一致，包括整数/浮点表示。
+- 部分配置、显式嵌套null、历史norad别名和五种Fixed表示法均有兼容性测试。
+- 新增非法模式参数/数组长度/约束名/范围等拒绝用例；不再把这些输入留到重计算阶段才失败。
+- 使用真实Edge浏览器检查正在运行的8000端口：13个下拉示例可见，切换fixed/spinning/per_satellite
+  可正确填充JSON，嵌套Schemas可见。浏览器QA为加载外部Swagger CDN临时忽略测试上下文的证书错误，未更改服务TLS设置。
+- 更新前确认无排队/运行任务，更新容器后4条既有完成记录保持一致，原结果卷未删除；服务恢复ready。
+- 为避免Windows换行破坏Docker依赖层缓存，在原.gitattributes规则后补充Dockerfile、.dockerignore及锁文件的LF规则，未改冻结数据规则。
+
+证据保留在开发树output/api-docs-tests.xml、api-docs-tests-linux.xml、swagger-ui-check.json和swagger-examples.png。
+本追加记录只证明接口文档与配置调用链，不扩张原模型的物理准确性或实际载荷能力声明。

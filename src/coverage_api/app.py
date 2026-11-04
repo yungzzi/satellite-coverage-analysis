@@ -9,7 +9,7 @@ import sqlite3
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -22,6 +22,8 @@ from .models import AnalysisInput, AnalysisResult, JobView, APIError
 from .middleware import BodyLimitMiddleware
 from .service import JobService
 from .store import QueueFull
+from .documentation import API_GUIDE
+from .examples import REQUEST_EXAMPLES
 
 
 def fail(status_code, code, message, **extra):
@@ -37,7 +39,7 @@ def count_grid_cells(boundary_path: str, grid_size_km: float, modified_ns: int):
 
 def canonical_payload(body: AnalysisInput, settings: Settings):
     """固定 start_utc，避免在队列等候后变成另一个分析时段。"""
-    payload = body.model_dump(mode='json', exclude_unset=True, exclude_none=True)
+    payload = body.engine_payload()
     try:
         json.dumps(payload, allow_nan=False)
         request = normalize_request(payload)
@@ -85,7 +87,8 @@ def create_app(settings: Settings | None = None):
 
     app = FastAPI(title='卫星覆盖与选星计算 API', version='1.0.0', lifespan=lifespan,
                   responses={422: {'model': APIError, 'description': '参数类型、条件必填或服务资源限制校验失败'}},
-                  description='固定传感器/姿态 Profile 下的几何观测机会。支持覆盖分析和五项选星，不依赖 Agent。')
+                  description=API_GUIDE,
+                  swagger_ui_parameters={'defaultModelsExpandDepth': 1, 'defaultModelExpandDepth': 2, 'displayRequestDuration': True})
     app.state.settings = settings
     app.add_middleware(BodyLimitMiddleware)
 
@@ -152,8 +155,10 @@ def create_app(settings: Settings | None = None):
                                'max_grid_time_cells': settings.max_grid_time_cells, 'max_body_bytes': 65536},
         }
 
-    @app.post('/api/v1/jobs', status_code=202, response_model=JobView, dependencies=[Depends(authorize)], tags=['analysis'])
-    def submit(body: AnalysisInput, response: Response):
+    @app.post('/api/v1/jobs', status_code=202, response_model=JobView, dependencies=[Depends(authorize)], tags=['analysis'],
+              summary='提交覆盖/选星任务：在 Examples 下拉菜单选择完整配置',
+              description='先选择命名示例，再 Try it out。展开下方 Schemas 查看高级字段说明。提交返回202和job_id，不是直接返回计算结果。')
+    def submit(body: Annotated[AnalysisInput, Body(openapi_examples=REQUEST_EXAMPLES)], response: Response):
         payload = canonical_payload(body, settings)
         if not app.state.service.ready():
             fail(503, 'not_ready', '计算服务尚未就绪。')

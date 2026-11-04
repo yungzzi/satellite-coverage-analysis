@@ -56,6 +56,8 @@
   超时/崩溃/重启处理、健康检查和 JSON/GeoJSON 结果。Docker 使用 Linux/amd64 和非 root 用户；旧引擎不改。
   正式联调以 `docs/current/计算后端API部署与验收.md` 为准，测试见 `tests/test_coverage_api.py`。
   后续由平台确认常驻主机、HTTPS 网关、鉴权和 TLE 更新策略，不再等待 Skill 注册。
+  `/docs` 现有完整中文配置说明、六种高级嵌套模型和13个命名示例；Windows/Linux各74项测试通过。
+  默认目录下传全局sensor_profile会停止自动派生逐星几何；仅改指向且保留目录几何时优先逐星覆盖。
 
 - `src/region_grid.py` 已完成：固定米制格网、裁剪单元、面积权重、内部代表点和调试 GeoJSON 导出。
 - `src/validate_region_grid.py` 已覆盖规则格、带洞/凹形单元、离散面、稳定性和杭州 5 km/2.5 km 面积守恒。

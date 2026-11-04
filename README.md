@@ -1,5 +1,8 @@
 # 卫星覆盖性分析（Satellite Coverage Analysis）
 
+HTTP后端联调版：[GitHub Release backend-v0.1.0-rc.1](https://github.com/yungzzi/satellite-coverage-analysis/releases/tag/backend-v0.1.0-rc.1)。
+下载其中的 `satellite-coverage-backend-0.1.0-rc.1.zip`，从包根README开始；交付包不包含镜像。
+
 用纯 Python 完成“哪些卫星在什么时间能覆盖某个地区”的分析，替代 ATK 仿真软件，无商业软件依赖。
 
 ## 计算后端（2026-11-04）

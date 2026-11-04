@@ -109,6 +109,16 @@ TerrainMask 仍是未生效占位，不代表已有 DEM 遮挡；新增参数文
 
 仓库根目录执行：
 
+本机2026-11-04现有8000端口实例保留了原Compose项目名 `satellite-coverage-analysis-dev`。
+开发工作树退休后，它仍由独立镜像和卷运行。若管理的是这个既有实例，在主仓库使用：
+
+```powershell
+docker compose -p satellite-coverage-analysis-dev -f compose.yaml ps
+docker compose -p satellite-coverage-analysis-dev -f compose.yaml logs -f satellite-api
+```
+
+不要对同一8000端口另起一个默认项目。下面无 `-p` 的命令用于尚无实例的全新部署。
+
 ```powershell
 docker compose up --build -d
 docker compose ps

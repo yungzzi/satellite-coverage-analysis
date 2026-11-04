@@ -52,6 +52,12 @@
 
 ## 3. 当前开发状态与下一段
 
+- 2026-11-04 已发布HTTP后端联调版 `backend-v0.1.0-rc.1`，冻结提交 `c04878f`。
+  Release见 `https://github.com/yungzzi/satellite-coverage-analysis/releases/tag/backend-v0.1.0-rc.1`。
+  用户批准合并main并退休本轮开发树；忽略产物及环境保存在外层 `99_历史归档/开发工作树产物_20261104/`。
+  本机现存Docker项目名为 `satellite-coverage-analysis-dev`，只使用镜像与独立命名卷；
+  在主仓库用 `docker compose -p satellite-coverage-analysis-dev -f compose.yaml ps` 管理，勿另起实例抢8000端口。
+
 - HTTP交付生成：`python integrations/http/build_release.py --version 0.1.0-rc.1 --output <空的版本输出目录>`。
   必须从干净提交构建，白名单源码/数据、OpenAPI、13份示例、SHA256SUMS和ZIP；不手工维护两份引擎。
   用 `integrations/http/verify_package.py` 校验解压包；`scripts/accept_backend_release.py` 验收六操作和杭州三方案。

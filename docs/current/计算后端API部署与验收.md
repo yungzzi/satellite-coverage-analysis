@@ -127,6 +127,10 @@ docker compose logs -f satellite-api
 
 默认仅发布 `127.0.0.1:8000`，适合本机验收或由 Nginx 反向代理。生产不要未经鉴权直接开放到公网。
 镜像用 requirements-api.lock 固定依赖版本，本机也可用 `pip install -r requirements-api.lock` 复现。
+
+主仓库现有 `.venv` 同时用于旧Streamlit GUI。本机收尾时发现Streamlit 1.61要求Pillow<13，
+因此该混合环境保留Pillow 12.3.0，并分别运行pip check与API回归；其余API依赖按锁文件安装。
+纯API交付包和Docker仍使用锁定的Pillow 13，不改已发布附件。需要严格复现纯API环境时使用Docker或新建专用虚拟环境。
 遇到 PyPI 下载缓慢，可执行 `docker compose build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/` 后再启动。
 镜像只复制最小运行模块与冻结数据，不包含 ATK、GUI、Excel、资料或本机 .venv。容器使用非 root 用户。
 SQLite 与结果保存在命名卷 satellite-results，重建镜像不丢结果。`docker compose down` 不删除卷，
